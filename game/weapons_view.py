@@ -35,6 +35,17 @@ class WeaponsView(GameView):
     def _equipped_gear_ids(self) -> set:
         return set(self.game.db.get_equipped_gear_ids(self.user_id).values())
 
+    def _same_tier_gear_ids(self, slot_type: str, tier: int) -> list:
+        """Every OTHER owned, unequipped piece sharing the selected piece's exact
+        slot_type+tier -- same grouping sell_view.SellView._same_tier_gear_ids already uses
+        for its own "Sell All T{tier}" button, since repeated /blacksmith attempts are the
+        main source of unwanted duplicate rolls at one tier."""
+        equipped_ids = self._equipped_gear_ids()
+        return [
+            g["gear_id"] for g in self._owned()
+            if g["slot_type"] == slot_type and g["tier"] == tier and g["gear_id"] not in equipped_ids
+        ]
+
     def _build_components(self):
         self.clear_items()
         equipped_ids = self._equipped_gear_ids()
@@ -68,6 +79,16 @@ class WeaponsView(GameView):
         dismantle_button.callback = self._on_dismantle
         self.add_item(dismantle_button)
 
+        selected_gear = next((g for g in dismantle_candidates if g["gear_id"] == self.selected_gear_id), None)
+        same_tier = self._same_tier_gear_ids(selected_gear["slot_type"], selected_gear["tier"]) if selected_gear else []
+        dismantle_all_button = discord.ui.Button(
+            label=f"Dismantle All T{selected_gear['tier']} {selected_gear['slot_type']} ({len(same_tier)})" if selected_gear else "Dismantle All",
+            emoji="🧹", style=discord.ButtonStyle.secondary, row=1,
+            disabled=len(same_tier) <= 1,
+        )
+        dismantle_all_button.callback = self._on_dismantle_all
+        self.add_item(dismantle_all_button)
+
     async def _on_pick_gear(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 0)
         value = select.values[0]
@@ -82,6 +103,32 @@ class WeaponsView(GameView):
         self.selected_gear_id = None
         self._build_components()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _on_dismantle_all(self, interaction: discord.Interaction):
+        """Bulk-dismantles every owned, unequipped piece sharing the selected piece's exact
+        slot_type+tier in one click -- reuses dismantle_crafted_gear one instance at a time
+        (it already re-checks ownership/equipped per call) rather than a new bulk backend
+        method, same reasoning as sell_view.SellView._on_sell_all_same_tier, whose "Sell All
+        T{tier}" button this mirrors directly for /weapons' own Dismantle button."""
+        # Deferred since a big same-tier stack (many /blacksmith attempts at one tier) can add
+        # up to real DB work across several dismantle_crafted_gear calls -- same defer-before-
+        # the-loop fix already applied to Inventory's Use All / Alchemy's Make All.
+        await interaction.response.defer()
+        gear = self.game.db.get_crafted_gear(self.selected_gear_id) if self.selected_gear_id else None
+        if gear is None:
+            self.last_result = "That item is no longer available."
+        else:
+            slot_type, tier = gear["slot_type"], gear["tier"]
+            targets = self._same_tier_gear_ids(slot_type, tier)
+            count = sum(1 for gid in targets if self.game.dismantle_crafted_gear(self.user_id, self.display_name, gid)[0])
+            stones = count * blacksmith.dismantle_stones(tier)
+            self.last_result = (
+                f"Dismantled {count}x Tier {tier} {slot_type} pieces — recovered materials + {stones:,} 🪙 total."
+                if count else "Nothing left to dismantle at that tier."
+            )
+        self.selected_gear_id = None
+        self._build_components()
+        await interaction.edit_original_response(embed=self.build_embed(), view=self)
 
     def build_embed(self) -> discord.Embed:
         owned = self._owned()
@@ -112,7 +159,7 @@ class WeaponsView(GameView):
             sections.append("\n".join(lines))
 
         embed.description = "\n\n".join(sections)[:4000]
-        embed.set_footer(text="✅ = currently equipped. Pick a piece below to dismantle it for a partial materials refund (unequip it first).")
+        embed.set_footer(text="✅ = currently equipped. Pick a piece below to dismantle it for a partial materials refund, or Dismantle All to clear out every duplicate at that same tier+slot at once (unequip first).")
         if self.last_result:
             embed.add_field(name="Result", value=self.last_result, inline=False)
         return embed
