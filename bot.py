@@ -90,6 +90,18 @@ if __name__ == "__main__":
     # boot. If a bundled game.db.seed is present (committed once, see the deploy setup), copy it
     # in before anything ever opens the DB. Every later boot sees DB_PATH already exists (real
     # player data now lives on the Volume) and skips this -- never overwrites live data.
+    db_dir = os.path.dirname(config.DB_PATH)
+    if db_dir and not os.path.isdir(db_dir):
+        # Deliberately a loud, specific crash rather than falling back to writing DB_PATH
+        # somewhere else (e.g. the container's own ephemeral filesystem) -- a silent fallback
+        # would "fix" this crash while quietly losing persistence on every future redeploy,
+        # a far worse failure than a clear one right now. This almost always means the Railway
+        # Volume that's supposed to be mounted here isn't currently attached to the service.
+        raise RuntimeError(
+            f"DB_PATH is set to '{config.DB_PATH}' but its directory '{db_dir}' doesn't exist. "
+            f"If this is running on Railway, the Volume normally mounted there is most likely "
+            f"detached -- check the service's Volumes tab before anything else."
+        )
     if not os.path.exists(config.DB_PATH) and os.path.exists("game.db.seed"):
         shutil.copy("game.db.seed", config.DB_PATH)
         print(f"Seeded {config.DB_PATH} from game.db.seed (first boot against an empty Volume).")

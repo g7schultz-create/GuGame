@@ -1885,31 +1885,63 @@ class GameCog(commands.Cog):
         await interaction.response.send_message(embed=view.build_embed(), view=view)
         view.message = await interaction.original_response()
 
-    @app_commands.command(name="teach", description="Teach ALL of your sect disciples at once, granting them bonus Qi (3h cooldown)")
+    @app_commands.command(name="teach", description="Teach every sect AND personal disciple who isn't currently on cooldown, in one go")
     @app_commands.guilds(GUILD)
     async def teach(self, interaction: discord.Interaction):
         player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        result = self.game.sect_teach_all(interaction.user.id, interaction.user.display_name)
+        result = self.game.teach_all(interaction.user.id, interaction.user.display_name)
         if not result["ok"]:
             await interaction.response.send_message(result["reason"], ephemeral=True)
             return
 
         embed = discord.Embed(title="📖 Teach — Complete", color=discord.Color.dark_teal())
-        taught, beyond = result["taught"], result["beyond_instruction"]
-        if taught:
-            lines = [f"**{t['name']}**: +{t['qi_granted']:,.1f} Qi" for t in taught]
-            total_bonus = sum(t["master_bonus"] for t in taught)
-            lines.append(f"_You gain **{total_bonus:,.1f}** Qi of your own from the lessons._")
-        else:
-            lines = ["_No one could be taught this time._"]
-        embed.add_field(name=f"✅ Taught ({len(taught)})", value="\n".join(lines)[:1024], inline=False)
-        if beyond:
-            beyond_lines = [f"**{d['name']}** — {d['reason']}" for d in beyond]
-            embed.add_field(name=f"♾️ Beyond Instruction ({len(beyond)})", value="\n".join(beyond_lines)[:1024], inline=False)
-        embed.set_footer(text=f"Shared cooldown for the whole lesson: {format_duration(sects.TEACH_COOLDOWN_SECONDS)}.")
+        footer_bits = []
+
+        # Sect side -- only present at all if the player is in a sect with real disciples (see
+        # GameManager.teach_all); a sect-level refusal (e.g. still on the shared cooldown) shows
+        # up here as informational content, not as a failure of the whole command.
+        sect = result["sect"]
+        if sect is not None:
+            if not sect["ok"]:
+                embed.add_field(name="⚔️ Sect", value=sect["reason"], inline=False)
+            else:
+                taught, beyond = sect["taught"], sect["beyond_instruction"]
+                if taught:
+                    lines = [f"**{t['name']}**: +{t['qi_granted']:,.1f} Qi" for t in taught]
+                    total_bonus = sum(t["master_bonus"] for t in taught)
+                    lines.append(f"_You gain **{total_bonus:,.1f}** Qi of your own from the lessons._")
+                else:
+                    lines = ["_No one could be taught this time._"]
+                embed.add_field(name=f"⚔️ Sect — Taught ({len(taught)})", value="\n".join(lines)[:1024], inline=False)
+                if beyond:
+                    beyond_lines = [f"**{d['name']}** — {d['reason']}" for d in beyond]
+                    embed.add_field(name=f"⚔️ Sect — Beyond Instruction ({len(beyond)})", value="\n".join(beyond_lines)[:1024], inline=False)
+            footer_bits.append(f"Sect: shared {format_duration(sects.TEACH_COOLDOWN_SECONDS)} cooldown for the whole lesson")
+
+        # Personal side -- present if the player has any personal disciples at all, regardless
+        # of sect membership; each disciple carries their own independent cooldown.
+        personal = result["personal"]
+        if personal is not None:
+            taught, on_cooldown, beyond = personal["taught"], personal["on_cooldown"], personal["beyond_instruction"]
+            if taught:
+                lines = [f"**{t['name']}**: +{t['qi_granted']:,.1f} Qi" for t in taught]
+                total_bonus = sum(t["master_bonus"] for t in taught)
+                lines.append(f"_You gain **{total_bonus:,.1f}** Qi of your own from the lessons._")
+            else:
+                lines = ["_No one was ready this time._"]
+            embed.add_field(name=f"🎓 Personal — Taught ({len(taught)})", value="\n".join(lines)[:1024], inline=False)
+            if on_cooldown:
+                cd_lines = [f"**{d['name']}** — {format_duration(d['remaining'])}" for d in on_cooldown]
+                embed.add_field(name=f"🎓 Personal — On Cooldown ({len(on_cooldown)})", value="\n".join(cd_lines)[:1024], inline=False)
+            if beyond:
+                beyond_lines = [f"**{d['name']}** — {d['reason']}" for d in beyond]
+                embed.add_field(name=f"🎓 Personal — Beyond Instruction ({len(beyond)})", value="\n".join(beyond_lines)[:1024], inline=False)
+            footer_bits.append(f"Personal: each disciple's own {format_duration(sects.PERSONAL_TEACH_COOLDOWN_SECONDS)} cooldown")
+
+        embed.set_footer(text=" • ".join(footer_bits))
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="release_disciple", description="Release one of your disciples from mentorship")
@@ -1971,36 +2003,6 @@ class GameCog(commands.Cog):
         view = MentorRequestView(self.game, interaction.user, member, self.game.personal_accept_disciple, offer_label="personal disciple")
         await interaction.response.send_message(embed=view.build_embed(), view=view)
         view.message = await interaction.original_response()
-
-    @app_commands.command(name="master_teach_all", description="Teach any of your personal disciples who are off cooldown — each has their own timer")
-    @app_commands.guilds(GUILD)
-    async def master_teach_all(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
-        if not player["character_confirmed"]:
-            await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
-            return
-        result = self.game.personal_teach_all(interaction.user.id, interaction.user.display_name)
-        if not result["ok"]:
-            await interaction.response.send_message(result["reason"], ephemeral=True)
-            return
-
-        embed = discord.Embed(title="🎓 Teach All — Complete", color=discord.Color.dark_teal())
-        taught, on_cooldown, beyond = result["taught"], result["on_cooldown"], result["beyond_instruction"]
-        if taught:
-            lines = [f"**{t['name']}**: +{t['qi_granted']:,.1f} Qi" for t in taught]
-            total_bonus = sum(t["master_bonus"] for t in taught)
-            lines.append(f"_You gain **{total_bonus:,.1f}** Qi of your own from the lessons._")
-        else:
-            lines = ["_No one was ready this time._"]
-        embed.add_field(name=f"✅ Taught ({len(taught)})", value="\n".join(lines)[:1024], inline=False)
-        if on_cooldown:
-            cd_lines = [f"**{d['name']}** — {format_duration(d['remaining'])}" for d in on_cooldown]
-            embed.add_field(name=f"⏳ On Cooldown ({len(on_cooldown)})", value="\n".join(cd_lines)[:1024], inline=False)
-        if beyond:
-            beyond_lines = [f"**{d['name']}** — {d['reason']}" for d in beyond]
-            embed.add_field(name=f"♾️ Beyond Instruction ({len(beyond)})", value="\n".join(beyond_lines)[:1024], inline=False)
-        embed.set_footer(text=f"Each disciple's own teach cooldown: {format_duration(sects.PERSONAL_TEACH_COOLDOWN_SECONDS)}.")
-        await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="master_release", description="Release one of your personal disciples")
     @app_commands.guilds(GUILD)

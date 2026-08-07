@@ -4023,6 +4023,26 @@ class GameManager:
         self.db.add_qi(master["user_id"], master_bonus)
         return {"ok": True, "qi_granted": qi_granted, "master_bonus": master_bonus}
 
+    def teach_all(self, user_id: int, name: str) -> dict:
+        """/teach's single entry point -- merges sect_teach_all and personal_teach_all into one
+        action, teaching whichever of a player's sect disciples AND personal disciples are
+        currently eligible. Each side is independently SKIPPED (not a failure) if it doesn't
+        apply at all (no sect, or no personal disciples) -- sect_teach_all's own "You're not in
+        a sect" refusal would otherwise block a personal-only master from teaching at all, which
+        this exists specifically to avoid. A side's own cooldown-gate refusal (e.g. sect still
+        settling from the last lesson) IS still surfaced, just as informational content inside
+        that side's own result, not a hard failure of the whole command.
+        Returns {"ok", "reason" (only set if ok=False -- nothing to attempt on EITHER side),
+        "sect": sect_teach_all's dict or None, "personal": personal_teach_all's dict or None}."""
+        player = self.db.get_or_create_player(user_id, name)
+        has_sect_disciples = bool(player["sect_id"]) and bool(self.db.get_disciples(user_id))
+        has_personal_disciples = bool(self.db.get_personal_disciples(user_id))
+        if not has_sect_disciples and not has_personal_disciples:
+            return {"ok": False, "reason": "You don't have any disciples to teach — sect or personal.", "sect": None, "personal": None}
+        sect_result = self.sect_teach_all(user_id, name) if has_sect_disciples else None
+        personal_result = self.personal_teach_all(user_id, name) if has_personal_disciples else None
+        return {"ok": True, "sect": sect_result, "personal": personal_result}
+
     def sect_teach_all(self, master_id: int, master_name: str) -> dict:
         """Teaching transfers Qi to every current sect disciple at once (was one-disciple-per-
         use; changed to hit the whole roster in a single action per explicit request) — it
