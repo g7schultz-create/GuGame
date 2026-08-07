@@ -1433,6 +1433,14 @@ class GameDatabase:
         Physique's post-breakthrough vigor, etc.) keeps add_buff's original
         always-insert-a-new-row, always-additive behavior, untouched.
 
+        A STRICTLY HIGHER tier pill does NOT add its duration on top of whatever time was
+        left on the weaker buff -- per explicit follow-up request, that let a Tier 1 pill
+        eaten right before a Tier 2 pill produce MORE total buffed time than a single Tier 2
+        pill by itself (leftover Tier 1 time + a full fresh Tier 2 duration). Instead it
+        resets the timer to its own full duration from right now, same as if no buff had
+        been active at all -- the stronger pill fully replaces the weaker one. A SAME-tier
+        pill still only extends (adds), unchanged from the paragraph above.
+
         The actual "a lower tier can't extend a higher tier" gate lives in GameManager.use_item
         (it has to run BEFORE the pill leaves inventory, which this method has no visibility
         into). Returns (new_total_bonus, new_total_remaining_seconds)."""
@@ -1448,7 +1456,7 @@ class GameDatabase:
             existing_tier = self._parse_cultivation_boost_tier(existing["name"]) or 0
             upgrading = tier >= existing_tier
             new_bonus = qi_multiplier_bonus if upgrading else existing["qi_multiplier_bonus"]
-            new_expires_at = existing["expires_at"] + duration_seconds
+            new_expires_at = now + duration_seconds if tier > existing_tier else existing["expires_at"] + duration_seconds
             new_name = name if upgrading else existing["name"]
             cur.execute(
                 "UPDATE buffs SET name = ?, qi_multiplier_bonus = ?, expires_at = ? WHERE id = ?",
