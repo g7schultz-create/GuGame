@@ -1,0 +1,8 @@
+.env
+game.db
+game.db-journal
+game.db.bak_*
+__pycache__/
+*.pyc
+.claude/
+bot_restart*.log

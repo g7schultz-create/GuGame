@@ -1,0 +1,14 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "GuWorldTest",
+            "type": "shell",
+            "command": "Run",
+            "inAgents": true,
+            "runOptions": {
+                "runOn": "worktreeCreated"
+            }
+        }
+    ]
+}

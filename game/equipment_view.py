@@ -1,0 +1,557 @@
+import discord
+
+from . import accessories_data
+from . import blacksmith
+from . import equipment as equipment_module
+from .base_view import GameView
+from .equipment import EQUIPMENT, SLOT_LABEL_BY_KEY, SLOT_TYPE_BY_KEY, SLOTS, describe_stat_bonuses, gear_power_score
+from .manual_view import EFFECT_LABELS
+from .ui_utils import NAV_PREV_VALUE, NAV_NEXT_VALUE, paginate_select_options
+
+# Short sort-dropdown labels for every stat_bonuses key any Gu-slot item can carry (see the
+# Gu Ability picker's "Sort: Stat" mode) — falls back to an auto title-cased key for anything
+# added later that isn't listed here, so this never needs to be kept perfectly in sync.
+GU_STAT_LABELS = {
+    "str_pct": "STR %", "atk_pct": "ATK %", "def_pct": "DEF %", "spd_pct": "SPD %",
+    "hp_pct": "HP %", "qi_pct": "QI %",
+    "str_stat": "STR", "def_stat": "DEF", "spd_stat": "SPD", "hp": "HP", "luck_stat": "LCK",
+    "dodge_chance_pct": "Dodge Chance", "crit_chance_pct": "Crit Chance", "crit_damage_pct": "Crit Damage",
+    "lifesteal_percent": "Lifesteal", "beast_damage_reduction_pct": "Beast Dmg Reduction",
+    "beast_damage_pct": "Beast Damage", "physical_damage_pct": "Physical Damage",
+    "technique_damage_pct": "Technique Damage", "ignore_attack_chance": "Ignore Attack %",
+    "low_hp_atk_bonus": "Low-HP ATK Bonus", "loot_chance_bonus_pct": "Loot Luck",
+    "stone_reward_bonus_pct": "Stone Rewards", "essence_regen_pct": "Essence Recovery",
+    "cultivation_speed_pct": "Cultivation Speed", "insight_gain_pct": "Insight Gain",
+    "cooldown_reduction_pct": "Cooldown Reduction", "essence_purity_pct": "Essence Purity",
+    "boss_damage_bonus_pct": "Boss Damage Bonus", "discovery_quality_bias_pct": "Discovery Quality Bias",
+    "dream_realm_bias_pct": "Dream Realm Bias", "death_qi_loss_reduction_pct": "Death Qi Loss Reduction",
+    "explore_luck_bonus_flat": "Explore Luck",
+}
+GU_SORT_MODES = [("power", "Power", "⚡"), ("rarity", "Rarity", "💎"), ("stat", "Stat", "📊")]
+
+# Select option values for crafted_gear instances are prefixed so _on_pick_item can tell
+# them apart from a catalog item_name (which is just the raw name) — see equip_crafted_gear
+# vs equip_item in manager.py, the two different equip paths this branches into.
+INSTANCE_VALUE_PREFIX = "gear:"
+# Same idea for accessory/artifact instances (see accessories_data.py) — the Ring/Earring/
+# Necklace/Bracelet/Artifact slots are, like Weapon/Head/Body, dual-nature: either an
+# ordinary catalog item (Rusty Jade Ring, Basic Flying Artifact) or a rolled instance.
+ACCESSORY_VALUE_PREFIX = "acc:"
+ACCESSORY_SLOT_TYPES = {"Ring", "Earring", "Necklace", "Bracelet", "Artifact"}
+# Assembled manuals (see /manual, manual_data.py) live entirely outside the `equipped`
+# table/equipment.SLOTS system this view is otherwise built around — GameManager.
+# equip_manual writes straight to players.equipped_primary_manual_id/
+# equipped_auxiliary_manual_id instead, and (unlike every catalog/crafted_gear slot) a
+# manual can be equipped in ONE of two independent slots that both feed the same
+# cultivation bonus at different weights (primary 100%, auxiliary 35% — see
+# GameDatabase._qi_rate_components). So these two are handled as local virtual slots
+# rather than added to the shared equipment.SLOTS list, which would ripple into every
+# other consumer of that list (compute_equipment_bonuses, unequip_all, starter equipment,
+# ...) for something that was never really "one more slot_key" the same way Head/Body/
+# Weapon are.
+MANUAL_VALUE_PREFIX = "manual:"
+MANUAL_VIRTUAL_SLOTS = [("manual_primary", "Primary Manual", "📘"), ("manual_auxiliary", "Auxiliary Manual", "📗")]
+MANUAL_SLOT_NAME = {"manual_primary": "primary", "manual_auxiliary": "auxiliary"}
+MANUAL_PLAYER_COLUMN = {"manual_primary": "equipped_primary_manual_id", "manual_auxiliary": "equipped_auxiliary_manual_id"}
+
+# Label/emoji lookup covering every real slot_key (equipment.SLOTS) AND the two virtual
+# manual slots above, keyed the same way self.selected_slot already is — one dict instead of
+# branching on "is this a real or virtual slot" every time something just needs a name.
+SLOT_INFO = {slot_key: (label, emoji) for slot_key, label, _, emoji in SLOTS}
+SLOT_INFO.update({virtual_slot: (label, emoji) for virtual_slot, label, emoji in MANUAL_VIRTUAL_SLOTS})
+
+# Groups equipment.SLOTS' 13 real slot_keys (plus the 2 virtual manual ones) into the 10
+# category buttons /equipment now shows up front, instead of one giant "Slots" field for
+# every piece at once. Single-slot categories jump straight to that slot's manage screen;
+# multi-slot ones (Rings, Earrings, Artifacts, Manual) show a small picker for which of
+# their slots to manage. (category_key, label, emoji, [slot_keys]).
+CATEGORY_GROUPS = [
+    ("head", "Head", "🪖", ["head"]),
+    ("body", "Body", "🛡️", ["body"]),
+    ("weapon", "Weapon", "⚔️", ["weapon"]),
+    ("necklace", "Necklace", "⛓️", ["necklace"]),
+    ("bracelet", "Bracelet/Belt", "🪢", ["bracelet"]),
+    ("ring", "Rings", "💍", ["ring_1", "ring_2"]),
+    ("earring", "Earrings", "📿", ["earring_1", "earring_2"]),
+    ("artifact", "Artifacts", "💠", ["artifact_1", "artifact_2"]),
+    ("manual", "Manual", "📖", ["manual_primary", "manual_auxiliary", "manual"]),
+    ("gu_ability", "Gu", "🐛", ["gu_ability"]),
+]
+CATEGORY_BY_KEY = {key: (label, emoji, slot_keys) for key, label, emoji, slot_keys in CATEGORY_GROUPS}
+CATEGORY_FOR_SLOT = {slot_key: key for key, _, _, slot_keys in CATEGORY_GROUPS for slot_key in slot_keys}
+
+
+def _format_manual_line(manual: dict) -> str:
+    parts = []
+    for key, value in manual["effects"].items():
+        label = EFFECT_LABELS.get(key, key.replace("_", " ").title())
+        parts.append(f"+{value:.1f}% {label}" if "pct" in key else f"+{value:.1f} {label}")
+    effects_text = " • ".join(parts) if parts else "No effects"
+    return f"**{manual['name']}** — Rank {manual['rank']} {manual['rarity']} • {manual['coherence_band']}\n　{effects_text}"
+
+
+def _format_gear_stats(gear) -> str:
+    return describe_stat_bonuses(gear.stat_bonuses)
+
+
+def _describe_gear_for_select(gear) -> str:
+    """What a piece of gear actually does, for the equip dropdown — stat bonuses plus its
+    active ability (Gu only), falling back to the flavor rank only if it has neither."""
+    parts = []
+    stats_text = _format_gear_stats(gear)
+    if stats_text:
+        parts.append(stats_text)
+    if gear.active_ability:
+        parts.append(f"⚔️ {gear.active_ability.name} (Qi {gear.active_ability.qi_cost})")
+    return " • ".join(parts) or gear.rank
+
+
+class EquipmentView(GameView):
+    def __init__(self, user_id: int, game, player, display_name: str, avatar_url: str):
+        super().__init__(timeout=120)
+        self.user_id = user_id
+        self.game = game
+        self.player = player
+        self.display_name = display_name
+        self.avatar_url = avatar_url
+        self.selected_category = None
+        self.selected_slot = None
+        self.last_result = None
+        self.gu_sort_mode = "power"  # "power" | "rarity" | "stat"
+        self.gu_sort_stat: str = None
+        self.gu_sort_stat_page = 0
+        self.gu_item_page = 0
+        self._build_components()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This isn't your equipment.", ephemeral=True)
+            return False
+        return True
+
+    def refresh(self):
+        self.player = self.game.get_player_stats(self.user_id, self.display_name)
+
+    def _manual_slot_description(self, player: dict, virtual_slot: str) -> str:
+        manual_id = player[MANUAL_PLAYER_COLUMN[virtual_slot]]
+        if not manual_id:
+            return "Current: Empty"
+        manual = self.game.db.get_manual(manual_id)
+        return f"Current: {manual['name']}" if manual else "Current: Empty"
+
+    def _build_real_slot_options(self, slot_type: str, current: str) -> list:
+        inventory = self.game.get_inventory(self.user_id)
+        catalog_candidates = [
+            (-gear_power_score(gear), discord.SelectOption(label=item_name, value=item_name, description=_describe_gear_for_select(gear)[:100]))
+            for item_name, gear in EQUIPMENT.items()
+            if gear.slot_type == slot_type and inventory.get(item_name, 0) > 0
+        ]
+        # Rolled crafted_gear instances (see /blacksmith, /weapons) — only Weapon/Head/
+        # Body ever have any, and only the ones not already sitting in an equipped slot
+        # (an instance is "in your bag" simply by not being referenced from `equipped`,
+        # there's no separate inventory row to filter on like catalog gear above).
+        equipped_gear_ids = set(self.game.db.get_equipped_gear_ids(self.user_id).values())
+        instance_candidates = [
+            (
+                -gear["power_score"],
+                discord.SelectOption(
+                    label=blacksmith.crafted_gear_display_name(gear["base_type"], gear["tier"], gear["gear_id"])[:100],
+                    value=f"{INSTANCE_VALUE_PREFIX}{gear['gear_id']}",
+                    description=describe_stat_bonuses(gear["stat_bonuses"])[:100],
+                ),
+            )
+            for gear in self.game.get_player_crafted_gear(self.user_id)
+            if gear["slot_type"] == slot_type and gear["gear_id"] not in equipped_gear_ids
+        ]
+
+        accessory_candidates = []
+        if slot_type in ACCESSORY_SLOT_TYPES:
+            equipped_accessory_ids = set(self.game.db.get_equipped_accessory_ids(self.user_id).values())
+            rarity_rank = {r: i for i, r in enumerate(accessories_data.RARITY_ORDER)}
+            for entry in self.game.get_player_accessories_artifacts(self.user_id):
+                affix = entry["affix"]
+                if affix.slot_type != slot_type or entry["instance_id"] in equipped_accessory_ids:
+                    continue
+                needs_attunement = affix.rarity in accessories_data.ATTUNEMENT_REQUIRED_RARITIES and not entry["attuned"]
+                label = f"{affix.name} #{entry['instance_id']}" + (" 🔒 needs attunement" if needs_attunement else "")
+                desc = f"Rank {affix.rank} {affix.rarity} • {affix.description}"[:100]
+                accessory_candidates.append((
+                    -rarity_rank.get(affix.rarity, 0),
+                    discord.SelectOption(label=label[:100], value=f"{ACCESSORY_VALUE_PREFIX}{entry['instance_id']}", description=desc),
+                ))
+
+        return [option for _, option in sorted(catalog_candidates + instance_candidates + accessory_candidates, key=lambda row: row[0])]
+
+    def _build_manual_slot_options(self, player: dict) -> list:
+        # Excludes whatever's currently in EITHER manual slot — equip_manual itself rejects
+        # putting the same manual in both at once, and re-picking whatever's already in the
+        # slot you're looking at is a pointless no-op (it'd just reset the change cooldown).
+        occupied = {player["equipped_primary_manual_id"], player["equipped_auxiliary_manual_id"]} - {None}
+        candidates = [
+            (-manual["coherence"], discord.SelectOption(
+                label=manual["name"][:100], value=f"{MANUAL_VALUE_PREFIX}{manual['manual_id']}",
+                description=f"Rank {manual['rank']} {manual['rarity']} • {manual['coherence_band']} ({manual['coherence']}/100)"[:100],
+            ))
+            for manual in self.game.get_player_manuals(self.user_id)
+            if manual["manual_id"] not in occupied
+        ]
+        return [option for _, option in sorted(candidates, key=lambda row: row[0])]
+
+    # -- Gu Ability sorting (the slot with by far the most possible items — 380+ registered
+    # across every family/quality — so "just show them" the way every other slot does isn't
+    # enough to actually find one; see GU_SORT_MODES) ---------------------------------------
+
+    def _owned_gu_items(self) -> list:
+        inventory = self.game.get_inventory(self.user_id)
+        return [
+            (item_name, gear) for item_name, gear in EQUIPMENT.items()
+            if gear.slot_type == "Gu" and inventory.get(item_name, 0) > 0
+        ]
+
+    @staticmethod
+    def _gu_rarity_rank(item_name: str) -> int:
+        """Higher = rarer. A handful of named Gu (Battle Intent Gu, Flying Sword Gu, ...)
+        never got a tiered (Family (Quality)) name at all — parse_gu_name can't place them on
+        the Common..Immortal ladder, so they rank ABOVE Immortal instead of falling to the
+        bottom: these are unique hand-authored rewards, not undercooked Common drops."""
+        _, quality = equipment_module.parse_gu_name(item_name)
+        if quality is None:
+            return len(equipment_module.GU_QUALITY_ORDER)
+        return equipment_module.GU_QUALITY_STARS[quality]
+
+    def _gu_available_sort_stats(self) -> list:
+        """Every stat_bonuses key present among Gu the player actually OWNS — built fresh
+        each render (not a static full-catalog list) so the "Stat" sort dropdown only ever
+        offers stats that could actually change something right now."""
+        keys = set()
+        for _, gear in self._owned_gu_items():
+            keys.update(gear.stat_bonuses.keys())
+        return sorted(keys, key=lambda k: GU_STAT_LABELS.get(k, k))
+
+    def _build_gu_options(self) -> list:
+        entries = self._owned_gu_items()
+        if self.gu_sort_mode == "rarity":
+            entries.sort(key=lambda e: (-self._gu_rarity_rank(e[0]), e[0]))
+        elif self.gu_sort_mode == "stat" and self.gu_sort_stat:
+            entries.sort(key=lambda e: (-e[1].stat_bonuses.get(self.gu_sort_stat, 0), -gear_power_score(e[1]), e[0]))
+        else:
+            entries.sort(key=lambda e: (-gear_power_score(e[1]), e[0]))
+        return [
+            discord.SelectOption(label=item_name[:100], value=item_name, description=_describe_gear_for_select(gear)[:100])
+            for item_name, gear in entries
+        ]
+
+    def _add_gu_sort_controls(self, row: int):
+        for key, label, emoji in GU_SORT_MODES:
+            button = discord.ui.Button(label=f"Sort: {label}", emoji=emoji, row=row)
+            is_active = key == self.gu_sort_mode
+            button.style = discord.ButtonStyle.primary if is_active else discord.ButtonStyle.secondary
+            button.disabled = is_active
+            button.callback = self._make_gu_sort_mode_callback(key)
+            self.add_item(button)
+
+    def _add_gu_stat_select(self, row: int):
+        stat_keys = self._gu_available_sort_stats()
+        if self.gu_sort_stat not in stat_keys:
+            self.gu_sort_stat = stat_keys[0] if stat_keys else None
+        options = [
+            discord.SelectOption(label=GU_STAT_LABELS.get(key, key.replace("_", " ").title())[:100], value=key, default=(key == self.gu_sort_stat))
+            for key in stat_keys
+        ]
+        page_options, total_pages, self.gu_sort_stat_page = paginate_select_options(options, self.gu_sort_stat_page)
+        placeholder = "Sort by which stat?"
+        if total_pages > 1:
+            placeholder += f" (page {self.gu_sort_stat_page + 1}/{total_pages})"
+        select = discord.ui.Select(
+            placeholder=placeholder, options=page_options or [discord.SelectOption(label="None", value="none")],
+            disabled=not options, row=row,
+        )
+        select.callback = self._on_pick_gu_sort_stat
+        self.add_item(select)
+
+    def _build_components(self):
+        self.clear_items()
+        equipped = self.game.get_equipped(self.user_id)
+        player = self.game.get_player_stats(self.user_id, self.display_name)
+
+        if self.selected_slot:
+            self._add_item_select(equipped, player, row=0)
+            next_row = 1
+            if self.selected_slot == "gu_ability":
+                self._add_gu_sort_controls(row=next_row)
+                next_row += 1
+                if self.gu_sort_mode == "stat":
+                    self._add_gu_stat_select(row=next_row)
+                    next_row += 1
+            back_button = discord.ui.Button(label="Back", emoji="↩️", row=next_row)
+            back_button.callback = self._on_back
+            self.add_item(back_button)
+            bottom_row = next_row + 1
+        elif self.selected_category:
+            _, _, slot_keys = CATEGORY_BY_KEY[self.selected_category]
+            picker_options = []
+            for slot_key in slot_keys:
+                label, emoji = SLOT_INFO[slot_key]
+                description = self._manual_slot_description(player, slot_key) if slot_key in MANUAL_SLOT_NAME else f"Current: {equipped.get(slot_key) or 'Empty'}"
+                picker_options.append(discord.SelectOption(label=label, value=slot_key, emoji=emoji, description=description[:100]))
+            picker = discord.ui.Select(placeholder="Which slot?", options=picker_options, row=0)
+            picker.callback = self._on_pick_slot
+            self.add_item(picker)
+            back_button = discord.ui.Button(label="Back", emoji="↩️", row=1)
+            back_button.callback = self._on_back
+            self.add_item(back_button)
+            bottom_row = 2
+        else:
+            # Top level — one button per category (10 total, 5 per row) instead of the old
+            # single "manage one equipment slot" dropdown listing every slot at once.
+            for index, (key, label, emoji, _) in enumerate(CATEGORY_GROUPS):
+                button = discord.ui.Button(label=label, emoji=emoji, style=discord.ButtonStyle.primary, row=index // 5)
+                button.callback = self._make_category_callback(key)
+                self.add_item(button)
+            bottom_row = 2
+
+        profile_button = discord.ui.Button(label="Profile", emoji="📖", style=discord.ButtonStyle.secondary, row=bottom_row)
+        profile_button.callback = self._on_profile
+        self.add_item(profile_button)
+
+    def _add_item_select(self, equipped: dict, player: dict, row: int):
+        """The actual equip/unequip dropdown for self.selected_slot — same options logic as
+        before, just no longer sharing a screen with the slot picker above it."""
+        placeholder_suffix = ""
+        if self.selected_slot in MANUAL_SLOT_NAME:
+            current = player[MANUAL_PLAYER_COLUMN[self.selected_slot]]
+            options = []
+            if current:
+                options.append(discord.SelectOption(label="Unequip (leave empty)", value="__unequip__", emoji="🗑️"))
+            options.extend(self._build_manual_slot_options(player))
+            placeholder = "Choose a manual..." if options else "Nothing available for this slot"
+        elif self.selected_slot == "gu_ability":
+            current = equipped.get(self.selected_slot)
+            leading = []
+            if current:
+                leading.append(discord.SelectOption(label="Unequip (leave empty)", value="__unequip__", emoji="🗑️"))
+            gu_options = self._build_gu_options()
+            page_options, total_pages, self.gu_item_page = paginate_select_options(
+                gu_options, self.gu_item_page, reserved_slots=len(leading),
+            )
+            options = leading + page_options
+            placeholder = "Choose gear for Gu Ability..." if options else "Nothing available for this slot"
+            if total_pages > 1:
+                placeholder_suffix = f" (page {self.gu_item_page + 1}/{total_pages})"
+        else:
+            slot_type = SLOT_TYPE_BY_KEY[self.selected_slot]
+            current = equipped.get(self.selected_slot)
+            options = []
+            if current:
+                options.append(discord.SelectOption(label="Unequip (leave empty)", value="__unequip__", emoji="🗑️"))
+            options.extend(self._build_real_slot_options(slot_type, current))
+            placeholder = f"Choose gear for {SLOT_LABEL_BY_KEY[self.selected_slot]}..." if options else "Nothing available for this slot"
+
+        item_select = discord.ui.Select(
+            placeholder=(placeholder + placeholder_suffix)[:150],
+            # Still capped at Discord's 25-option limit — every non-Gu slot realistically
+            # never gets close, so only the Gu Ability branch above actually paginates.
+            options=options[:25] or [discord.SelectOption(label="None", value="none")],
+            disabled=not options,
+            row=row,
+        )
+        item_select.callback = self._on_pick_item
+        self.add_item(item_select)
+
+    def _make_category_callback(self, category_key: str):
+        async def callback(interaction: discord.Interaction):
+            self.selected_category = category_key
+            _, _, slot_keys = CATEGORY_BY_KEY[category_key]
+            # Single-slot categories (Head, Body, Weapon, ...) jump straight to slot
+            # management — no point showing a "which slot?" picker with exactly one option.
+            if len(slot_keys) == 1:
+                self.selected_slot = slot_keys[0]
+            self.last_result = None
+            self._build_components()
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+        return callback
+
+    async def _on_pick_slot(self, interaction: discord.Interaction):
+        select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 0)
+        self.selected_slot = select.values[0]
+        self.last_result = None
+        self._build_components()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    def _make_gu_sort_mode_callback(self, key: str):
+        async def callback(interaction: discord.Interaction):
+            self.gu_sort_mode = key
+            self.gu_item_page = 0
+            self._build_components()
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+        return callback
+
+    async def _on_pick_gu_sort_stat(self, interaction: discord.Interaction):
+        select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 2)
+        choice = select.values[0]
+        if choice == NAV_PREV_VALUE:
+            self.gu_sort_stat_page = max(0, self.gu_sort_stat_page - 1)
+        elif choice == NAV_NEXT_VALUE:
+            self.gu_sort_stat_page += 1
+        elif choice != "none":
+            self.gu_sort_stat = choice
+            self.gu_item_page = 0
+        self._build_components()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _on_pick_item(self, interaction: discord.Interaction):
+        select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 0)
+        choice = select.values[0]
+        if choice == NAV_PREV_VALUE:
+            self.gu_item_page = max(0, self.gu_item_page - 1)
+            self._build_components()
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            return
+        if choice == NAV_NEXT_VALUE:
+            self.gu_item_page += 1
+            self._build_components()
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            return
+        if self.selected_slot in MANUAL_SLOT_NAME:
+            manual_slot = MANUAL_SLOT_NAME[self.selected_slot]
+            if choice == "__unequip__":
+                _, self.last_result = self.game.unequip_manual(self.user_id, self.display_name, manual_slot)
+            else:
+                manual_id = int(choice[len(MANUAL_VALUE_PREFIX):])
+                _, self.last_result = self.game.equip_manual(self.user_id, self.display_name, manual_id, manual_slot)
+        elif choice == "__unequip__":
+            if self.selected_slot in self.game.ACCESSORY_ARTIFACT_SLOT_TYPES:
+                _, self.last_result = self.game.unequip_accessory_artifact(self.user_id, self.display_name, self.selected_slot)
+            else:
+                _, self.last_result = self.game.unequip_item(self.user_id, self.display_name, self.selected_slot)
+        elif choice.startswith(INSTANCE_VALUE_PREFIX):
+            gear_id = int(choice[len(INSTANCE_VALUE_PREFIX):])
+            _, self.last_result = self.game.equip_crafted_gear(self.user_id, self.display_name, gear_id)
+        elif choice.startswith(ACCESSORY_VALUE_PREFIX):
+            instance_id = int(choice[len(ACCESSORY_VALUE_PREFIX):])
+            _, self.last_result = self.game.equip_accessory_artifact(self.user_id, self.display_name, self.selected_slot, instance_id)
+        else:
+            _, self.last_result = self.game.equip_item(self.user_id, self.display_name, self.selected_slot, choice)
+        self.refresh()
+        self._build_components()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _on_back(self, interaction: discord.Interaction):
+        if self.selected_slot:
+            # Single-slot categories skipped their own picker screen (see
+            # _make_category_callback), so backing out of slot management on one of those
+            # goes all the way to the top level instead of a picker with nothing useful on it.
+            _, _, slot_keys = CATEGORY_BY_KEY[self.selected_category]
+            self.selected_slot = None
+            if len(slot_keys) == 1:
+                self.selected_category = None
+        else:
+            self.selected_category = None
+        self.last_result = None
+        self._build_components()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _on_profile(self, interaction: discord.Interaction):
+        from .views import ProfileView  # local import: avoids a circular import at module load time
+
+        view = ProfileView(self.user_id, self.game, self.player, self.display_name, self.avatar_url)
+        await interaction.response.edit_message(embed=view.build_embed(), view=view)
+
+    def _describe_slot(self, slot_key: str) -> str:
+        """One formatted line (or two, for gear with a stats readout) for a single slot's
+        current contents — shared by the category-detail and single-slot embed views below,
+        same formatting the old all-in-one "Slots" field used per slot."""
+        label, emoji = SLOT_INFO[slot_key]
+        if slot_key in MANUAL_SLOT_NAME:
+            manual_id = self.player[MANUAL_PLAYER_COLUMN[slot_key]]
+            manual = self.game.db.get_manual(manual_id) if manual_id else None
+            return f"{emoji} **{label}**\n　{_format_manual_line(manual)}" if manual else f"{emoji} **{label}**: *Empty*"
+
+        equipped = self.game.get_equipped(self.user_id)
+        item_name = equipped.get(slot_key)
+        if not item_name:
+            return f"{emoji} **{label}**: *Empty*"
+        equipped_gear_ids = self.game.db.get_equipped_gear_ids(self.user_id)
+        if slot_key in equipped_gear_ids:
+            crafted = self.game.db.get_crafted_gear(equipped_gear_ids[slot_key])
+            stats_text = describe_stat_bonuses(crafted["stat_bonuses"]) if crafted else ""
+            rank = f"T{crafted['tier']}" if crafted else "?"
+            return f"{emoji} **{label}** Rank {rank}\n　{item_name} — {stats_text}"
+        equipped_accessory_ids = self.game.db.get_equipped_accessory_ids(self.user_id)
+        if slot_key in equipped_accessory_ids:
+            instance = self.game.db.get_accessory_instance(equipped_accessory_ids[slot_key])
+            affix = self.game._affix_for_instance(instance) if instance else None
+            if affix:
+                stats_text = describe_stat_bonuses(affix.stat_bonuses) or affix.description
+                return f"{emoji} **{label}** Rank {affix.rank} {affix.rarity}\n　{item_name} — {stats_text}"
+            return f"{emoji} **{label}**\n　{item_name}"
+        gear = EQUIPMENT.get(item_name)
+        stats_text = _format_gear_stats(gear) if gear else ""
+        return f"{emoji} **{label}** Rank {gear.rank if gear else '?'}\n　{item_name} — {stats_text}"
+
+    def build_embed(self) -> discord.Embed:
+        p = self.player
+        equipped = self.game.get_equipped(self.user_id)
+        bonuses = self.game.compute_equipment_bonuses(self.user_id)
+        stat_bonus = bonuses["stats"]
+
+        manual_slots_filled = sum(1 for _, col in MANUAL_PLAYER_COLUMN.items() if p[col])
+        total_slots = len(SLOTS) + len(MANUAL_VIRTUAL_SLOTS)
+
+        embed = discord.Embed(title="🛡️ Equipment Loadout", description=self.display_name, color=discord.Color.dark_purple())
+        embed.set_thumbnail(url=self.avatar_url)
+        embed.add_field(name="Slots Equipped", value=f"{len(equipped) + manual_slots_filled}/{total_slots}", inline=False)
+
+        embed.add_field(
+            name="Total Stats",
+            value=(
+                f"🎯 ATK: {p['atk_stat'] + stat_bonus['atk_stat']:.0f} ⚔️ STR: {p['str_stat'] + stat_bonus['str_stat']:.0f} ❤️ HP: {p['hp'] + stat_bonus['hp']:.0f}\n"
+                f"🛡️ DEF: {p['def_stat'] + stat_bonus['def_stat']:.0f} 🏃 SPD: {p['spd_stat'] + stat_bonus['spd_stat']:.0f}\n"
+                f"💧 QI: {p['qi_stat'] + stat_bonus['qi_stat']:.0f} 🍀 LCK: {p['luck_stat'] + stat_bonus['luck_stat']:.0f}"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Equipment Bonuses",
+            value=(
+                f"🎯 ATK: +{stat_bonus['atk_stat']:.0f} ⚔️ STR: +{stat_bonus['str_stat']:.0f} ❤️ HP: +{stat_bonus['hp']:.0f}\n"
+                f"🛡️ DEF: +{stat_bonus['def_stat']:.0f} 🏃 SPD: +{stat_bonus['spd_stat']:.0f}\n"
+                f"💧 QI: +{stat_bonus['qi_stat']:.0f} 🍀 LCK: +{stat_bonus['luck_stat']:.0f}"
+            ),
+            inline=False,
+        )
+        embed.add_field(name="Manual Bonus", value=f"+{bonuses['cultivation_speed_pct'] * 100:.0f}% cultivation gain", inline=False)
+
+        gu_bonus_lines = [
+            equipment_module.SPECIAL_STAT_TEXT[key](bonuses[key])
+            for key in equipment_module.SPECIAL_STAT_TEXT
+            if key != "cultivation_speed_pct" and bonuses.get(key)
+        ]
+        if gu_bonus_lines:
+            embed.add_field(name="✨ Passive Bonuses", value=" • ".join(gu_bonus_lines), inline=False)
+
+        if self.selected_slot:
+            # Focused on exactly one slot — the item-equip dropdown below the embed handles
+            # changing it, this just shows what's there right now.
+            cat_label, cat_emoji, _ = CATEGORY_BY_KEY[self.selected_category]
+            embed.add_field(name=f"{cat_emoji} {cat_label}", value=self._describe_slot(self.selected_slot), inline=False)
+            if self.selected_slot == "gu_ability":
+                sort_label = {
+                    "power": "⚡ Power", "rarity": "💎 Rarity",
+                    "stat": f"📊 {GU_STAT_LABELS.get(self.gu_sort_stat, self.gu_sort_stat) if self.gu_sort_stat else '—'}",
+                }[self.gu_sort_mode]
+                embed.add_field(name="Sorted By", value=sort_label, inline=True)
+        elif self.selected_category:
+            cat_label, cat_emoji, slot_keys = CATEGORY_BY_KEY[self.selected_category]
+            detail = "\n".join(self._describe_slot(slot_key) for slot_key in slot_keys)
+            embed.add_field(name=f"{cat_emoji} {cat_label}", value=detail[:1024], inline=False)
+        else:
+            embed.add_field(name="Slots", value="Pick a category below to see what's equipped and change it.", inline=False)
+
+        if self.last_result:
+            embed.add_field(name="Result", value=self.last_result, inline=False)
+
+        embed.set_footer(text="These bonuses aren't reflected on /profile's Combat tab yet.")
+        return embed
