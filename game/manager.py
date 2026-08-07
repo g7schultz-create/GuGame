@@ -8,7 +8,7 @@ from . import (
     accessories_data, accessories_gen, alchemy, avatar, avatar_gear, blacksmith, chargen, combat,
     dao_companion, dao_paths, discovery_gen, equipment, exploration, gathering, gu_types, items,
     killer_move_gen, manual_data, manual_gen, professions, realms, search_data, sects, split_body,
-    tournament, world_boss, world_regions,
+    tournament, treasure_hunt, world_boss, world_regions,
 )
 from .character_data import PATHS, RACES, ROOT_TIER_ORDER
 from .database import GameDatabase
@@ -778,6 +778,25 @@ class GameManager:
     # buff; the daily fatal-blow shield).
 
     AVATAR_SOUL_REROLL_COST = 200  # spirit stones; the very first pick is free
+
+    # -- /search_forgotten_blessed_land treasure-hunt board (see game/treasure_hunt.py) --------
+    TREASURE_HUNT_REALM_GATE = 2  # Core Formation's great_realm_index
+    TREASURE_HUNT_COOLDOWN_SECONDS = 20 * 3600  # 20 hours between boards, no stone/item cost
+
+    def start_treasure_hunt(self, user_id: int, name: str):
+        """Realm + cooldown gate, then rolls a fresh 25-tile board (see treasure_hunt.
+        roll_board) -- returns (ok, message, board). board is None on refusal."""
+        player = self.db.get_or_create_player(user_id, name)
+        if realms.STAGES[player["realm_index"]].great_realm_index < self.TREASURE_HUNT_REALM_GATE:
+            return False, "The Forgotten Blessed Land only reveals itself to Core Formation cultivators and above.", None
+        now = int(time.time())
+        elapsed = now - player["treasure_hunt_last_ts"]
+        if elapsed < self.TREASURE_HUNT_COOLDOWN_SECONDS:
+            remaining = self.TREASURE_HUNT_COOLDOWN_SECONDS - elapsed
+            return False, f"The Blessed Land hasn't revealed a new site yet — {remaining} seconds left.", None
+        self.db.set_treasure_hunt_last_ts(user_id, now)
+        board = treasure_hunt.roll_board()
+        return True, "You stumble into the Forgotten Blessed Land — a hidden site full of buried treasure!", board
 
     def is_avatar_unlocked(self, user_id: int, name: str) -> bool:
         player = self.db.get_or_create_player(user_id, name)

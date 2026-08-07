@@ -43,6 +43,7 @@ from .exploration_view import ExplorationHuntView
 from .tutorial_view import TutorialView
 from .study_view import StudyView
 from .search_view import SearchView
+from .treasure_hunt_view import TreasureHuntView
 from .discovery_view import build_discovery_entry_view
 from .region_view import RegionView
 from .battlefield_view import BattlefieldView
@@ -750,6 +751,24 @@ class GameCog(commands.Cog):
             return
         view = SplitBodyView(interaction.user.id, self.game, interaction.user.display_name)
         await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view.message = await interaction.original_response()
+
+    @app_commands.command(
+        name="search_forgotten_blessed_land",
+        description="Dig through a hidden 5x5 treasure site (Core Formation realm and above, one board every 20 hours)",
+    )
+    @app_commands.guilds(GUILD)
+    async def search_forgotten_blessed_land(self, interaction: discord.Interaction):
+        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        if not player["character_confirmed"]:
+            await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
+            return
+        ok, message, board = self.game.start_treasure_hunt(interaction.user.id, interaction.user.display_name)
+        if not ok:
+            await interaction.response.send_message(message, ephemeral=True)
+            return
+        view = TreasureHuntView(interaction.user.id, self.game, interaction.user.display_name, board)
+        await interaction.response.send_message(content=message, embed=view.build_embed(), view=view, ephemeral=False)
         view.message = await interaction.original_response()
 
     # -- Equipment presets (save/restore a full loadout by name — /preset_save afk, /preset_load

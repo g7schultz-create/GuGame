@@ -191,6 +191,9 @@ class GameDatabase:
         # attempt_breakthrough call.
         "attunement_points_used": "INTEGER DEFAULT 0",
         "pending_breakthrough_boost": "TEXT DEFAULT NULL",
+        # /search_forgotten_blessed_land's treasure-hunt board (see game/treasure_hunt.py) --
+        # simple per-player cooldown timestamp, same shape as search_charges_last_ts above.
+        "treasure_hunt_last_ts": "INTEGER DEFAULT 0",
 
         # World region (see world_regions.py / /region) -- a mortal-realm (Nascent Soul and
         # below) character's chosen geographic zone, separate from search_data.REGIONS'
@@ -3708,7 +3711,7 @@ class GameDatabase:
         "last_mine_ts", "last_gather_ts", "last_explore_ts", "last_battlefield_ts",
         "last_pvp_ts", "last_rest_ts", "last_meditate_ts", "last_manual_change_ts",
         "last_world_region_change_ts", "last_teach_ts", "last_personal_teach_ts",
-        "personal_last_taught_ts", "last_world_boss_attack_ts",
+        "personal_last_taught_ts", "last_world_boss_attack_ts", "treasure_hunt_last_ts",
     ]
 
     def reset_all_cooldowns(self, user_id: int):
@@ -4055,6 +4058,12 @@ class GameDatabase:
     def set_search_charges(self, user_id: int, charges: int, last_ts: int):
         con = self.connect()
         con.execute("UPDATE players SET search_charges = ?, search_charges_last_ts = ? WHERE user_id = ?", (charges, last_ts, user_id))
+        con.commit()
+        con.close()
+
+    def set_treasure_hunt_last_ts(self, user_id: int, ts: int):
+        con = self.connect()
+        con.execute("UPDATE players SET treasure_hunt_last_ts = ? WHERE user_id = ?", (ts, user_id))
         con.commit()
         con.close()
 

@@ -138,6 +138,12 @@ LOOT_SOURCE_TABLE = {
     # Nascent Soul Avatar's /split_body mission (see game/split_body.py) -- passive/no-risk
     # but takes 3 real-world hours, so it sits above hunt_kill and below raid_boss.
     "split_body": {"accessory": 0.05, "artifact": 0.01},
+    # /search_forgotten_blessed_land's treasure-hunt board (see game/treasure_hunt.py) -- used
+    # both by the board's "rare-ish" tile bucket and its guaranteed treasure tile's bonus roll,
+    # always called with source_rank=7 (meant to feel special either way). Sits between
+    # raid_boss and world_boss: rarer to encounter than a raid (one guaranteed accessory-ish
+    # shot per cooldown, not a whole boss fight), but not the big communal event World Boss is.
+    "treasure_hunt": {"accessory": 0.55, "artifact": 0.20},
 }
 # Path weighting (section 6): once a category is chosen, items sharing a source's theme tags
 # get 3x weight, neutral items 1x, opposed-path items 0.35x — see item_gen.select_named_item.
