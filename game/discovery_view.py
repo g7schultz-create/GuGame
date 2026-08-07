@@ -64,6 +64,25 @@ class DiscoveryView(GameView):
         self.add_item(back_button)
 
     async def _on_continue(self, interaction: discord.Interaction):
+        # Defense in depth against a duplicate/stale click getting through anyway (e.g. the
+        # very "Unknown interaction" scenario the defer() below exists to prevent in the
+        # first place, if it still somehow slips past) -- without this, a second resolve on
+        # an already-finished discovery would push step_index past total_steps - 1, and since
+        # resolve_discovery_step's is_final check used to be an exact "step_index ==
+        # total_steps - 1", once step_index overshoots that value it can never be true again,
+        # permanently trapping the discovery in an unfinishable loop (observed live: "Step
+        # 51/3" and climbing). manager.py's is_final check is now ">=" as a second, independent
+        # safety net, but this guard is the cheaper fix -- never even attempt the resolve.
+        if self.finished or self.abandoned:
+            await interaction.response.defer()
+            return
+        # resolve_discovery_step does real DB work (reward rolls, an accessory/artifact roll,
+        # and on the final step an EXTRA bonus reward roll) that can run past Discord's 3-second
+        # ack window under load -- defer first so a slow step gets up to 15 minutes instead of
+        # failing with "Unknown interaction" and leaving this same message's Continue button
+        # looking clickable even though the step already resolved server-side (same fix as
+        # alchemy_view.py's Make All / InventoryView's Use All).
+        await interaction.response.defer()
         result = self.game.resolve_discovery_step(self.user_id, self.display_name, self.discovery, self.step_index, self.total_steps)
         emoji = REWARD_KIND_EMOJI.get(result["reward"]["kind"], "🎁")
         self.log.append(f"**{result['name']}** — {emoji} {result['reward_text']}")
@@ -74,9 +93,12 @@ class DiscoveryView(GameView):
             self.game.finish_discovery(self.user_id, self.discovery["discovery_id"])
             self.finished = True
         self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await interaction.edit_original_response(embed=self.build_embed(), view=self)
 
     async def _on_abandon(self, interaction: discord.Interaction):
+        if self.finished or self.abandoned:
+            await interaction.response.defer()
+            return
         self.game.abandon_discovery(self.user_id, self.discovery["discovery_id"])
         self.abandoned = True
         self._build_components()

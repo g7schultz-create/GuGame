@@ -3215,7 +3215,15 @@ class GameManager:
         self.db.get_or_create_player(user_id, name)
         rng = random.Random(discovery["seed"] + step_index)  # deterministic per step, still varies room-to-room
         theme_tags = self._theme_tags_for(discovery["type"], discovery["theme"])
-        is_final = step_index == total_steps - 1
+        # ">=" rather than an exact "==" -- self-healing if step_index ever overshoots
+        # total_steps - 1 for any reason (e.g. a duplicate/stale button click resolving one
+        # extra step after the discovery already should have finished). An exact equality
+        # check meant an overshoot could never become true again, permanently trapping a
+        # discovery in an unfinishable loop (observed live: a discovery still going at step 51
+        # of a 3-step type) -- discovery_view.py's own _on_continue now also guards against
+        # the specific duplicate-click trigger, but this is the actual fix for the "can never
+        # recover" part.
+        is_final = step_index >= total_steps - 1
         step = discovery_gen.resolve_step(discovery["type"], discovery["rank"], discovery["difficulty"], theme_tags, rng, is_final)
         reward_text = self._grant_reward(user_id, name, step["reward"])
 
