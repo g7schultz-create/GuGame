@@ -7,10 +7,12 @@ previously had ZERO Rank 1 pages at all — a manual couldn't roll either catego
 optional slots before this, not because the game forbade it but because nothing existed to
 pick.
 
-Every effect key used below is one of the 12 EFFECT_LABELS keys manager.py actually applies
+Every effect key used below is one of the EFFECT_LABELS keys manager.py actually applies
 (see GameManager.compute_equipment_bonuses / _qi_rate_components) — none of these pages use
-the flavor-only keys a few of the ORIGINAL 13 pages have (essence_capacity_flat,
-night_escape_bonus, budget_bonus, ...), so nothing new here is cosmetic. Utility pages use
+the flavor-only keys a few of the ORIGINAL 13 pages have (night_escape_bonus, budget_bonus,
+...; essence_capacity_flat was in this same dead-key list until it was renamed to the real,
+consumed essence_capacity_pct — see database.py's _essence_capacity_multiplier), so nothing
+new here is cosmetic. Utility pages use
 loot_chance_bonus_pct/stone_reward_bonus_pct instead of a cultivation/combat stat — both are
 real, already-consumed SPECIAL_BONUS_KEYS (hunt.py's loot roll, raid.py's stone reward), the
 same class of effect an accessory can already roll. clue_chance_bonus_pct was deliberately

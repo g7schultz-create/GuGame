@@ -1032,6 +1032,40 @@ class GameDatabase:
         con.close()
         return rows
 
+    def _essence_capacity_multiplier(self, cur, user_id: int, player) -> float:
+        """1 + this player's total essence_capacity_pct from their equipped primary/auxiliary
+        manuals (same primary-100%/auxiliary-35% weighting _qi_rate_components uses for every
+        other manual effect). Self-contained here — reading manuals directly off `player`
+        rather than being threaded down from a manager.py compute_equipment_bonuses call, the
+        way essence_purity_pct is — so it's automatically picked up by every essence-cap site
+        below, INCLUDING items.py's Primeval Essence Crystal restore, which only ever calls
+        into this file as restore_essence_percent(db, user_id) with no equipment-bonus context
+        of its own."""
+        total_pct = 0.0
+        for manual_id, weight in ((player["equipped_primary_manual_id"], 1.0), (player["equipped_auxiliary_manual_id"], 0.35)):
+            if not manual_id:
+                continue
+            row = cur.execute("SELECT effects FROM manuals WHERE manual_id = ? AND owner_id = ?", (manual_id, user_id)).fetchone()
+            if not row:
+                continue
+            total_pct += json.loads(row["effects"]).get("essence_capacity_pct", 0) * weight
+        return 1 + total_pct / 100.0
+
+    def get_effective_max_essence(self, user_id: int) -> int:
+        """Read-only effective essence cap (base max_primeval_essence plus any equipped
+        manuals' essence_capacity_pct) for display sites (balance_view.py, views.py) that
+        aren't already going through one of the cap-enforcing methods below."""
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute(
+            "SELECT max_primeval_essence, equipped_primary_manual_id, equipped_auxiliary_manual_id "
+            "FROM players WHERE user_id = ?", (user_id,),
+        )
+        row = cur.fetchone()
+        result = round(row["max_primeval_essence"] * self._essence_capacity_multiplier(cur, user_id, row))
+        con.close()
+        return result
+
     def _qi_rate_components(self, cur, user_id: int, player, now: int) -> dict:
         """Every source of qi-rate bonus besides the base aptitude rate and the permanent
         qi_multiplier column — shared by settle_qi (which applies it) and get_qi_status
@@ -1656,14 +1690,18 @@ class GameDatabase:
     def restore_essence_percent(self, user_id: int, percent: float):
         con = self.connect()
         cur = con.cursor()
-        cur.execute("SELECT primeval_essence, max_primeval_essence FROM players WHERE user_id = ?", (user_id,))
+        cur.execute(
+            "SELECT primeval_essence, max_primeval_essence, equipped_primary_manual_id, equipped_auxiliary_manual_id "
+            "FROM players WHERE user_id = ?", (user_id,),
+        )
         row = cur.fetchone()
-        new_essence = min(row["max_primeval_essence"], row["primeval_essence"] + round(row["max_primeval_essence"] * percent))
+        effective_max = round(row["max_primeval_essence"] * self._essence_capacity_multiplier(cur, user_id, row))
+        new_essence = min(effective_max, row["primeval_essence"] + round(effective_max * percent))
         restored = new_essence - row["primeval_essence"]
         cur.execute("UPDATE players SET primeval_essence = ? WHERE user_id = ?", (new_essence, user_id))
         con.commit()
         con.close()
-        return restored, new_essence, row["max_primeval_essence"]
+        return restored, new_essence, effective_max
 
     def add_qi(self, user_id: int, amount: float):
         """Flat qi grant (no cap — unlike HP/essence, qi has no max, just breakthrough
@@ -1680,14 +1718,18 @@ class GameDatabase:
     def add_primeval_essence(self, user_id: int, amount: int):
         con = self.connect()
         cur = con.cursor()
-        cur.execute("SELECT primeval_essence, max_primeval_essence FROM players WHERE user_id = ?", (user_id,))
+        cur.execute(
+            "SELECT primeval_essence, max_primeval_essence, equipped_primary_manual_id, equipped_auxiliary_manual_id "
+            "FROM players WHERE user_id = ?", (user_id,),
+        )
         row = cur.fetchone()
-        new_essence = min(row["max_primeval_essence"], row["primeval_essence"] + amount)
+        effective_max = round(row["max_primeval_essence"] * self._essence_capacity_multiplier(cur, user_id, row))
+        new_essence = min(effective_max, row["primeval_essence"] + amount)
         added = new_essence - row["primeval_essence"]
         cur.execute("UPDATE players SET primeval_essence = ? WHERE user_id = ?", (new_essence, user_id))
         con.commit()
         con.close()
-        return added, new_essence, row["max_primeval_essence"]
+        return added, new_essence, effective_max
 
     def add_qi_multiplier(self, user_id: int, amount: float):
         con = self.connect()
@@ -2643,11 +2685,15 @@ class GameDatabase:
         (stones_spent, essence_gained, new_stones, new_essence, max_essence)."""
         con = self.connect()
         cur = con.cursor()
-        cur.execute("SELECT spirit_stones, primeval_essence, max_primeval_essence FROM players WHERE user_id = ?", (user_id,))
+        cur.execute(
+            "SELECT spirit_stones, primeval_essence, max_primeval_essence, equipped_primary_manual_id, "
+            "equipped_auxiliary_manual_id FROM players WHERE user_id = ?", (user_id,),
+        )
         row = cur.fetchone()
+        effective_max = round(row["max_primeval_essence"] * self._essence_capacity_multiplier(cur, user_id, row))
 
         affordable = min(stones_to_spend, row["spirit_stones"]) // self.SPIRIT_STONES_PER_ESSENCE
-        room = row["max_primeval_essence"] - row["primeval_essence"]
+        room = effective_max - row["primeval_essence"]
         essence_gained = max(0, min(affordable, room))
         stones_spent = essence_gained * self.SPIRIT_STONES_PER_ESSENCE
 
@@ -2656,7 +2702,7 @@ class GameDatabase:
         cur.execute("UPDATE players SET spirit_stones = ?, primeval_essence = ? WHERE user_id = ?", (new_stones, new_essence, user_id))
         con.commit()
         con.close()
-        return stones_spent, essence_gained, new_stones, new_essence, row["max_primeval_essence"]
+        return stones_spent, essence_gained, new_stones, new_essence, effective_max
 
     def consume_essence_for_qi(self, user_id: int, essence_to_spend: int, purity_bonus_pct: float = 0.0):
         """Spend up to essence_to_spend primeval essence for an instant qi gain.

@@ -72,7 +72,7 @@ class GameManager:
         # essence tops out, rather than burning through the whole stack for nothing.
         if item_name == "Primeval Essence Crystal":
             player = self.db.get_or_create_player(user_id, name)
-            if player["primeval_essence"] >= player["max_primeval_essence"]:
+            if player["primeval_essence"] >= self.db.get_effective_max_essence(user_id):
                 return False, "Your primeval essence is already full — no crystals were used."
         # Cultivation Boost Pills stack their timer/bonus onto an already-active buff of the
         # SAME item (see GameDatabase.add_or_extend_cultivation_boost_buff), but a lower-tier
@@ -2782,7 +2782,8 @@ class GameManager:
         return False, f"**{affix.name}** doesn't have a manual activation — it triggers automatically."
 
     def _restore_essence_pct(self, user_id: int, pct: float, player: dict) -> float:
-        gained = min(player["max_primeval_essence"] - player["primeval_essence"], player["max_primeval_essence"] * pct)
+        effective_max = self.db.get_effective_max_essence(user_id)
+        gained = min(effective_max - player["primeval_essence"], effective_max * pct)
         if gained > 0:
             self.db.add_primeval_essence(user_id, gained)
         return gained

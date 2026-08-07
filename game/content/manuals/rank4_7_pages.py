@@ -151,8 +151,8 @@ _register(
 
 _register(
     "Immortal Essence Foundation", "Foundation", 6, ["immortal", "essence"], 11,
-    {"cultivation_gain_pct": 16.0},
-    description="A foundation principle built on essence that no longer behaves like an ordinary cultivator's.",
+    {"cultivation_gain_pct": 16.0, "essence_capacity_pct": 8.0},
+    description="A foundation principle built on essence that no longer behaves like an ordinary cultivator's — the vessel itself grows to hold more.",
 )
 _register(
     "Heaven-Earth Resonance Circulation", "Circulation", 6, ["heaven", "earth"], 11,

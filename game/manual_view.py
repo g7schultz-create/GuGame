@@ -7,6 +7,7 @@ from .ui_utils import NAV_PREV_VALUE as _NAV_PREV, NAV_NEXT_VALUE as _NAV_NEXT, 
 EFFECT_LABELS = {
     "cultivation_gain_pct": "Cultivation Gain", "cultivation_speed_pct": "Cultivation Speed",
     "essence_recovery_pct": "Essence Recovery", "essence_purity_pct": "Essence Purity",
+    "essence_capacity_pct": "Essence Capacity",
     "breakthrough_success_pct": "Breakthrough Success", "hp_pct": "Max HP",
     "dodge_chance_pct": "Dodge Chance", "technique_damage_pct": "Technique Damage",
     "physical_damage_pct": "Physical Damage", "insight_gain_pct": "Insight Gain",

@@ -246,7 +246,7 @@ class ProfileView(GameView):
             name="📊 Cultivation Stats",
             value=(
                 f"🏔️ **Realm Index:** {p['realm_index']}\n"
-                f"💠 **Primeval Essence:** {p['primeval_essence']}/{p['max_primeval_essence']}\n"
+                f"💠 **Primeval Essence:** {p['primeval_essence']}/{self.db.get_effective_max_essence(self.user_id)}\n"
                 f"🪙 **Spirit Stones:** {p['spirit_stones']}\n"
                 f"❤️ **HP:** {p['hp']}/{p['max_hp']}"
             ),

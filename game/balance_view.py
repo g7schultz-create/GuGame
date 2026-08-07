@@ -81,7 +81,7 @@ class BalanceView(GameView):
 
         convert_btn = discord.ui.Button(
             label="Convert Stones", emoji="💠", style=discord.ButtonStyle.primary, row=0,
-            disabled=p["primeval_essence"] >= p["max_primeval_essence"] or p["spirit_stones"] < db.SPIRIT_STONES_PER_ESSENCE,
+            disabled=p["primeval_essence"] >= db.get_effective_max_essence(self.user_id) or p["spirit_stones"] < db.SPIRIT_STONES_PER_ESSENCE,
         )
         convert_btn.callback = self._on_open_convert
         self.add_item(convert_btn)
@@ -116,7 +116,8 @@ class BalanceView(GameView):
 
         embed = discord.Embed(title=f"💰 {self.display_name}'s Balance", color=discord.Color.dark_purple())
         embed.add_field(
-            name="💎 Primeval Essence", value=f"{p['primeval_essence']:,.0f}/{p['max_primeval_essence']:,.0f}", inline=False,
+            name="💎 Primeval Essence",
+            value=f"{p['primeval_essence']:,.0f}/{db.get_effective_max_essence(self.user_id):,.0f}", inline=False,
         )
 
         if status["at_max_realm"]:

@@ -212,8 +212,8 @@ def _register(name, category, rank, tags, power_value, base_effects, flaw_pool=N
 # -- Rank 1-3: hand-authored core pages (design doc sections 6 and 11) -------------------------
 _register(
     "Breath of the Empty Aperture", "Foundation", 1, ["qi", "aperture", "human"], 4,
-    {"cultivation_gain_pct": 5.0, "essence_capacity_flat": 3},
-    flaw_pool=["reduced_healing"], description="+5% cultivation gain and +3 essence capacity.",
+    {"cultivation_gain_pct": 5.0, "essence_capacity_pct": 4.0},
+    flaw_pool=["reduced_healing"], description="+5% cultivation gain and +4% essence capacity.",
 )
 _register(
     "Nine Coiling Rivers", "Circulation", 1, ["water", "qi", "movement"], 4,
