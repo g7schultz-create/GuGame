@@ -2711,6 +2711,19 @@ class GameDatabase:
         con.close()
         return trade
 
+    def get_stale_trades(self, cutoff_ts: int) -> list:
+        """Every trade/gamble still 'pending' or 'active' whose created_at is older than
+        cutoff_ts -- for GameManager.expire_stale_trades' timeout sweep. A trade sitting this
+        old with no resolution almost always means whatever View was tracking it died (e.g. a
+        bot restart/redeploy mid-negotiation), not that the players are still genuinely using
+        it -- see the live incident this was built for."""
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute("SELECT * FROM trades WHERE status IN ('pending', 'active') AND created_at < ?", (cutoff_ts,))
+        rows = cur.fetchall()
+        con.close()
+        return rows
+
     def set_trade_status(self, trade_id: int, status: str):
         con = self.connect()
         con.execute("UPDATE trades SET status = ? WHERE id = ?", (status, trade_id))

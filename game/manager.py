@@ -722,6 +722,24 @@ class GameManager:
         self.db.set_trade_status(trade_id, "cancelled")
         return {"status": "failed"}
 
+    # A trade/gamble sitting unresolved this long almost always means its Discord View died
+    # (most commonly a bot restart/redeploy mid-negotiation -- see the live incident this was
+    # built for) rather than the players still genuinely using it. Offering an item only ever
+    # writes a trade_offers bookkeeping row (see add_trade_item) -- inventory itself is never
+    # touched until execute_trade/execute_gamble actually run -- so expiring a stale trade is
+    # always safe, nothing to refund.
+    TRADE_TIMEOUT_SECONDS = 20 * 60
+
+    def expire_stale_trades(self) -> list:
+        """Cancels every trade/gamble past TRADE_TIMEOUT_SECONDS with no resolution. Returns
+        the list of expired trade rows (dicts) so the caller can DM both sides -- see
+        GameCog.trade_timeout_tick."""
+        cutoff = int(time.time()) - self.TRADE_TIMEOUT_SECONDS
+        stale = self.db.get_stale_trades(cutoff)
+        for trade in stale:
+            self.db.set_trade_status(trade["id"], "cancelled")
+        return stale
+
     # -- Equipment -----------------------------------------------------------
 
     def get_equipped(self, user_id: int) -> dict:

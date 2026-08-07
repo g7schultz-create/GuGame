@@ -104,11 +104,13 @@ class GameCog(commands.Cog):
         self.world_boss_tick.start()
         self.split_body_tick.start()
         self.tournament_tick.start()
+        self.trade_timeout_tick.start()
 
     async def cog_unload(self):
         self.world_boss_tick.cancel()
         self.split_body_tick.cancel()
         self.tournament_tick.cancel()
+        self.trade_timeout_tick.cancel()
 
     # World Boss respawn scheduler (see world_boss.py's own module docstring) -- checks every
     # 5 minutes whether the current boss expired and/or a fresh one is due; GameManager.
@@ -256,6 +258,37 @@ class GameCog(commands.Cog):
     @tournament_tick.before_loop
     async def _before_tournament_tick(self):
         await self.bot.wait_until_ready()
+
+    # Same 5-minute cadence as the other three loops -- catches a trade/gamble whose View died
+    # (most commonly a bot restart/redeploy mid-negotiation) well before a player would think
+    # to ask for help, without needing to poll any faster than that.
+    TRADE_TIMEOUT_TICK_INTERVAL_SECONDS = 300
+
+    @tasks.loop(seconds=TRADE_TIMEOUT_TICK_INTERVAL_SECONDS)
+    async def trade_timeout_tick(self):
+        for trade in self.game.expire_stale_trades():
+            await self._dm_trade_timeout(trade)
+
+    @trade_timeout_tick.before_loop
+    async def _before_trade_timeout_tick(self):
+        await self.bot.wait_until_ready()
+
+    async def _dm_trade_timeout(self, trade):
+        """Best-effort, same shape as _dm_tournament_placements/_dm_world_boss_loot -- a
+        player with DMs closed just silently doesn't get one, and one failed DM must never
+        stop the other side's or the rest of the sweep."""
+        noun = "gamble" if trade["mode"] == "gamble" else "trade"
+        message = (
+            f"⏱️ Your {noun} (request #{trade['id']}) sat unconfirmed too long and was "
+            f"automatically cancelled — nothing was taken from your inventory, feel free to "
+            f"start a fresh one."
+        )
+        for user_id in (trade["initiator_id"], trade["target_id"]):
+            try:
+                user = self.bot.get_user(user_id) or await self.bot.fetch_user(user_id)
+                await user.send(message)
+            except discord.HTTPException:
+                pass
 
     async def _announce_tournament_signup_open(self, opened: dict):
         """Best-effort channel ping when maybe_open_tournament auto-opens a fresh signup --

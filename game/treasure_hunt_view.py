@@ -25,8 +25,15 @@ class TreasureHuntView(GameView):
             return False
         return True
 
+    def _digs_used(self) -> int:
+        return len(self.found)
+
+    def _digs_exhausted(self) -> bool:
+        return self._digs_used() >= treasure_hunt.MAX_CLICKS_PER_BOARD
+
     def _build_components(self):
         self.clear_items()
+        exhausted = self._digs_exhausted()
         for index, category in enumerate(self.board):
             row = index // 5
             if self.revealed[index]:
@@ -35,12 +42,18 @@ class TreasureHuntView(GameView):
                     style=discord.ButtonStyle.secondary, row=row, disabled=True,
                 )
             else:
-                button = discord.ui.Button(label="?", emoji=UNREVEALED_EMOJI, style=discord.ButtonStyle.primary, row=row)
-                button.callback = self._make_tile_callback(index)
+                # The board still has 25 tiles, but only MAX_CLICKS_PER_BOARD digs are allowed
+                # per visit -- once that's used up, every remaining bubble locks unrevealed.
+                button = discord.ui.Button(label="?", emoji=UNREVEALED_EMOJI, style=discord.ButtonStyle.primary, row=row, disabled=exhausted)
+                if not exhausted:
+                    button.callback = self._make_tile_callback(index)
             self.add_item(button)
 
     def _make_tile_callback(self, index: int):
         async def callback(interaction: discord.Interaction):
+            if self._digs_exhausted():  # guards a race between two near-simultaneous clicks
+                await interaction.response.defer()
+                return
             category = self.board[index]
             emoji, label = treasure_hunt.grant_tile_reward(self.game, self.user_id, self.display_name, category)
             self.revealed[index] = True
@@ -53,19 +66,19 @@ class TreasureHuntView(GameView):
         return callback
 
     def build_embed(self) -> discord.Embed:
-        all_revealed = all(self.revealed)
+        max_digs = treasure_hunt.MAX_CLICKS_PER_BOARD
         embed = discord.Embed(
             title="🗺️ Forgotten Blessed Land",
             description=(
-                "The site has been fully excavated!" if all_revealed else
-                "A hidden site brimming with buried treasure. Click a bubble to dig it up — "
-                "one tile always hides a real treasure."
+                "You've used up all your digs at this site!" if self._digs_exhausted() else
+                f"A hidden site brimming with buried treasure. You get {max_digs} digs — click a "
+                "bubble to spend one. One tile somewhere on the site hides a real treasure."
             ),
             color=discord.Color.gold(),
         )
         if self.found:
             lines = [f"{emoji} {label}" for emoji, label in self.found]
-            embed.add_field(name=f"Found so far ({len(self.found)}/{len(self.board)})", value="\n".join(lines)[:1024], inline=False)
+            embed.add_field(name=f"Dug up ({self._digs_used()}/{max_digs})", value="\n".join(lines)[:1024], inline=False)
         else:
-            embed.add_field(name="Found so far (0/25)", value="Nothing dug up yet — click a bubble!", inline=False)
+            embed.add_field(name=f"Dug up (0/{max_digs})", value="Nothing dug up yet — click a bubble!", inline=False)
         return embed

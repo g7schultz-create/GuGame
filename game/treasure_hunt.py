@@ -15,6 +15,9 @@ from typing import Optional
 from . import avatar_gear, equipment, items, manual_data
 
 BOARD_SIZE = 25
+MAX_CLICKS_PER_BOARD = 7  # the board still has 25 tiles (and still guarantees a treasure tile
+# is SOMEWHERE on it), but a player only gets to dig 7 of them -- finding the treasure isn't a
+# certainty anymore, it's a real 7/25 draw.
 
 TILE_CATEGORY_WEIGHTS = {"dud": 40, "small": 35, "decent": 20, "rare": 5}
 
