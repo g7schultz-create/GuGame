@@ -60,9 +60,15 @@ MANUAL_RANK_TABLE: Dict[int, RankSpec] = {
     2: RankSpec((4, 5), 18, (6, 13)),
     3: RankSpec((5, 6), 30, (10, 20)),
     4: RankSpec((6, 7), 48, (15, 28)),
-    5: RankSpec((7, 8), 72, (22, 38)),
-    6: RankSpec((8, 9), 105, (30, 50)),
-    7: RankSpec((9, 10), 150, (40, 65)),
+    # Ranks 5-7 buffed per explicit request: the original curve's own step ratio actually
+    # SHRANK every rank (1.8x, 1.67x, 1.6x, 1.5x, 1.46x, 1.43x -- 72/105/150), making the top
+    # of the ladder proportionally the LEAST rewarded part of it. Restored to a real growth
+    # curve (~1.6-1.7x per step again, matching the low end) now that rank is honestly earned
+    # per page rather than inherited from a single high-rank page (see assemble_manual's rank
+    # averaging) -- a genuine Rank 7 manual is worth reaching for.
+    5: RankSpec((7, 8), 95, (22, 38)),
+    6: RankSpec((8, 9), 150, (30, 50)),
+    7: RankSpec((9, 10), 230, (40, 65)),
 }
 MAX_MANUAL_RANK = 7
 
@@ -86,6 +92,16 @@ RARITY_HIDDEN_EFFECT_CHANCE = {
 RARITY_BASE_WEIGHTS = {
     "Common": 45.0, "Uncommon": 25.0, "Rare": 14.0, "Epic": 8.0,
     "Legendary": 4.5, "Mythic": 2.2, "Divine": 1.0, "Unique": 0.3,
+}
+
+# /assemble_manual's own craft-time rarity roll (see manager.assemble_manual) -- deliberately
+# far more generous than RARITY_BASE_WEIGHTS' loot odds above (Unique there is 0.3/100 = 0.3%,
+# vanishingly rare; here it's a full 10% per explicit request) since this is the payoff for a
+# player's own deliberate page choices, not a passive loot roll. Still strictly descending so
+# Unique reads as the rarest slice of the eight, same RARITY_ORDER either way.
+ASSEMBLE_RARITY_WEIGHTS = {
+    "Common": 25, "Uncommon": 20, "Rare": 16, "Epic": 12,
+    "Legendary": 9, "Mythic": 5, "Divine": 3, "Unique": 10,
 }
 
 # -- Page refinement (see design doc section 6) ----------------------------------------------

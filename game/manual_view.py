@@ -534,9 +534,12 @@ class ManualView(GameView):
             categories = {p.category for p in pages}
             if len(pages) >= 2 and "Foundation" in categories and "Circulation" in categories:
                 # Mirrors GameManager.assemble_manual exactly (same primary_path pick, same
-                # Common-rarity assumption) so the preview matches what you'd actually get.
+                # rank-averaging formula) so the preview matches what you'd actually get --
+                # EXCEPT rarity, which is only rolled for real at craft time (see
+                # manual_data.ASSEMBLE_RARITY_WEIGHTS); this preview shows the Common-rarity
+                # floor, not a guarantee -- the real craft can roll better.
                 primary_path = pages[0].tags[0] if pages[0].tags else "qi"
-                rank = max(p.rank for p in pages)
+                rank = max(1, min(manual_data.MAX_MANUAL_RANK, chargen.sql_round(sum(p.rank for p in pages) / len(pages))))
                 root_spec = chargen.get_root_spec(player["root_name"])
                 coherence = manual_gen.calculate_coherence(
                     pages, primary_path,
@@ -560,6 +563,8 @@ class ManualView(GameView):
                         f"Rank {rank} • Primary path: {primary_path}\n"
                         f"{_format_effects(effects)}"
                         f"{refinement_note}"
+                        f"\n🎲 Rarity is rolled fresh at craft time (Common-Unique, Unique 10%) — "
+                        f"shown here at the Common floor, the real craft can roll better."
                     ),
                     inline=False,
                 )

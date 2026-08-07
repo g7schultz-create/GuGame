@@ -3460,13 +3460,28 @@ class GameManager:
         if len(pages) < 2 or "Foundation" not in categories or "Circulation" not in categories:
             return False, "A manual needs exactly one Foundation page and one Circulation page, plus anything else you want to add.", None
 
-        rank = max(p.rank for p in pages)
+        # Average, not max -- one Rank 7 page mixed into an otherwise low-rank build no longer
+        # inherits a Rank 7 power budget it didn't earn (that page's own strong base_effects
+        # still apply either way; only the BUDGET this manual gets to spend changes). sql_round
+        # matches SQLite's own "round half away from zero" so this reads predictably rather
+        # than Python's banker's-rounding surprising anyone at the x.5 boundary.
+        rank = max(1, min(manual_data.MAX_MANUAL_RANK, chargen.sql_round(sum(p.rank for p in pages) / len(pages))))
         ink_cost = self.MANUAL_ASSEMBLE_INK_COST_PER_SLOT * len(pages)
         if not self.db.spend_manual_ink(user_id, ink_cost):
             return False, f"Needs {ink_cost} manual ink to assemble {len(pages)} pages (you have {player['manual_ink']}).", None
 
         primary_path = pages[0].tags[0] if pages[0].tags else "qi"
         rng = random.Random()
+        # Craft-time rarity roll (see manual_data.ASSEMBLE_RARITY_WEIGHTS) -- unlike a
+        # loot-generated manual's rarity (fixed by its source before this ever runs), an
+        # assembled manual's rarity is randomized fresh on every craft, deliberately far more
+        # generous odds than loot (Unique here is 10%, not loot's 0.3%) since this is the
+        # payoff for the player's own page choices. Feeds RARITY_EFFICIENCY (the "extra
+        # multiplier") and RARITY_DEFECT_CHANCE (a lucky high roll also flaws less) below,
+        # exactly the same way it already does for generate_manual's loot path.
+        rarity = rng.choices(
+            list(manual_data.ASSEMBLE_RARITY_WEIGHTS), weights=list(manual_data.ASSEMBLE_RARITY_WEIGHTS.values()),
+        )[0]
         root_spec = chargen.get_root_spec(player["root_name"])
         coherence = manual_gen.calculate_coherence(
             pages, primary_path,
@@ -3479,8 +3494,8 @@ class GameManager:
         # the pages get spent below, since it's the specific copies being consumed that earn
         # this, not the page catalog entries in the abstract.
         bonus = manual_gen.refinement_bonus_totals(pages, owned)
-        effects = manual_gen.resolve_manual_effects(pages, rank, "Common", coherence, effectiveness_mult=bonus["effectiveness_mult"])
-        flaws = manual_gen.roll_flaws(pages, "Common", coherence, rng)
+        effects = manual_gen.resolve_manual_effects(pages, rank, rarity, coherence, effectiveness_mult=bonus["effectiveness_mult"])
+        flaws = manual_gen.roll_flaws(pages, rarity, coherence, rng)
         rolled_flaw_count = len(flaws)
         if flaws and bonus["flaw_repair_chance"]:
             flaws = [f for f in flaws if rng.random() >= bonus["flaw_repair_chance"]]
@@ -3490,7 +3505,7 @@ class GameManager:
         stability = max(0, min(100, 100 - band.deviation_modifier - 8 * len(flaws) + bonus["stability_bonus"]))
 
         manual_dict = {
-            "name": manual_name, "rank": rank, "rarity": "Common", "primary_path": primary_path,
+            "name": manual_name, "rank": rank, "rarity": rarity, "primary_path": primary_path,
             "secondary_paths": secondary_paths, "page_ids": [p.page_id for p in pages],
             "coherence": coherence, "coherence_band": band.label, "stability": stability,
             "comprehension": 0, "effects": effects, "flaws": flaws, "generation_seed": 0, "bound": False,
@@ -3509,7 +3524,8 @@ class GameManager:
         if repaired_flaw_count:
             refinement_bits.append(f"{repaired_flaw_count} flaw{'s' if repaired_flaw_count != 1 else ''} repaired")
         refinement_note = f" Refinement bonus: {', '.join(refinement_bits)}." if refinement_bits else ""
-        return True, f"Assembled **{manual_name}** — Rank {rank}, {band.label} coherence ({coherence}/100).{refinement_note}", manual_dict
+        rarity_note = f" ✨ Rolled **{rarity}** quality!" if rarity != "Common" else ""
+        return True, f"Assembled **{manual_name}** — Rank {rank}, {band.label} coherence ({coherence}/100).{rarity_note}{refinement_note}", manual_dict
 
     def equip_manual(self, user_id: int, name: str, manual_id: int, slot: str):
         player = self.db.get_or_create_player(user_id, name)
