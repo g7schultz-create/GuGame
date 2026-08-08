@@ -46,8 +46,7 @@ class ManualView(GameView):
         self.assemble_selection: list = []
         self.last_result: str = None
         self.page_studied_filter = "all"  # "all" | "studied" | "unstudied"
-        self.page_type_filter: tuple = None  # None (all types), or (rank, category)
-        self.page_type_filter_page = 0
+        self.page_tier_filter: int = None  # None (all tiers), or a rank 1-7
         self.page_list_page = 0
         self.assemble_studied_filter = "all"  # "all" | "studied" | "unstudied"
         self.assemble_type_filter: tuple = None  # None (all types), or (rank, category)
@@ -102,6 +101,50 @@ class ManualView(GameView):
             key=lambda kv: (manual_data.PAGES[kv[0]].rank, manual_data.PAGES[kv[0]].category, manual_data.PAGES[kv[0]].name),
         )
 
+    # -- Pages tab's own tier-ONLY filter (simpler than Assemble's Rank+Category combo above --
+    # Study All/Refine All just need "everything at this tier", not category precision, and a
+    # tier-only Select never needs pagination (at most MAX_MANUAL_RANK + 1 options, well under
+    # Discord's 25-option cap), unlike the combo filter's paginated one. -----------------------
+
+    def _tier_filter_options_present(self, studied_filter: str) -> list:
+        """Ranks present among owned pages that pass the given studied filter."""
+        ranks = set()
+        for page_id, info in self._owned_pages().items():
+            page = manual_data.PAGES.get(page_id)
+            if page is None or not self._passes_studied_filter(info, studied_filter):
+                continue
+            ranks.add(page.rank)
+        return sorted(ranks)
+
+    def _filtered_pages_by_tier(self, studied_filter: str, tier_filter: int) -> dict:
+        filtered = {}
+        for page_id, info in self._owned_pages().items():
+            page = manual_data.PAGES.get(page_id)
+            if page is None or not self._passes_studied_filter(info, studied_filter):
+                continue
+            if tier_filter is not None and page.rank != tier_filter:
+                continue
+            filtered[page_id] = info
+        return filtered
+
+    def _sorted_filtered_pages_by_tier(self, studied_filter: str, tier_filter: int) -> list:
+        return sorted(
+            self._filtered_pages_by_tier(studied_filter, tier_filter).items(),
+            key=lambda kv: (manual_data.PAGES[kv[0]].rank, manual_data.PAGES[kv[0]].category, manual_data.PAGES[kv[0]].name),
+        )
+
+    def _refine_eligible(self, info: dict) -> bool:
+        """Mirrors refine_page's own gating exactly (see GameManager.refine_page), for the
+        Refine All button's count/label -- refinement_level (Unstudied -> Studied -> Copied ->
+        Annotated -> Perfected -> True Meaning) is a duplicate-copy ladder, a SEPARATE track
+        from the studied flag (see manual_gen.study_page), so this checks quantity against the
+        next level's duplicate_requirement, not whether the page has been studied."""
+        next_level = manual_data.NEXT_REFINEMENT.get(info["refinement_level"])
+        if next_level is None or next_level == "True Meaning":
+            return False
+        required = manual_data.REFINEMENT_SPEC[next_level].duplicate_requirement
+        return info["quantity"] >= required + 1
+
     def _owned_manuals(self) -> list:
         return self.game.get_player_manuals(self.user_id)
 
@@ -146,26 +189,24 @@ class ManualView(GameView):
             button.callback = self._make_studied_filter_callback(key)
             self.add_item(button)
 
-        # Row 2: page-type filter (rank + category), nested under whichever studied filter is active
-        type_options = [discord.SelectOption(label="All Types", value="all", default=self.page_type_filter is None)]
-        for rank, category in self._type_filter_combos(self.page_studied_filter):
-            type_options.append(discord.SelectOption(
-                label=f"R{rank} - {category}", value=f"{rank}:{category}",
-                default=(self.page_type_filter == (rank, category)),
+        # Row 2: tier filter, nested under whichever studied filter is active -- tier-only
+        # (not Rank+Category like the Assemble tab) so Study All/Refine All below can act on
+        # a clean "everything at this tier" scope. Never needs pagination: at most
+        # MAX_MANUAL_RANK + 1 options, well under a Select's 25-option cap.
+        tier_options = [discord.SelectOption(label="All Tiers", value="all", default=self.page_tier_filter is None)]
+        for rank in self._tier_filter_options_present(self.page_studied_filter):
+            tier_options.append(discord.SelectOption(
+                label=f"Rank {rank}", value=str(rank), default=(self.page_tier_filter == rank),
             ))
-        type_page_options, type_total_pages, self.page_type_filter_page = _paginate_options(type_options, self.page_type_filter_page)
-        type_placeholder = "Filter by page type..."
-        if type_total_pages > 1:
-            type_placeholder += f" (page {self.page_type_filter_page + 1}/{type_total_pages})"
-        type_select = discord.ui.Select(
-            placeholder=type_placeholder, options=type_page_options, row=2, disabled=len(type_options) <= 1,
+        tier_select = discord.ui.Select(
+            placeholder="Filter by tier...", options=tier_options, row=2, disabled=len(tier_options) <= 1,
         )
-        type_select.callback = self._on_pick_type_filter
-        self.add_item(type_select)
+        tier_select.callback = self._on_pick_tier_filter
+        self.add_item(tier_select)
 
         # Row 3: the actual page picker, filtered + paginated
         page_options = []
-        for page_id, info in self._sorted_filtered_pages(self.page_studied_filter, self.page_type_filter):
+        for page_id, info in self._sorted_filtered_pages_by_tier(self.page_studied_filter, self.page_tier_filter):
             page = manual_data.PAGES[page_id]
             label = f"{page.name} x{info['quantity']} ({info['refinement_level']})"
             page_options.append(discord.SelectOption(label=label[:100], value=page_id, default=(page_id == self.selected_page_id)))
@@ -197,6 +238,29 @@ class ManualView(GameView):
         dismantle_btn = discord.ui.Button(label="Dismantle 1", emoji="🔨", style=discord.ButtonStyle.danger, row=4, disabled=not has_selection)
         dismantle_btn.callback = self._on_dismantle_page
         self.add_item(dismantle_btn)
+
+        # Study All / Refine All act on whatever's currently filtered (studied filter + tier
+        # filter combined) -- scoped bulk actions, same "act on the current filtered view"
+        # convention as /weapons' Dismantle All rather than a blanket "touch everything you
+        # own" button. Counts are computed up front so the label always matches what a click
+        # would actually do, same as Dismantle All's "T{tier} {slot} (N)" labeling.
+        filtered = self._sorted_filtered_pages_by_tier(self.page_studied_filter, self.page_tier_filter)
+        study_all_count = sum(1 for _, info in filtered if not info["studied"])
+        refine_all_count = sum(1 for _, info in filtered if self._refine_eligible(info))
+
+        study_all_btn = discord.ui.Button(
+            label=f"Study All ({study_all_count})", emoji="🔎", style=discord.ButtonStyle.primary,
+            row=4, disabled=study_all_count < 1,
+        )
+        study_all_btn.callback = self._on_study_all
+        self.add_item(study_all_btn)
+
+        refine_all_btn = discord.ui.Button(
+            label=f"Refine All ({refine_all_count})", emoji="✨", style=discord.ButtonStyle.success,
+            row=4, disabled=refine_all_count < 1,
+        )
+        refine_all_btn.callback = self._on_refine_all
+        self.add_item(refine_all_btn)
 
     def _build_assemble_tab(self):
         # Row 1: studied/unstudied filter
@@ -310,28 +374,18 @@ class ManualView(GameView):
     def _make_studied_filter_callback(self, key: str):
         async def callback(interaction: discord.Interaction):
             self.page_studied_filter = key
-            self.page_type_filter = None
-            self.page_type_filter_page = 0
+            self.page_tier_filter = None
             self.page_list_page = 0
             self._build_components()
             await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
         return callback
 
-    async def _on_pick_type_filter(self, interaction: discord.Interaction):
+    async def _on_pick_tier_filter(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 2)
         choice = select.values[0]
-        if choice == _NAV_PREV:
-            self.page_type_filter_page = max(0, self.page_type_filter_page - 1)
-        elif choice == _NAV_NEXT:
-            self.page_type_filter_page += 1
-        elif choice == "all":
-            self.page_type_filter = None
-            self.page_list_page = 0
-        else:
-            rank_str, category = choice.split(":", 1)
-            self.page_type_filter = (int(rank_str), category)
-            self.page_list_page = 0
+        self.page_tier_filter = None if choice == "all" else int(choice)
+        self.page_list_page = 0
         self._build_components()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
@@ -369,6 +423,39 @@ class ManualView(GameView):
             self.selected_page_id = None
         self._build_components()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _on_study_all(self, interaction: discord.Interaction):
+        """Studies every currently-filtered unstudied page one at a time -- reuses study_page
+        per page (it already re-checks studied/dust ownership per call) rather than a new bulk
+        backend method, same reasoning as /weapons' Dismantle All. Deferred since a large
+        filtered set means many real DB writes back to back."""
+        await interaction.response.defer()
+        targets = [page_id for page_id, info in self._sorted_filtered_pages_by_tier(self.page_studied_filter, self.page_tier_filter) if not info["studied"]]
+        count = 0
+        for page_id in targets:
+            ok, _ = self.game.study_page(self.user_id, self.display_name, page_id)
+            if ok:
+                count += 1
+            else:
+                break  # ran out of insight dust (or some other refusal) -- stop rather than looping over guaranteed failures
+        self.last_result = f"📖 Studied {count}x page{'s' if count != 1 else ''}." if count else "Nothing left to study — no insight dust, or nothing matched the filter."
+        self._build_components()
+        await interaction.edit_original_response(embed=self.build_embed(), view=self)
+
+    async def _on_refine_all(self, interaction: discord.Interaction):
+        """Advances every currently-filtered, refine-eligible page by exactly one refinement
+        level -- mirrors the single Refine button's one-shot-per-click semantics, just fanned
+        out across the whole filtered set in one click instead of one page at a time."""
+        await interaction.response.defer()
+        targets = [page_id for page_id, info in self._sorted_filtered_pages_by_tier(self.page_studied_filter, self.page_tier_filter) if self._refine_eligible(info)]
+        count = 0
+        for page_id in targets:
+            ok, _ = self.game.refine_page(self.user_id, self.display_name, page_id)
+            if ok:
+                count += 1
+        self.last_result = f"✨ Refined {count}x page{'s' if count != 1 else ''}." if count else "Nothing left to refine — no page here has enough spare duplicates."
+        self._build_components()
+        await interaction.edit_original_response(embed=self.build_embed(), view=self)
 
     def _make_assemble_studied_filter_callback(self, key: str):
         async def callback(interaction: discord.Interaction):
@@ -472,7 +559,7 @@ class ManualView(GameView):
             embed.description = "You don't own any manual pages yet — /search for inheritances, secret realms, and dream realms to find some."
             return
 
-        filtered = self._sorted_filtered_pages(self.page_studied_filter, self.page_type_filter)
+        filtered = self._sorted_filtered_pages_by_tier(self.page_studied_filter, self.page_tier_filter)
         if not filtered:
             embed.description = "No pages match the current filter."
         else:
@@ -488,9 +575,8 @@ class ManualView(GameView):
         filter_bits = []
         if self.page_studied_filter != "all":
             filter_bits.append("📖 Studied" if self.page_studied_filter == "studied" else "❓ Unstudied")
-        if self.page_type_filter:
-            rank, category = self.page_type_filter
-            filter_bits.append(f"R{rank} - {category}")
+        if self.page_tier_filter:
+            filter_bits.append(f"Rank {self.page_tier_filter}")
         if filter_bits:
             embed.add_field(name="Active Filter", value=" • ".join(filter_bits), inline=False)
 
