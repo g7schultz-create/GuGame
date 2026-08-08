@@ -75,7 +75,11 @@ CATEGORY_GROUPS = [
     ("earring", "Earrings", "📿", ["earring_1", "earring_2"]),
     ("artifact", "Artifacts", "💠", ["artifact_1", "artifact_2"]),
     ("manual", "Manual", "📖", ["manual_primary", "manual_auxiliary", "manual"]),
-    ("gu_ability", "Gu", "🐛", ["gu_ability"]),
+    # gu_ability_2 (Twin Gu Sovereign Physique's second slot) is listed here so
+    # CATEGORY_FOR_SLOT/SLOT_INFO cover it, but it's never actually OFFERED to a player
+    # without that physique -- see _effective_slot_keys below, which every real usage of a
+    # category's slot_keys goes through instead of reading CATEGORY_BY_KEY directly.
+    ("gu_ability", "Gu", "🐛", ["gu_ability", "gu_ability_2"]),
 ]
 CATEGORY_BY_KEY = {key: (label, emoji, slot_keys) for key, label, emoji, slot_keys in CATEGORY_GROUPS}
 CATEGORY_FOR_SLOT = {slot_key: key for key, _, _, slot_keys in CATEGORY_GROUPS for slot_key in slot_keys}
@@ -131,6 +135,16 @@ class EquipmentView(GameView):
 
     def refresh(self):
         self.player = self.game.get_player_stats(self.user_id, self.display_name)
+
+    def _effective_slot_keys(self, category_key: str, player: dict) -> list:
+        """A category's real slot_keys, except gu_ability_2 is dropped entirely unless the
+        player currently holds Twin Gu Sovereign Physique -- per explicit request the second
+        Gu slot must be invisible to a non-qualifying player, not just refused on equip (see
+        GameManager.equip_item's own backstop refusal for anything that bypasses this UI)."""
+        _, _, slot_keys = CATEGORY_BY_KEY[category_key]
+        if category_key == "gu_ability" and player["physique_name"] != equipment_module.TWIN_GU_SOVEREIGN_PHYSIQUE_NAME:
+            return [slot_key for slot_key in slot_keys if slot_key != equipment_module.GU_SLOT_KEY_2]
+        return slot_keys
 
     def _manual_slot_description(self, player: dict, virtual_slot: str) -> str:
         manual_id = player[MANUAL_PLAYER_COLUMN[virtual_slot]]
@@ -277,7 +291,7 @@ class EquipmentView(GameView):
         if self.selected_slot:
             self._add_item_select(equipped, player, row=0)
             next_row = 1
-            if self.selected_slot == "gu_ability":
+            if self.selected_slot in ("gu_ability", "gu_ability_2"):
                 self._add_gu_sort_controls(row=next_row)
                 next_row += 1
                 if self.gu_sort_mode == "stat":
@@ -288,7 +302,7 @@ class EquipmentView(GameView):
             self.add_item(back_button)
             bottom_row = next_row + 1
         elif self.selected_category:
-            _, _, slot_keys = CATEGORY_BY_KEY[self.selected_category]
+            slot_keys = self._effective_slot_keys(self.selected_category, player)
             picker_options = []
             for slot_key in slot_keys:
                 label, emoji = SLOT_INFO[slot_key]
@@ -325,7 +339,7 @@ class EquipmentView(GameView):
                 options.append(discord.SelectOption(label="Unequip (leave empty)", value="__unequip__", emoji="🗑️"))
             options.extend(self._build_manual_slot_options(player))
             placeholder = "Choose a manual..." if options else "Nothing available for this slot"
-        elif self.selected_slot == "gu_ability":
+        elif self.selected_slot in ("gu_ability", "gu_ability_2"):
             current = equipped.get(self.selected_slot)
             leading = []
             if current:
@@ -361,9 +375,11 @@ class EquipmentView(GameView):
     def _make_category_callback(self, category_key: str):
         async def callback(interaction: discord.Interaction):
             self.selected_category = category_key
-            _, _, slot_keys = CATEGORY_BY_KEY[category_key]
-            # Single-slot categories (Head, Body, Weapon, ...) jump straight to slot
-            # management — no point showing a "which slot?" picker with exactly one option.
+            player = self.game.get_player_stats(self.user_id, self.display_name)
+            slot_keys = self._effective_slot_keys(category_key, player)
+            # Single-slot categories (Head, Body, Weapon, ... and Gu for anyone without Twin
+            # Gu Sovereign Physique) jump straight to slot management — no point showing a
+            # "which slot?" picker with exactly one option.
             if len(slot_keys) == 1:
                 self.selected_slot = slot_keys[0]
             self.last_result = None
@@ -443,7 +459,8 @@ class EquipmentView(GameView):
             # Single-slot categories skipped their own picker screen (see
             # _make_category_callback), so backing out of slot management on one of those
             # goes all the way to the top level instead of a picker with nothing useful on it.
-            _, _, slot_keys = CATEGORY_BY_KEY[self.selected_category]
+            player = self.game.get_player_stats(self.user_id, self.display_name)
+            slot_keys = self._effective_slot_keys(self.selected_category, player)
             self.selected_slot = None
             if len(slot_keys) == 1:
                 self.selected_category = None
@@ -498,7 +515,12 @@ class EquipmentView(GameView):
         stat_bonus = bonuses["stats"]
 
         manual_slots_filled = sum(1 for _, col in MANUAL_PLAYER_COLUMN.items() if p[col])
+        # SLOTS always includes gu_ability_2 (Twin Gu Sovereign Physique's second Gu slot),
+        # but it doesn't count toward THIS player's own total unless they actually qualify --
+        # otherwise everyone else's denominator would be inflated by a slot they can never fill.
         total_slots = len(SLOTS) + len(MANUAL_VIRTUAL_SLOTS)
+        if p["physique_name"] != equipment_module.TWIN_GU_SOVEREIGN_PHYSIQUE_NAME:
+            total_slots -= 1
 
         embed = discord.Embed(title="🛡️ Equipment Loadout", description=self.display_name, color=discord.Color.dark_purple())
         embed.set_thumbnail(url=self.avatar_url)
@@ -537,14 +559,15 @@ class EquipmentView(GameView):
             # changing it, this just shows what's there right now.
             cat_label, cat_emoji, _ = CATEGORY_BY_KEY[self.selected_category]
             embed.add_field(name=f"{cat_emoji} {cat_label}", value=self._describe_slot(self.selected_slot), inline=False)
-            if self.selected_slot == "gu_ability":
+            if self.selected_slot in ("gu_ability", "gu_ability_2"):
                 sort_label = {
                     "power": "⚡ Power", "rarity": "💎 Rarity",
                     "stat": f"📊 {GU_STAT_LABELS.get(self.gu_sort_stat, self.gu_sort_stat) if self.gu_sort_stat else '—'}",
                 }[self.gu_sort_mode]
                 embed.add_field(name="Sorted By", value=sort_label, inline=True)
         elif self.selected_category:
-            cat_label, cat_emoji, slot_keys = CATEGORY_BY_KEY[self.selected_category]
+            cat_label, cat_emoji, _ = CATEGORY_BY_KEY[self.selected_category]
+            slot_keys = self._effective_slot_keys(self.selected_category, p)
             detail = "\n".join(self._describe_slot(slot_key) for slot_key in slot_keys)
             embed.add_field(name=f"{cat_emoji} {cat_label}", value=detail[:1024], inline=False)
         else:

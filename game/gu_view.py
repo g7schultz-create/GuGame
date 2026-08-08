@@ -31,17 +31,28 @@ class GuCollectionView(GameView):
             return False
         return True
 
+    def _equipped_gu_names(self) -> list:
+        """Every currently-equipped Gu-type item name (normally just one, from "gu_ability" --
+        Twin Gu Sovereign Physique unlocks a second slot, "gu_ability_2"). Read generically off
+        equipment.SLOT_TYPE_BY_KEY rather than hardcoding "gu_ability" so this never needs
+        touching again if a third Gu slot is ever added."""
+        equipped = self.game.get_equipped(self.user_id)
+        return [
+            item_name for slot_key, item_name in equipped.items()
+            if equipment.SLOT_TYPE_BY_KEY.get(slot_key) == "Gu"
+        ]
+
     def _owned(self) -> list:
         """[(family, quality, item_name, qty), ...] -- every owned Gu with a resolvable
         quality tier (flat/non-tiered Gu, e.g. the 3 starters and World Boss's flat drops,
         have never shown up in /gu -- this view keeps that existing behavior unchanged).
         Equipping a Gu moves it OUT of inventory into the equipped table, so the currently-
-        worn one wouldn't show up at all without adding it back in here."""
+        worn one(s) wouldn't show up at all without adding them back in here."""
         inventory = self.game.get_inventory(self.user_id)
-        equipped_gu = self.game.get_equipped(self.user_id).get("gu_ability")
         counts = {name: qty for name, qty in inventory.items() if equipment.parse_gu_name(name)[0] is not None}
-        if equipped_gu and equipment.parse_gu_name(equipped_gu)[0] is not None:
-            counts[equipped_gu] = counts.get(equipped_gu, 0) + 1
+        for equipped_gu in self._equipped_gu_names():
+            if equipment.parse_gu_name(equipped_gu)[0] is not None:
+                counts[equipped_gu] = counts.get(equipped_gu, 0) + 1
         owned = []
         for item_name, qty in counts.items():
             family, quality = equipment.parse_gu_name(item_name)
@@ -83,7 +94,7 @@ class GuCollectionView(GameView):
         return callback
 
     def build_embed(self) -> discord.Embed:
-        equipped_gu = self.game.get_equipped(self.user_id).get("gu_ability")
+        equipped_gu_names = set(self._equipped_gu_names())
         owned = self._filtered_sorted()
 
         title_suffix = f" — {self.tier_filter}" if self.tier_filter else ""
@@ -92,7 +103,7 @@ class GuCollectionView(GameView):
             lines = []
             for family, quality, item_name, qty in owned:
                 gear = equipment.EQUIPMENT.get(item_name)
-                marker = " ✅ equipped" if item_name == equipped_gu else ""
+                marker = " ✅ equipped" if item_name in equipped_gu_names else ""
                 stats_text = equipment.describe_stat_bonuses(gear.stat_bonuses) if gear else ""
                 lines.append(f"**{item_name}** x{qty}{marker} — {stats_text}")
             embed.description = "\n".join(lines)[:4000]

@@ -62,8 +62,20 @@ SLOTS = [
     ("artifact_2", "Support Artifact", "Artifact", "🔹"),
     ("manual", "Manual", "Manual", "📖"),
     ("gu_ability", "Gu Ability", "Gu", "🐛"),
+    # Second Gu slot -- only reachable at all with Twin Gu Sovereign Physique equipped (see
+    # GameManager.equip_item/compute_equipment_bonuses and equipment_view.py's
+    # _effective_slot_keys, which hides this slot from the "Which slot?" picker entirely for
+    # anyone without that physique). PASSIVE stat_bonuses only -- the active Gu Ability
+    # combat button and every named-Gu special mechanic (Fixed Immortal Travel Gu, Worldly
+    # Escape Gu, Battle Intent Gu, ...) stay hardcoded to slot 1 ("gu_ability") only, per
+    # explicit request.
+    ("gu_ability_2", "Gu Ability II", "Gu", "🐛"),
 ]
 ARTIFACT_PRIMARY_SLOT_KEY = "artifact_1"
+GU_SLOT_KEY_2 = "gu_ability_2"
+# The one physique that unlocks GU_SLOT_KEY_2 -- shared constant so manager.py's gating and
+# equipment_view.py's slot-visibility check can never drift apart on the exact name.
+TWIN_GU_SOVEREIGN_PHYSIQUE_NAME = "Twin Gu Sovereign Physique"
 
 SLOT_TYPE_BY_KEY = {key: slot_type for key, _, slot_type, _ in SLOTS}
 SLOT_LABEL_BY_KEY = {key: label for key, label, _, _ in SLOTS}

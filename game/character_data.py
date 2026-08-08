@@ -1366,7 +1366,7 @@ PHYSIQUE_TIERS: Dict[str, Tier] = {
             "Myriad Gold Wondrous Essence Physique", "Carefree Wisdom Heart Physique",
             "Desolate Ancient Moon Physique", "Universe Great Derivation Physique",
             "Verdant Great Sun Physique", "Dream Reality Seeker Physique", "Sovereign Immortal Fetus Physique",
-            "Heavenly Solar Physique", "Heavenly Lunar Physique",
+            "Heavenly Solar Physique", "Heavenly Lunar Physique", "Twin Gu Sovereign Physique",
             # Same carve-out as the root ladder's own "Nameless Immortal Root" -- no
             # _physique_spec entry, no unique_passives line, no one-off mechanic; still gets
             # this shared tier's own big stat_bonuses package, and is exempt from the
@@ -1389,6 +1389,7 @@ PHYSIQUE_TIERS: Dict[str, Tier] = {
             "Sovereign Immortal Fetus Physique": "Can cultivate any Dao Path without conflict, gains balanced growth in all stats, and suffers no affinity penalties.",
             "Heavenly Solar Physique": "Each attack this encounter stacks a growing damage bonus, up to +20% at full stacks.",
             "Heavenly Lunar Physique": "Each attack this encounter further weakens the target's defense against you, up to +25% armor penetration at full stacks.",
+            "Twin Gu Sovereign Physique": "Can bind and equip a second Gu — its passive stat bonuses apply, but only the first Gu's combat ability and any named special effects (Fixed Immortal Travel, Worldly Escape, Battle Intent, etc.) remain active.",
         },
     ),
 }
@@ -2048,6 +2049,12 @@ _physique_spec(
     "Solar Flare: each successful basic Attack this encounter stacks a growing damage bonus, "
     "+4% per stack, up to +20% at 5 stacks.",
     {"solar_stack_damage_pct": 0.04},
+)
+_physique_spec(
+    "Twin Gu Sovereign Physique", "Unique", ("qi", "human"),
+    "A vessel steady enough to bind a second Gu at once (see /equipment's Gu category) -- "
+    "+10% HP, +10% DEF, +8% Insight Dust gain.",
+    {"hp_pct": 0.10, "def_pct": 0.10, "insight_gain_pct": 0.08},
 )
 _physique_spec(
     "Heavenly Lunar Physique", "Unique", ("moon",),

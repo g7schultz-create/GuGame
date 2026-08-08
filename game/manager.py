@@ -746,7 +746,7 @@ class GameManager:
         return self.db.get_equipped(user_id)
 
     def equip_item(self, user_id: int, name: str, slot_key: str, item_name: str):
-        self.db.get_or_create_player(user_id, name)
+        player = self.db.get_or_create_player(user_id, name)
         gear = equipment.EQUIPMENT.get(item_name)
         if gear is None:
             return False, "That equipment doesn't exist."
@@ -755,6 +755,11 @@ class GameManager:
             return False, "That slot doesn't exist."
         if gear.slot_type != expected_type:
             return False, f"**{item_name}** doesn't fit in the {equipment.SLOT_LABEL_BY_KEY[slot_key]} slot."
+        # Backstop only -- equipment_view.py's _effective_slot_keys already hides this slot
+        # entirely from anyone without the physique, so this should be unreachable through the
+        # normal UI. Kept anyway in case something else ever calls equip_item directly.
+        if slot_key == equipment.GU_SLOT_KEY_2 and player["physique_name"] != equipment.TWIN_GU_SOVEREIGN_PHYSIQUE_NAME:
+            return False, f"{equipment.TWIN_GU_SOVEREIGN_PHYSIQUE_NAME} is required to bind a second Gu."
         if self.db.get_inventory(user_id).get(item_name, 0) < 1:
             return False, f"You don't own a **{item_name}**."
 
@@ -1166,6 +1171,15 @@ class GameManager:
                 gear = equipment.EQUIPMENT.get(item_name)
                 stat_bonuses = gear.stat_bonuses if gear else {}
                 power_mult = 1.0
+            # Twin Gu Sovereign Physique's second Gu slot -- stays "equipped" (the item/row
+            # is untouched) but its passive stat_bonuses only actually count while the player
+            # CURRENTLY holds the qualifying physique, same "stays equipped, effect modulated
+            # by current eligibility" precedent the accessory rank-gate above already uses.
+            # Covers a player rerolling away from the physique after legitimately equipping a
+            # second Gu, without needing to hook every physique-reroll entry point to force an
+            # unequip -- the bonus just silently stops (and resumes if they reroll back in).
+            if slot_key == equipment.GU_SLOT_KEY_2 and (not player_row or player_row["physique_name"] != equipment.TWIN_GU_SOVEREIGN_PHYSIQUE_NAME):
+                stat_bonuses = {}
             for stat, value in stat_bonuses.items():
                 if stat in crafted_pct_totals:
                     crafted_pct_totals[stat] += value * power_mult
