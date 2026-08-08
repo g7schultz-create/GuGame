@@ -2809,6 +2809,7 @@ class GameDatabase:
         con.close()
         offer = {currency: 0 for currency in self.TRADE_CURRENCIES}
         offer["items"] = {}
+        offer["pages"] = {}
         offer["crafted_gear"] = []
         offer["manuals"] = []
         offer["accessories"] = []
@@ -2821,6 +2822,8 @@ class GameDatabase:
                 offer["manuals"].append(row["manual_id"])
             elif row["kind"] == "accessory":
                 offer["accessories"].append(row["accessory_instance_id"])
+            elif row["kind"] == "page":
+                offer["pages"][row["item_name"]] = row["quantity"]
             else:
                 offer["items"][row["item_name"]] = row["quantity"]
         return offer
@@ -2854,6 +2857,28 @@ class GameDatabase:
             cur.execute(
                 "INSERT INTO trade_offers (trade_id, user_id, kind, item_name, quantity) VALUES (?, ?, 'item', ?, ?)",
                 (trade_id, user_id, item_name, quantity),
+            )
+        else:
+            cur.execute("UPDATE trade_offers SET quantity = quantity + ? WHERE id = ?", (quantity, row["id"]))
+        con.commit()
+        con.close()
+
+    def add_trade_page(self, trade_id: int, user_id: int, page_id: str, quantity: int = 1):
+        """Same quantity-accumulating shape as add_trade_item — a page stack is a flat
+        (user_id, page_id) -> quantity row (player_pages), not a unique instance, so it
+        reuses item_name/quantity rather than needing its own pointer column like
+        gear_id/manual_id/accessory_instance_id do."""
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute(
+            "SELECT id, quantity FROM trade_offers WHERE trade_id = ? AND user_id = ? AND kind = 'page' AND item_name = ?",
+            (trade_id, user_id, page_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            cur.execute(
+                "INSERT INTO trade_offers (trade_id, user_id, kind, item_name, quantity) VALUES (?, ?, 'page', ?, ?)",
+                (trade_id, user_id, page_id, quantity),
             )
         else:
             cur.execute("UPDATE trade_offers SET quantity = quantity + ? WHERE id = ?", (quantity, row["id"]))
@@ -2940,6 +2965,7 @@ class GameDatabase:
             ).fetchall()
             offers[uid] = {currency: 0 for currency in self.TRADE_CURRENCIES}
             offers[uid]["items"] = {}
+            offers[uid]["pages"] = {}
             offers[uid]["crafted_gear"] = []
             offers[uid]["manuals"] = []
             offers[uid]["accessories"] = []
@@ -2952,6 +2978,8 @@ class GameDatabase:
                     offers[uid]["manuals"].append(row["manual_id"])
                 elif row["kind"] == "accessory":
                     offers[uid]["accessories"].append(row["accessory_instance_id"])
+                elif row["kind"] == "page":
+                    offers[uid]["pages"][row["item_name"]] = row["quantity"]
                 else:
                     offers[uid]["items"][row["item_name"]] = row["quantity"]
 
@@ -2969,6 +2997,13 @@ class GameDatabase:
                     "SELECT quantity FROM inventory WHERE user_id = ? AND item_name = ?", (uid, item_name)
                 ).fetchone()
                 if inv_row is None or inv_row["quantity"] < qty:
+                    con.close()
+                    return False
+            for page_id, qty in offers[uid]["pages"].items():
+                page_row = con.execute(
+                    "SELECT quantity FROM player_pages WHERE user_id = ? AND page_id = ?", (uid, page_id)
+                ).fetchone()
+                if page_row is None or page_row["quantity"] < qty:
                     con.close()
                     return False
             for gear_id in offers[uid]["crafted_gear"]:
@@ -3038,6 +3073,27 @@ class GameDatabase:
                     con.execute("INSERT INTO inventory (user_id, item_name, quantity) VALUES (?, ?, ?)", (to_id, item_name, qty))
                 else:
                     con.execute("UPDATE inventory SET quantity = quantity + ? WHERE id = ?", (qty, existing["id"]))
+            # A page stack's refinement_level/studied/discovered_hidden_line are per-stack
+            # state, same as dismantle_page/remove_player_page already discard on a
+            # fully-depleted stack -- a partial trade leaves the sender's own leftover stack's
+            # state untouched (its row is just quantity-decremented), and the recipient's
+            # stack always starts fresh, same as any other newly-acquired page copies would.
+            for page_id, qty in offer["pages"].items():
+                row = con.execute(
+                    "SELECT id, quantity FROM player_pages WHERE user_id = ? AND page_id = ?", (from_id, page_id)
+                ).fetchone()
+                remaining = row["quantity"] - qty
+                if remaining > 0:
+                    con.execute("UPDATE player_pages SET quantity = ? WHERE id = ?", (remaining, row["id"]))
+                else:
+                    con.execute("DELETE FROM player_pages WHERE id = ?", (row["id"],))
+                existing = con.execute(
+                    "SELECT id, quantity FROM player_pages WHERE user_id = ? AND page_id = ?", (to_id, page_id)
+                ).fetchone()
+                if existing is None:
+                    con.execute("INSERT INTO player_pages (user_id, page_id, quantity) VALUES (?, ?, ?)", (to_id, page_id, qty))
+                else:
+                    con.execute("UPDATE player_pages SET quantity = quantity + ? WHERE id = ?", (qty, existing["id"]))
             # A crafted_gear instance is 1-of-1 — trading it is just a straight ownership
             # handoff on its one existing row, no inventory quantity math needed. Manuals and
             # accessory/artifact instances are the exact same shape.
@@ -3099,6 +3155,7 @@ class GameDatabase:
             ).fetchall()
             offers[uid] = {currency: 0 for currency in self.TRADE_CURRENCIES}
             offers[uid]["items"] = {}
+            offers[uid]["pages"] = {}
             offers[uid]["crafted_gear"] = []
             offers[uid]["manuals"] = []
             offers[uid]["accessories"] = []
@@ -3111,6 +3168,8 @@ class GameDatabase:
                     offers[uid]["manuals"].append(row["manual_id"])
                 elif row["kind"] == "accessory":
                     offers[uid]["accessories"].append(row["accessory_instance_id"])
+                elif row["kind"] == "page":
+                    offers[uid]["pages"][row["item_name"]] = row["quantity"]
                 else:
                     offers[uid]["items"][row["item_name"]] = row["quantity"]
 
@@ -3118,7 +3177,8 @@ class GameDatabase:
             offer = offers[uid]
             is_empty = (
                 all(offer[currency] == 0 for currency in self.TRADE_CURRENCIES)
-                and not offer["items"] and not offer["crafted_gear"] and not offer["manuals"] and not offer["accessories"]
+                and not offer["items"] and not offer["pages"] and not offer["crafted_gear"]
+                and not offer["manuals"] and not offer["accessories"]
             )
             if is_empty:
                 con.close()
@@ -3136,6 +3196,13 @@ class GameDatabase:
                     "SELECT quantity FROM inventory WHERE user_id = ? AND item_name = ?", (uid, item_name)
                 ).fetchone()
                 if inv_row is None or inv_row["quantity"] < qty:
+                    con.close()
+                    return None
+            for page_id, qty in offer["pages"].items():
+                page_row = con.execute(
+                    "SELECT quantity FROM player_pages WHERE user_id = ? AND page_id = ?", (uid, page_id)
+                ).fetchone()
+                if page_row is None or page_row["quantity"] < qty:
                     con.close()
                     return None
             for gear_id in offer["crafted_gear"]:
@@ -3204,6 +3271,27 @@ class GameDatabase:
                     con.execute("INSERT INTO inventory (user_id, item_name, quantity) VALUES (?, ?, ?)", (to_id, item_name, qty))
                 else:
                     con.execute("UPDATE inventory SET quantity = quantity + ? WHERE id = ?", (qty, existing["id"]))
+            # Guarded on from_id != to_id -- unlike items, a fully-offered page stack's
+            # refinement_level/studied/discovered_hidden_line would otherwise be lost to a
+            # delete+reinsert round-trip on the winner's OWN pot (a same-id "transfer" that
+            # should be a true no-op), same reasoning as the accessories guard just below.
+            if from_id != to_id:
+                for page_id, qty in offer["pages"].items():
+                    row = con.execute(
+                        "SELECT id, quantity FROM player_pages WHERE user_id = ? AND page_id = ?", (from_id, page_id)
+                    ).fetchone()
+                    remaining = row["quantity"] - qty
+                    if remaining > 0:
+                        con.execute("UPDATE player_pages SET quantity = ? WHERE id = ?", (remaining, row["id"]))
+                    else:
+                        con.execute("DELETE FROM player_pages WHERE id = ?", (row["id"],))
+                    existing = con.execute(
+                        "SELECT id, quantity FROM player_pages WHERE user_id = ? AND page_id = ?", (to_id, page_id)
+                    ).fetchone()
+                    if existing is None:
+                        con.execute("INSERT INTO player_pages (user_id, page_id, quantity) VALUES (?, ?, ?)", (to_id, page_id, qty))
+                    else:
+                        con.execute("UPDATE player_pages SET quantity = quantity + ? WHERE id = ?", (qty, existing["id"]))
             for gear_id in offer["crafted_gear"]:
                 con.execute("UPDATE crafted_gear SET owner_id = ? WHERE gear_id = ?", (to_id, gear_id))
             for manual_id in offer["manuals"]:

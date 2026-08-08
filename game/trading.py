@@ -3,6 +3,7 @@ import discord
 from . import accessories_data
 from . import blacksmith
 from . import equipment as equipment_module
+from . import manual_data
 from .base_view import GameView
 from .equipment import EQUIPMENT, describe_stat_bonuses, gear_power_score
 from .items import CATEGORY_EMOJI as _ITEM_CATEGORY_EMOJI
@@ -15,9 +16,13 @@ from .views import _default_subcategory
 # docstring) — "Equipment" is a 4th top-level category alongside the regular ITEMS ones,
 # with its own slot_type-based subcategories, so they're tradeable the same way potions and
 # materials already are without disturbing /inventory or /profile's unrelated item browsers.
-TRADE_CATEGORIES = ITEM_CATEGORIES + ["Equipment"]
+# "Pages" is a 5th, for manual_data.PAGES — a third separate catalog, quantity-stacked per
+# player like ITEMS rather than an owned-instance table like Equipment's Manual/Gu/etc, but
+# with its own 10-category/7-rank shape that doesn't fit either existing pattern cleanly
+# enough to reuse it outright.
+TRADE_CATEGORIES = ITEM_CATEGORIES + ["Equipment", "Pages"]
 EQUIPMENT_SLOT_TYPES = ["Weapon", "Head", "Body", "Ring", "Earring", "Necklace", "Bracelet", "Artifact", "Manual", "Gu"]
-CATEGORY_EMOJI = {**_ITEM_CATEGORY_EMOJI, "Equipment": "⚔️"}
+CATEGORY_EMOJI = {**_ITEM_CATEGORY_EMOJI, "Equipment": "⚔️", "Pages": "📄"}
 # Crafted_gear instances (rolled Weapon/Head/Body pieces — see blacksmith.py) aren't
 # quantity-tracked catalog items, so a trade Select option's value is prefixed to tell a
 # unique instance apart from an ordinary item_name — same convention as equipment_view.py's
@@ -29,6 +34,11 @@ INSTANCE_VALUE_PREFIX = "gear:"
 # catalog item, so they get their own value prefixes alongside crafted_gear's.
 MANUAL_VALUE_PREFIX = "manual:"
 ACCESSORY_VALUE_PREFIX = "accessory:"
+# Pages ARE quantity-stacked like plain ITEMS (see player_pages), but still get their own
+# prefix -- unlike an item_name, a page_id alone doesn't tell _remaining/_make_add_callback
+# which catalog/table to look the candidate up in, so it needs the same disambiguation the
+# three instance kinds above already use.
+PAGE_VALUE_PREFIX = "page:"
 # Subcategories with a real tier/rank concept worth offering a "Tier" filter dropdown for.
 # Weapon/Head/Body are deliberately excluded — they already sort strongest-first by
 # gear_power_score, a richer multi-stat measure than a single tier number would be.
@@ -74,12 +84,17 @@ def _offer_is_empty(offer: dict) -> bool:
     Confirm-button gate (game/manager.py's confirm_gamble/execute_gamble also re-check this
     server-side; this is just the view's own immediate feedback)."""
     currencies_empty = all(offer[currency] == 0 for currency in ("spirit_stones", "manual_ink", "insight_dust"))
-    return currencies_empty and not offer["items"] and not offer["crafted_gear"] and not offer["manuals"] and not offer["accessories"]
+    return (
+        currencies_empty and not offer["items"] and not offer["pages"]
+        and not offer["crafted_gear"] and not offer["manuals"] and not offer["accessories"]
+    )
 
 
 def _default_trade_subcategory(category: str):
     if category == "Equipment":
         return EQUIPMENT_SLOT_TYPES[0]
+    if category == "Pages":
+        return manual_data.PAGE_CATEGORIES[0]
     return _default_subcategory(category)
 
 
@@ -117,6 +132,22 @@ def _build_trade_subcategory_buttons(active_category: str, active_subcategory: s
         select.callback = _on_select
         return [select], 1
 
+    if active_category == "Pages":
+        # Same row-budget problem as Equipment's 10 slot types (Discord caps buttons at 5
+        # per row) -- manual_data.PAGE_CATEGORIES is also 10 entries, so this collapses to a
+        # Select for the same reason, not a coincidence.
+        options = [
+            discord.SelectOption(label=name, default=(name == active_subcategory))
+            for name in manual_data.PAGE_CATEGORIES
+        ]
+        select = discord.ui.Select(placeholder=f"Page category: {active_subcategory}", options=options, row=row_start)
+
+        async def _on_select(interaction: discord.Interaction):
+            await callback_factory(select.values[0])(interaction)
+
+        select.callback = _on_select
+        return [select], 1
+
     names = subcategories_in_category(active_category)
     emoji_map = _ITEM_SUBCATEGORY_EMOJI
     buttons = []
@@ -143,6 +174,9 @@ def _build_trade_window_embed(game, trade_id, initiator, target) -> discord.Embe
                 lines.append(f"{emoji} {offer[currency]:,} {label}")
         for item_name, qty in offer["items"].items():
             lines.append(f"{_item_emoji(item_name)} {item_name} x{qty}")
+        for page_id, qty in offer["pages"].items():
+            page = manual_data.PAGES.get(page_id)
+            lines.append(f"📄 {page.name if page else page_id} x{qty}")
         for gear_id in offer["crafted_gear"]:
             gear = game.db.get_crafted_gear(gear_id)
             if gear is None:
@@ -292,6 +326,11 @@ class TradeAddItemView(GameView):
             if instance_id in self.game.get_trade_offer(self.trade_id, self.user_id)["accessories"]:
                 return 0
             return 1
+        if selected.startswith(PAGE_VALUE_PREFIX):
+            page_id = selected[len(PAGE_VALUE_PREFIX):]
+            owned = self.game.db.get_player_pages(self.user_id).get(page_id, {}).get("quantity", 0)
+            offered = self.game.get_trade_offer(self.trade_id, self.user_id)["pages"].get(page_id, 0)
+            return max(0, owned - offered)
         inventory = self.game.get_inventory(self.user_id)
         offered = self.game.get_trade_offer(self.trade_id, self.user_id)["items"]
         return max(0, inventory.get(selected, 0) - offered.get(selected, 0))
@@ -302,7 +341,7 @@ class TradeAddItemView(GameView):
             self.add_item(button)
 
         next_row = 1
-        if self.category == "Equipment" or subcategories_in_category(self.category):
+        if self.category in ("Equipment", "Pages") or subcategories_in_category(self.category):
             items, rows_used = _build_trade_subcategory_buttons(self.category, self.subcategory, row_start=1, callback_factory=self._make_subcategory_callback)
             for item in items:
                 self.add_item(item)
@@ -310,7 +349,8 @@ class TradeAddItemView(GameView):
 
         candidates = self._gather_candidates()
 
-        if self.category == "Equipment" and self.subcategory in TIER_SORTABLE_SUBCATEGORIES:
+        tier_filterable = (self.category == "Equipment" and self.subcategory in TIER_SORTABLE_SUBCATEGORIES) or self.category == "Pages"
+        if tier_filterable:
             self._tier_select = self._build_tier_filter_select(candidates, row=next_row)
             self.add_item(self._tier_select)
             next_row += 1
@@ -443,6 +483,31 @@ class TradeAddItemView(GameView):
                     "tier_label": f"Rank {affix.rank}", "option": option,
                 })
 
+        if self.category == "Pages":
+            # Manual pages (see /assemble_manual, manual_view.py) — quantity-stacked per
+            # (user_id, page_id) like plain ITEMS, not an owned-instance table, but pages
+            # live in their own manual_data.PAGES catalog with a real category/rank shape
+            # ITEMS doesn't have, so they get their own block rather than routing through
+            # _candidate_names (which harmlessly returns [] for "Pages" as-is).
+            offered_pages = current_offer["pages"]
+            for page_id, info in self.game.db.get_player_pages(self.user_id).items():
+                page = manual_data.PAGES.get(page_id)
+                if page is None or page.category != self.subcategory:
+                    continue
+                remaining = info["quantity"] - offered_pages.get(page_id, 0)
+                if remaining <= 0:
+                    continue
+                value = f"{PAGE_VALUE_PREFIX}{page_id}"
+                option = discord.SelectOption(
+                    label=f"📄 {page.name} ({remaining} left)"[:100], value=value,
+                    description=f"Rank {page.rank} — {', '.join(page.tags[:3])}"[:100],
+                    default=(value == self.selected_item),
+                )
+                candidates.append({
+                    "sort_key": (-page.rank, page.name), "tier_key": page.rank,
+                    "tier_label": f"Rank {page.rank}", "option": option,
+                })
+
         return candidates
 
     def _build_tier_filter_select(self, candidates: list, row: int) -> discord.ui.Select:
@@ -568,6 +633,21 @@ class TradeAddItemView(GameView):
                     self.selected_item = None
                 self._build_components()
                 content = f"Added **{display_name}** to your offer." if added_ok else f"**{display_name}** is no longer available to offer."
+                await interaction.response.edit_message(content=content, view=self)
+                await self.trade_window.refresh()
+                return
+
+            if selected and selected.startswith(PAGE_VALUE_PREFIX):
+                # Unlike the three instance branches above, a page stack IS quantity-based
+                # (like plain items) — Add 1/10/All all apply here.
+                page_id = selected[len(PAGE_VALUE_PREFIX):]
+                page = manual_data.PAGES.get(page_id)
+                display_name = page.name if page else page_id
+                added = self.game.add_trade_page(self.trade_id, self.user_id, interaction.user.display_name, page_id, quantity)
+                if added and self._remaining(selected) == 0:
+                    self.selected_item = None
+                self._build_components()
+                content = f"Added {added}x **{display_name}** to your offer." if added else f"You have no more **{display_name}** left to offer."
                 await interaction.response.edit_message(content=content, view=self)
                 await self.trade_window.refresh()
                 return

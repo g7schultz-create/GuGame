@@ -51,6 +51,14 @@ class GuUpgradeView(GameView):
         fuse_select.callback = self._on_upgrade
         self.add_item(fuse_select)
 
+        # A Select always occupies its whole row on its own, so Fuse All gets its own row
+        # right below the Fuse select rather than sharing row 0 with it.
+        fuse_all = discord.ui.Button(
+            label="Fuse All", emoji="⏫", style=discord.ButtonStyle.success, row=1, disabled=not fuse_candidates,
+        )
+        fuse_all.callback = self._on_fuse_all
+        self.add_item(fuse_all)
+
         breakdown_candidates = self._breakdown_candidates()
         breakdown_options = [
             discord.SelectOption(
@@ -64,23 +72,23 @@ class GuUpgradeView(GameView):
             placeholder="Choose a Gu to break down..." if breakdown_options else "No Gu to break down",
             options=breakdown_options[:25] or [discord.SelectOption(label="None available", value="none")],
             disabled=not breakdown_options,
-            row=1,
+            row=2,
         )
         breakdown_select.callback = self._on_pick_breakdown
         self.add_item(breakdown_select)
 
         remaining = self._remaining_breakdown(self.selected_breakdown_item)
-        break1 = discord.ui.Button(label="Break Down 1", emoji="🔨", style=discord.ButtonStyle.danger, row=2, disabled=remaining < 1)
+        break1 = discord.ui.Button(label="Break Down 1", emoji="🔨", style=discord.ButtonStyle.danger, row=3, disabled=remaining < 1)
         break1.callback = self._make_breakdown_callback(1)
         self.add_item(break1)
 
         break10 = discord.ui.Button(
-            label=f"Break Down {self.BREAKDOWN_BATCH_COUNT}", emoji="⏩", style=discord.ButtonStyle.danger, row=2, disabled=remaining < 1,
+            label=f"Break Down {self.BREAKDOWN_BATCH_COUNT}", emoji="⏩", style=discord.ButtonStyle.danger, row=3, disabled=remaining < 1,
         )
         break10.callback = self._make_breakdown_callback(self.BREAKDOWN_BATCH_COUNT)
         self.add_item(break10)
 
-        break_all = discord.ui.Button(label=f"Break Down All ({remaining})", emoji="⏭️", style=discord.ButtonStyle.danger, row=2, disabled=remaining < 1)
+        break_all = discord.ui.Button(label=f"Break Down All ({remaining})", emoji="⏭️", style=discord.ButtonStyle.danger, row=3, disabled=remaining < 1)
         break_all.callback = self._make_breakdown_callback(remaining)
         self.add_item(break_all)
 
@@ -95,8 +103,35 @@ class GuUpgradeView(GameView):
         self._build_components()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
+    async def _on_fuse_all(self, interaction: discord.Interaction):
+        """Fuses everything fusable, cascading -- a fresh batch of duplicates produced by
+        one round of fusions (e.g. 4 Common -> 2 Uncommon) may itself become fusable, so this
+        loops to exhaustion rather than a single pass like Refine All. Always terminates:
+        each successful fusion strictly reduces total Gu owned (consumes >=2, produces 1),
+        and the quality ladder is finite (gu_upgrade_candidates naturally stops offering
+        Immortal-quality Gu, since GU_UPGRADE_DUPLICATES_REQUIRED has no entry past Mythic).
+        Deferred since a long cascade can exceed Discord's 3s ack window, same reasoning as
+        weapons_view.py's Dismantle All / manual_view.py's Study All/Refine All."""
+        await interaction.response.defer()
+        total = 0
+        while True:
+            candidates = self._fuse_candidates()
+            if not candidates:
+                break
+            progressed = False
+            for item_name, _next_name, _qty, _required in candidates:
+                ok, _message, _ = self.game.upgrade_gu(self.user_id, self.display_name, item_name)
+                if ok:
+                    total += 1
+                    progressed = True
+            if not progressed:
+                break
+        self.last_result = f"Fused {total}x." if total else "Nothing left to fuse."
+        self._build_components()
+        await interaction.edit_original_response(embed=self.build_embed(), view=self)
+
     async def _on_pick_breakdown(self, interaction: discord.Interaction):
-        select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 1)
+        select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 2)
         choice = select.values[0]
         if choice == "none":
             await interaction.response.defer()

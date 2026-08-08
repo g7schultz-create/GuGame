@@ -633,6 +633,21 @@ class GameManager:
         self.db.reset_trade_confirmations(trade_id)
         return added
 
+    def add_trade_page(self, trade_id: int, user_id: int, name: str, page_id: str, quantity: int = 1) -> int:
+        """Offers up to `quantity` more of a manual page stack — quantity-based like
+        add_trade_item (not a unique instance), same "no gate beyond ownership + quantity"
+        rule dismantle_page already uses (refinement_level/studied state never blocks this).
+        Returns how many were actually added (0 if none were available)."""
+        self.db.get_or_create_player(user_id, name)
+        owned = self.db.get_player_pages(user_id).get(page_id, {}).get("quantity", 0)
+        already_offered = self.db.get_trade_offer(trade_id, user_id)["pages"].get(page_id, 0)
+        added = max(0, min(quantity, owned - already_offered))
+        if added <= 0:
+            return 0
+        self.db.add_trade_page(trade_id, user_id, page_id, added)
+        self.db.reset_trade_confirmations(trade_id)
+        return added
+
     def add_trade_crafted_gear(self, trade_id: int, user_id: int, name: str, gear_id: int) -> bool:
         """Offers a unique crafted_gear instance — same ownership rule as dismantling one
         (see dismantle_crafted_gear): must be owned and NOT currently equipped, or trading it
