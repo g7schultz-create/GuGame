@@ -788,7 +788,7 @@ class GameCog(commands.Cog):
 
     @app_commands.command(
         name="search_forgotten_blessed_land",
-        description="Dig through a hidden 5x5 treasure site (Core Formation realm and above, one board every 4 hours)",
+        description="Dig through a hidden 5x5 treasure site (Core Formation realm and above, one board every 2 hours)",
     )
     @app_commands.guilds(GUILD)
     async def search_forgotten_blessed_land(self, interaction: discord.Interaction):
