@@ -788,7 +788,7 @@ class GameCog(commands.Cog):
 
     @app_commands.command(
         name="search_forgotten_blessed_land",
-        description="Dig through a hidden 5x5 treasure site (Core Formation realm and above, one board every 20 hours)",
+        description="Dig through a hidden 5x5 treasure site (Core Formation realm and above, one board every 4 hours)",
     )
     @app_commands.guilds(GUILD)
     async def search_forgotten_blessed_land(self, interaction: discord.Interaction):
@@ -1100,6 +1100,8 @@ class GameCog(commands.Cog):
             )
         if search_status["active_discovery"]:
             search_line += " — 🗺️ active discovery waiting, run `/discovery`!"
+        if cooldowns["treasure_hunt_eligible"]:
+            search_line += "\n" + cd_line("Forgotten Blessed Land", "🗺️", cooldowns["treasure_hunt_remaining"])
         embed.add_field(name="Search", value=search_line, inline=False)
 
         tournament_phase = cooldowns["tournament_phase"]

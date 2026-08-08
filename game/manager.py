@@ -799,7 +799,7 @@ class GameManager:
 
     # -- /search_forgotten_blessed_land treasure-hunt board (see game/treasure_hunt.py) --------
     TREASURE_HUNT_REALM_GATE = 2  # Core Formation's great_realm_index
-    TREASURE_HUNT_COOLDOWN_SECONDS = 20 * 3600  # 20 hours between boards, no stone/item cost
+    TREASURE_HUNT_COOLDOWN_SECONDS = 4 * 3600  # 4 hours between boards, no stone/item cost
 
     def start_treasure_hunt(self, user_id: int, name: str):
         """Realm + cooldown gate, then rolls a fresh 25-tile board (see treasure_hunt.
@@ -1840,7 +1840,7 @@ class GameManager:
 
     def get_cooldowns_status(self, user_id: int, name: str) -> dict:
         """Read-only — remaining seconds (0 if ready) for /mine, /gather, /explore, /rest,
-        /meditate, /teach, /master_teach_all, /battlefield, /tournament, for /cd."""
+        /meditate, /teach, /battlefield, /tournament, /search_forgotten_blessed_land, for /cd."""
         player = self.db.get_or_create_player(user_id, name)
         tournament_phase, tournament_row = self.get_tournament_status()
         return {
@@ -1853,6 +1853,11 @@ class GameManager:
             "meditate_remaining": self._check_cooldown(player, "last_meditate_ts", self.MEDITATE_COOLDOWN_SECONDS),
             "battlefield_remaining": self._check_cooldown(player, "last_battlefield_ts", self.BATTLEFIELD_COOLDOWN_SECONDS),
             "world_boss_remaining": self._check_cooldown(player, "last_world_boss_attack_ts", world_boss.WORLD_BOSS_ATTACK_COOLDOWN_SECONDS),
+            # /search_forgotten_blessed_land -- only meaningful once realm-eligible (see
+            # start_treasure_hunt's own gate), same "only show gated features once relevant"
+            # convention as has_dao_companion/sect_disciple_count/personal_disciple_count below.
+            "treasure_hunt_eligible": realms.STAGES[player["realm_index"]].great_realm_index >= self.TREASURE_HUNT_REALM_GATE,
+            "treasure_hunt_remaining": self._check_cooldown(player, "treasure_hunt_last_ts", self.TREASURE_HUNT_COOLDOWN_SECONDS),
             # Only meaningful with an active Dao Companion -- /cd only shows this line when
             # has_dao_companion is true (see dao_companion_burst / /dc).
             "has_dao_companion": self.db.get_dao_companion(user_id) is not None,
