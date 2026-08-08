@@ -335,13 +335,14 @@ class RaidView(GameView):
         if self._alive_participant_ids() and set(self._alive_participant_ids()).issubset(self.actions.keys()):
             await self._finish_round()
         else:
-            self._build_components()
+            await asyncio.to_thread(self._build_components)
             await self._refresh_message()
 
     async def _refresh_message(self):
         if self.message is not None:
             try:
-                await self.message.edit(embed=self.build_embed(), view=self)
+                embed = await asyncio.to_thread(self.build_embed)
+                await self.message.edit(embed=embed, view=self)
             except discord.HTTPException:
                 pass
 
@@ -362,8 +363,12 @@ class RaidView(GameView):
         await asyncio.sleep(RAID_JOIN_COUNTDOWN_SECONDS)
         if self.status != "starting":
             return  # already moved on some other way (e.g. Start Now, or the whole view timing out)
+        # _begin_fight_or_abandon can call _start_round_timer -> asyncio.create_task, which
+        # requires a running loop in the CURRENT thread -- stays un-wrapped, on the main
+        # thread, same reasoning as hunt.py/pvp_view.py/battlefield_view.py's identical
+        # _finish_round split. It's pure in-memory state either way, no DB calls.
         self._begin_fight_or_abandon()
-        self._build_components()
+        await asyncio.to_thread(self._build_components)
         await self._refresh_message()
 
     def _begin_fight_or_abandon(self):
@@ -385,13 +390,15 @@ class RaidView(GameView):
         await asyncio.sleep(ROUND_TIMEOUT_SECONDS)
         if self.status != "fighting" or epoch != self._round_epoch:
             return  # the round already resolved on its own (or the raid ended) before this fired
-        self._apply_afk_actions()
+        self._apply_afk_actions()  # pure in-memory state, no DB calls
         await self._finish_round()
 
     async def _finish_round(self):
-        self._resolve_round()
-        self._build_components()
+        await asyncio.to_thread(self._resolve_round)
+        await asyncio.to_thread(self._build_components)
         await self._refresh_message()
+        # _start_round_timer's asyncio.create_task requires a running loop in the CURRENT
+        # thread -- must run here, on the main thread, not inside either to_thread call above.
         if self.status == "fighting" and self.participants:
             self._start_round_timer()
 
@@ -928,72 +935,78 @@ class RaidView(GameView):
         if user.id in self.participants:
             await interaction.response.send_message("You're already in this raid.", ephemeral=True)
             return
-        player = self.game.get_player_stats(user.id, user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, user.id, user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message("You need to `/join` and confirm a character first.", ephemeral=True)
             return
-        # Equipped gear's flat "hp"/"qi_stat" stat_bonuses are folded in as a live overlay on
-        # top of the persisted (gear-independent) hp/max_hp and battle_qi/qi_stat columns,
-        # same as atk/str/def/spd/luck already work — see _persist_hp/_persist_qi for why
-        # writes back to the DB subtract them back out again.
-        equip_bonuses = self.game.compute_equipment_bonuses(user.id)["stats"]
-        hp_bonus = equip_bonuses["hp"]
-        qi_bonus = equip_bonuses["qi_stat"]
-        hp_settled = self.game.db.settle_hp_regen(user.id)
-        # Sturdy Frame-family physique's battle_qi_regen_bonus_pct — same rate-multiplier
-        # hunt.py's own settle_battle_qi call applies.
-        regen_bonus = self.game._trait_bonus(player, "battle_qi_regen_bonus_pct")
-        qi_settled = self.game.db.settle_battle_qi(user.id, regen_rate_bonus_pct=regen_bonus)
-        alive = self._alive_enemies()
-        default_target = self.enemies.index(alive[0]) if alive else 0
-        # Each joiner rolls their OWN world_region loot/hoard bonus independently (unlike the
-        # shared stat_multiplier decided once at raid creation) — spirit stones/materials/
-        # pages are already granted per-participant at _on_victory, so this fits that same
-        # per-participant shape rather than needing a group-wide roll.
-        region_mods = self.game.region_encounter_modifiers(user.id, user.display_name)
-        self.participants[user.id] = {
-            "name": user.display_name, "hp": hp_settled["hp"] + hp_bonus, "max_hp": hp_settled["max_hp"] + hp_bonus, "down": False,
-            "qi": qi_settled["battle_qi"] + qi_bonus, "max_qi": qi_settled["qi_stat"] + qi_bonus, "empowered": False,
-            "target_index": default_target, "potions_used": 0, "loot_multiplier": 1.0,
-            "character_class": player["character_class"], "hp_bonus": hp_bonus, "qi_bonus": qi_bonus,
-            "race": player["race"], "physique_tier": player["physique_tier"],
-            "region_loot_chance_bonus_pct": region_mods["loot_chance_bonus_pct"],
-            "region_hoard_label": region_mods["hoard_label"], "region_hoard_reward": region_mods["hoard_reward"],
-            # A Fire-family root's "spend 30% of your battle Qi this encounter" trigger (see
-            # character_data.CharacterTraitSpec / hunt.py's identical _track_battle_qi_spent) —
-            # tracked per-participant since a raid has several people spending Qi at once.
-            "root_name": player["root_name"], "qi_spent": 0.0, "fire_str_pending": False, "fire_triggered": False,
-            # Common-tier physique combat state (see character_data.py's Common physique
-            # section / hunt.py's identical per-participant fields) — also per-participant.
-            "physique_name": player["physique_name"], "guard_stacks": 0,
-            "dodge_momentum_pending": False, "dodge_momentum_triggered": False, "attack_count": 0,
-            "first_gu_use_discounted": False, "guard_or_potion_qi_restored": False,
-            "damage_dealt": 0.0, "adaptive_stat_key": None,
-            # Uncommon/Rare-tier physique combat state (see character_data.py for the families).
-            "first_empower_discounted": False, "flee_reroll_used": False, "gu_miss_refunded": False,
-            # Nascent Soul Avatar (see avatar.py) — avatar_soul/avatar_level needed for both
-            # Soul Projection and the passive fold-in inside _attacker_stats; sect_id for
-            # Formation Soul's real ally-targeted raid buff (pure in-memory scan against
-            # every other participant's own cached sect_id, no per-round DB calls).
-            "avatar_soul": player["avatar_soul"], "avatar_level": player["avatar_level"], "sect_id": player["sect_id"],
-            "soul_projection_rounds_remaining": 0,
-        }
-        # Clear Mind-family physique's encounter-start adaptive stat — compared against the
-        # main boss specifically (self.enemies[0]) as "the opponent", same one-time-at-join
-        # computation hunt.py's own single-monster version uses.
-        physique_spec = chargen.get_physique_spec(player["physique_name"])
-        if physique_spec and physique_spec.stat_bonuses.get("encounter_start_adaptive_stat_pct"):
-            boss = self.enemies[0].monster
-            ratios = {
-                "atk_stat": player["atk_stat"] / max(1, boss.atk_stat),
-                "def_stat": player["def_stat"] / max(1, boss.def_stat),
-                "spd_stat": player["spd_stat"] / max(1, boss.spd_stat),
+
+        def _resolve():
+            # Equipped gear's flat "hp"/"qi_stat" stat_bonuses are folded in as a live overlay
+            # on top of the persisted (gear-independent) hp/max_hp and battle_qi/qi_stat
+            # columns, same as atk/str/def/spd/luck already work — see _persist_hp/_persist_qi
+            # for why writes back to the DB subtract them back out again.
+            equip_bonuses = self.game.compute_equipment_bonuses(user.id)["stats"]
+            hp_bonus = equip_bonuses["hp"]
+            qi_bonus = equip_bonuses["qi_stat"]
+            hp_settled = self.game.db.settle_hp_regen(user.id)
+            # Sturdy Frame-family physique's battle_qi_regen_bonus_pct — same rate-multiplier
+            # hunt.py's own settle_battle_qi call applies.
+            regen_bonus = self.game._trait_bonus(player, "battle_qi_regen_bonus_pct")
+            qi_settled = self.game.db.settle_battle_qi(user.id, regen_rate_bonus_pct=regen_bonus)
+            alive = self._alive_enemies()
+            default_target = self.enemies.index(alive[0]) if alive else 0
+            # Each joiner rolls their OWN world_region loot/hoard bonus independently (unlike
+            # the shared stat_multiplier decided once at raid creation) — spirit stones/
+            # materials/pages are already granted per-participant at _on_victory, so this fits
+            # that same per-participant shape rather than needing a group-wide roll.
+            region_mods = self.game.region_encounter_modifiers(user.id, user.display_name)
+            self.participants[user.id] = {
+                "name": user.display_name, "hp": hp_settled["hp"] + hp_bonus, "max_hp": hp_settled["max_hp"] + hp_bonus, "down": False,
+                "qi": qi_settled["battle_qi"] + qi_bonus, "max_qi": qi_settled["qi_stat"] + qi_bonus, "empowered": False,
+                "target_index": default_target, "potions_used": 0, "loot_multiplier": 1.0,
+                "character_class": player["character_class"], "hp_bonus": hp_bonus, "qi_bonus": qi_bonus,
+                "race": player["race"], "physique_tier": player["physique_tier"],
+                "region_loot_chance_bonus_pct": region_mods["loot_chance_bonus_pct"],
+                "region_hoard_label": region_mods["hoard_label"], "region_hoard_reward": region_mods["hoard_reward"],
+                # A Fire-family root's "spend 30% of your battle Qi this encounter" trigger
+                # (see character_data.CharacterTraitSpec / hunt.py's identical
+                # _track_battle_qi_spent) — tracked per-participant since a raid has several
+                # people spending Qi at once.
+                "root_name": player["root_name"], "qi_spent": 0.0, "fire_str_pending": False, "fire_triggered": False,
+                # Common-tier physique combat state (see character_data.py's Common physique
+                # section / hunt.py's identical per-participant fields) — also per-participant.
+                "physique_name": player["physique_name"], "guard_stacks": 0,
+                "dodge_momentum_pending": False, "dodge_momentum_triggered": False, "attack_count": 0,
+                "first_gu_use_discounted": False, "guard_or_potion_qi_restored": False,
+                "damage_dealt": 0.0, "adaptive_stat_key": None,
+                # Uncommon/Rare-tier physique combat state (see character_data.py for the families).
+                "first_empower_discounted": False, "flee_reroll_used": False, "gu_miss_refunded": False,
+                # Nascent Soul Avatar (see avatar.py) — avatar_soul/avatar_level needed for both
+                # Soul Projection and the passive fold-in inside _attacker_stats; sect_id for
+                # Formation Soul's real ally-targeted raid buff (pure in-memory scan against
+                # every other participant's own cached sect_id, no per-round DB calls).
+                "avatar_soul": player["avatar_soul"], "avatar_level": player["avatar_level"], "sect_id": player["sect_id"],
+                "soul_projection_rounds_remaining": 0,
             }
-            self.participants[user.id]["adaptive_stat_key"] = min(ratios, key=ratios.get)
-        self.game.apply_encounter_start_bonuses(user.id, user.display_name)
-        self._log(f"🙋 **{user.display_name}** joins the raid!")
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            # Clear Mind-family physique's encounter-start adaptive stat — compared against the
+            # main boss specifically (self.enemies[0]) as "the opponent", same one-time-at-join
+            # computation hunt.py's own single-monster version uses.
+            physique_spec = chargen.get_physique_spec(player["physique_name"])
+            if physique_spec and physique_spec.stat_bonuses.get("encounter_start_adaptive_stat_pct"):
+                boss = self.enemies[0].monster
+                ratios = {
+                    "atk_stat": player["atk_stat"] / max(1, boss.atk_stat),
+                    "def_stat": player["def_stat"] / max(1, boss.def_stat),
+                    "spd_stat": player["spd_stat"] / max(1, boss.spd_stat),
+                }
+                self.participants[user.id]["adaptive_stat_key"] = min(ratios, key=ratios.get)
+            self.game.apply_encounter_start_bonuses(user.id, user.display_name)
+            self._log(f"🙋 **{user.display_name}** joins the raid!")
+
+        await asyncio.to_thread(_resolve)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_start_now(self, interaction: discord.Interaction):
         if self.status != "starting":
@@ -1003,9 +1016,13 @@ class RaidView(GameView):
             await interaction.response.send_message("Join the raid before starting it!", ephemeral=True)
             return
         self._log(f"▶️ **{interaction.user.display_name}** starts the raid early!")
+        # _begin_fight_or_abandon can call _start_round_timer -> asyncio.create_task, which
+        # must run on the main thread -- see _start_countdown's identical comment. Pure
+        # in-memory state, no DB calls.
         self._begin_fight_or_abandon()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_pick_target(self, interaction: discord.Interaction):
         p = self.participants.get(interaction.user.id)
@@ -1061,7 +1078,7 @@ class RaidView(GameView):
         if error:
             await interaction.response.send_message(error, ephemeral=True)
             return
-        empowered = self._consume_empower_cost(interaction.user.id, p)
+        empowered = await asyncio.to_thread(self._consume_empower_cost, interaction.user.id, p)
         p["empowered"] = False
         # No separate "Action locked in" confirmation — the shared raid embed's participant
         # list already shows "✅ locked in" per person once _submit_action runs, so a new
@@ -1089,12 +1106,12 @@ class RaidView(GameView):
         if error:
             await interaction.response.send_message(error, ephemeral=True)
             return
-        empowered = self._consume_empower_cost(interaction.user.id, p)
+        empowered = await asyncio.to_thread(self._consume_empower_cost, interaction.user.id, p)
         p["empowered"] = False
         # Iron Skin-family physique's Guard stack (permanent for the rest of the encounter —
         # see _resolve_enemy_hit) and River Walker-family physique's Guard/potion Qi restore.
         p["guard_stacks"] = min(2, p.get("guard_stacks", 0) + 1)
-        self._apply_guard_or_potion_qi_restore(interaction.user.id, p)
+        await asyncio.to_thread(self._apply_guard_or_potion_qi_restore, interaction.user.id, p)
         target_idx = self._resolve_target_index(p)
         await interaction.response.defer()
         await self._submit_action(interaction.user.id, {"type": "guard", "target": target_idx, "full_block": empowered})
@@ -1128,15 +1145,16 @@ class RaidView(GameView):
         # message every toggle was pure redundant spam over a multi-round raid. Edits the
         # shared message directly (like _on_join/_on_start_now) rather than defer +
         # _refresh_message, since there's no async work in between that would need one.
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_gu_ability(self, interaction: discord.Interaction):
         p, error = self._validate_actor(interaction.user.id)
         if error:
             await interaction.response.send_message(error, ephemeral=True)
             return
-        gu = self._equipped_gu(interaction.user.id)
+        gu = await asyncio.to_thread(self._equipped_gu, interaction.user.id)
         ability = gu.active_ability if gu else None
         if not ability:
             await interaction.response.send_message("You have no active Gu ability equipped.", ephemeral=True)
@@ -1152,9 +1170,13 @@ class RaidView(GameView):
         if p["qi"] < qi_cost:
             await interaction.response.send_message(f"Not enough Qi to use {ability.name} (needs {qi_cost}).", ephemeral=True)
             return
-        p["qi"] -= qi_cost
-        self._persist_qi(interaction.user.id, p)
-        self._track_battle_qi_spent(p, qi_cost)
+
+        def _resolve():
+            p["qi"] -= qi_cost
+            self._persist_qi(interaction.user.id, p)
+            self._track_battle_qi_spent(p, qi_cost)
+
+        await asyncio.to_thread(_resolve)
         await interaction.response.defer()
         await self._submit_action(interaction.user.id, {"type": "gu", "target": self._resolve_target_index(p), "ability": ability})
 
@@ -1166,17 +1188,17 @@ class RaidView(GameView):
         if error:
             await interaction.response.send_message(error, ephemeral=True)
             return
-        player_row = self.game.get_player_stats(interaction.user.id, p["name"])
-        move = self.game.get_equipped_killer_move(player_row, "combat")
+        player_row = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, p["name"])
+        move = await asyncio.to_thread(self.game.get_equipped_killer_move, player_row, "combat")
         if not move:
             await interaction.response.send_message("You have no Killer Move equipped in your Combat slot.", ephemeral=True)
             return
-        qi_cost = self.game.killer_move_qi_cost(player_row, move)
+        qi_cost = await asyncio.to_thread(self.game.killer_move_qi_cost, player_row, move)
         if p["qi"] < qi_cost:
             await interaction.response.send_message(f"Not enough Qi to use {move['name']} (needs {qi_cost:,}).", ephemeral=True)
             return
         p["qi"] -= qi_cost
-        self._persist_qi(interaction.user.id, p)
+        await asyncio.to_thread(self._persist_qi, interaction.user.id, p)
         await interaction.response.defer()
         if move["kind"] == "damage":
             await self._submit_action(interaction.user.id, {"type": "killer_move", "target": self._resolve_target_index(p), "move": move})
@@ -1184,7 +1206,7 @@ class RaidView(GameView):
             # Buff-kind: applied immediately (no target/enemy resolution needed) -- the
             # queued action is just a placeholder so round-completion tracking still counts
             # this as this player's turn, same as Guard/Defend Ally's own non-attack actions.
-            self.game.apply_killer_move_buff(interaction.user.id, player_row, move)
+            await asyncio.to_thread(self.game.apply_killer_move_buff, interaction.user.id, player_row, move)
             self._log(f"✨ **{p['name']}**'s {move['name']} surges through them!")
             await self._submit_action(interaction.user.id, {"type": "killer_move_buff"})
 
@@ -1239,7 +1261,7 @@ class RaidView(GameView):
             )
             return
         p["qi"] -= avatar.SOUL_PROJECTION_QI_COST
-        self._persist_qi(interaction.user.id, p)
+        await asyncio.to_thread(self._persist_qi, interaction.user.id, p)
         await interaction.response.defer()
         await self._submit_action(interaction.user.id, {"type": "soul_projection", "target": self._resolve_target_index(p)})
 
@@ -1263,7 +1285,7 @@ class RaidView(GameView):
         if p["potions_used"] >= POTION_USE_CAP:
             await interaction.response.send_message(f"You've hit this raid's potion cap ({POTION_USE_CAP}).", ephemeral=True)
             return
-        inventory = self.game.get_inventory(interaction.user.id)
+        inventory = await asyncio.to_thread(self.game.get_inventory, interaction.user.id)
         usable = [
             item for item in ITEMS.values()
             if item.category in ("Healing", "Pills") and item.use is not None and inventory.get(item.name, 0) > 0
@@ -1282,14 +1304,14 @@ class RaidView(GameView):
         if p["potions_used"] >= POTION_USE_CAP:
             await interaction.response.send_message(f"You've hit this raid's potion cap ({POTION_USE_CAP}).", ephemeral=True)
             return
-        ok, message = self.game.use_item(user_id, p["name"], item_name)
+        ok, message = await asyncio.to_thread(self.game.use_item, user_id, p["name"], item_name)
         if not ok:
             await interaction.response.send_message(message, ephemeral=True)
             return
         p["potions_used"] += 1
-        fresh = self.game.get_player_stats(user_id, p["name"])
+        fresh = await asyncio.to_thread(self.game.get_player_stats, user_id, p["name"])
         p["hp"] = min(p["max_hp"], fresh["hp"] + p.get("hp_bonus", 0))
-        self._apply_guard_or_potion_qi_restore(user_id, p)
+        await asyncio.to_thread(self._apply_guard_or_potion_qi_restore, user_id, p)
         await interaction.response.send_message(f"🧪 Used **{item_name}** — {message}", ephemeral=True)
         await self._submit_action(user_id, {"type": "potion", "item_name": item_name})
 
@@ -1300,7 +1322,8 @@ class RaidView(GameView):
             child.disabled = True
         if self.message is not None:
             try:
-                await self.message.edit(embed=self.build_embed(), view=self)
+                embed = await asyncio.to_thread(self.build_embed)
+                await self.message.edit(embed=embed, view=self)
             except discord.HTTPException:
                 pass
 

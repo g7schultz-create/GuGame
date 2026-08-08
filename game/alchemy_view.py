@@ -1,3 +1,5 @@
+import asyncio
+
 import discord
 
 from . import alchemy, items, professions
@@ -79,29 +81,33 @@ class AlchemyView(GameView):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 0)
         self.selected_type = select.values[0]
         self.last_result = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_pick_tier(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 1)
         self.selected_tier = int(select.values[0])
         self.last_result = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     def _make_craft_callback(self, attempts: int):
         async def callback(interaction: discord.Interaction):
             # Make All can be many craft_pill calls back-to-back (see
             # GameManager.craft_pill_multiple) -- defer first so we have up to 15 minutes to
             # finish instead of Discord's normal 3-second ack window (same fix as
-            # premium_view.py's "until broke" reroll / InventoryView's Use All).
+            # premium_view.py's "until broke" reroll / InventoryView's Use All). Now also off
+            # the event loop entirely via asyncio.to_thread.
             await interaction.response.defer()
-            attempted, successes, last_result = self.game.craft_pill_multiple(
-                self.user_id, self.display_name, self.selected_type, self.selected_tier, attempts
+            attempted, successes, last_result = await asyncio.to_thread(
+                self.game.craft_pill_multiple, self.user_id, self.display_name, self.selected_type, self.selected_tier, attempts,
             )
             self.last_result = self._format_craft_result(attempted, successes, last_result)
-            self._build_components()
-            await interaction.edit_original_response(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.edit_original_response(embed=embed, view=self)
 
         return callback
 

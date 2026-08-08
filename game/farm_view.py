@@ -1,3 +1,5 @@
+import asyncio
+
 import discord
 
 from . import professions
@@ -107,8 +109,9 @@ class FarmView(GameView):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 0)
         self.selected_slot = int(select.values[0])
         self.last_result = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_plant(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 1)
@@ -116,31 +119,35 @@ class FarmView(GameView):
         if choice == "none":
             await interaction.response.defer()
             return
-        ok, message = self.game.plant_farm(self.user_id, self.display_name, self.selected_slot, int(choice))
+        ok, message = await asyncio.to_thread(self.game.plant_farm, self.user_id, self.display_name, self.selected_slot, int(choice))
         self.last_result = message
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_refresh(self, interaction: discord.Interaction):
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_harvest(self, interaction: discord.Interaction):
-        ok, item_name, quantity, error = self.game.harvest_farm(self.user_id, self.display_name, self.selected_slot)
+        ok, item_name, quantity, error = await asyncio.to_thread(self.game.harvest_farm, self.user_id, self.display_name, self.selected_slot)
         self.last_result = f"🌾 Harvested **{quantity}x {item_name}**!" if ok else error
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_harvest_all(self, interaction: discord.Interaction):
-        result = self.game.harvest_all_farm(self.user_id, self.display_name)
+        result = await asyncio.to_thread(self.game.harvest_all_farm, self.user_id, self.display_name)
         if result["plots_harvested"] == 0:
             self.last_result = "Nothing is ready to harvest yet."
         else:
             items_text = ", ".join(f"{qty}x {name}" for name, qty in result["harvested"].items())
             plot_word = "plot" if result["plots_harvested"] == 1 else "plots"
             self.last_result = f"🧺 Claimed {result['plots_harvested']} {plot_word}: **{items_text}**!"
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_plant_all(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 3)
@@ -148,15 +155,16 @@ class FarmView(GameView):
         if choice == "none":
             await interaction.response.defer()
             return
-        result = self.game.plant_all_farm(self.user_id, self.display_name, int(choice))
+        result = await asyncio.to_thread(self.game.plant_all_farm, self.user_id, self.display_name, int(choice))
         if result["planted"] == 0:
             self.last_result = f"You don't have any **{result['item_name']}** to plant."
         else:
             plot_word = "plot" if result["planted"] == 1 else "plots"
             shortfall = f" ({result['empty_slots'] - result['planted']} plot(s) left empty — out of herb)" if result["planted"] < result["empty_slots"] else ""
             self.last_result = f"🌱 Planted **{result['planted']}x {result['item_name']}** across {result['planted']} {plot_word}{shortfall}."
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     def build_embed(self) -> discord.Embed:
         overview = self.game.get_farm_overview(self.user_id, self.display_name)

@@ -1,3 +1,5 @@
+import asyncio
+
 import discord
 
 from .base_view import GameView
@@ -98,10 +100,11 @@ class GuUpgradeView(GameView):
         if choice == "none":
             await interaction.response.defer()
             return
-        ok, message, _ = self.game.upgrade_gu(self.user_id, self.display_name, choice)
+        ok, message, _ = await asyncio.to_thread(self.game.upgrade_gu, self.user_id, self.display_name, choice)
         self.last_result = message
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_fuse_all(self, interaction: discord.Interaction):
         """Fuses everything fusable, cascading -- a fresh batch of duplicates produced by
@@ -115,20 +118,21 @@ class GuUpgradeView(GameView):
         await interaction.response.defer()
         total = 0
         while True:
-            candidates = self._fuse_candidates()
+            candidates = await asyncio.to_thread(self._fuse_candidates)
             if not candidates:
                 break
             progressed = False
             for item_name, _next_name, _qty, _required in candidates:
-                ok, _message, _ = self.game.upgrade_gu(self.user_id, self.display_name, item_name)
+                ok, _message, _ = await asyncio.to_thread(self.game.upgrade_gu, self.user_id, self.display_name, item_name)
                 if ok:
                     total += 1
                     progressed = True
             if not progressed:
                 break
         self.last_result = f"Fused {total}x." if total else "Nothing left to fuse."
-        self._build_components()
-        await interaction.edit_original_response(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.edit_original_response(embed=embed, view=self)
 
     async def _on_pick_breakdown(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 2)
@@ -137,18 +141,20 @@ class GuUpgradeView(GameView):
             await interaction.response.defer()
             return
         self.selected_breakdown_item = choice
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     def _make_breakdown_callback(self, quantity: int):
         async def callback(interaction: discord.Interaction):
             item_name = self.selected_breakdown_item
-            ok, message, _ = self.game.breakdown_gu(self.user_id, self.display_name, item_name, quantity)
+            ok, message, _ = await asyncio.to_thread(self.game.breakdown_gu, self.user_id, self.display_name, item_name, quantity)
             self.last_result = message
-            if ok and self._remaining_breakdown(item_name) == 0:
+            if ok and await asyncio.to_thread(self._remaining_breakdown, item_name) == 0:
                 self.selected_breakdown_item = None  # nothing left of this Gu to keep targeting
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 

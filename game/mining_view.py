@@ -1,3 +1,4 @@
+import asyncio
 import discord
 
 from . import gathering, professions
@@ -50,24 +51,27 @@ class MiningVeinView(GameView):
         self.collected[node["item_name"]] = self.collected.get(node["item_name"], 0) + node["quantity"]
         self.current_index += 1
         if self.current_index >= len(self.nodes):
-            self._finish()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._finish)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_leave(self, interaction: discord.Interaction):
         self.left_early = True
-        self._finish()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._finish)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def on_timeout(self):
         if not self.finished:
-            self._finish()
+            await asyncio.to_thread(self._finish)
         for child in self.children:
             child.disabled = True
         if self.message is not None:
             try:
-                await self.message.edit(embed=self.build_embed(), view=self)
+                embed = await asyncio.to_thread(self.build_embed)
+                await self.message.edit(embed=embed, view=self)
             except discord.HTTPException:
                 pass
 

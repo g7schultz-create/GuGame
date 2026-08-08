@@ -1,3 +1,4 @@
+import asyncio
 import traceback
 
 import discord
@@ -41,16 +42,17 @@ class ConvertEssenceModal(discord.ui.Modal, title="Convert Stones to Essence"):
             return
 
         game = self.balance_view.game
-        stones_spent, essence_gained, new_stones, new_essence, max_essence = game.exchange_stones_for_essence(
-            self.balance_view.user_id, self.balance_view.display_name, amount,
+        stones_spent, essence_gained, new_stones, new_essence, max_essence = await asyncio.to_thread(
+            game.exchange_stones_for_essence, self.balance_view.user_id, self.balance_view.display_name, amount,
         )
         if essence_gained == 0:
             reason = "your primeval essence is already full" if new_essence >= max_essence else "you don't have enough spirit stones"
             self.balance_view.last_result = f"No essence gained — {reason}."
         else:
             self.balance_view.last_result = f"💠 Spent **{stones_spent:,}** spirit stones to gain **{essence_gained:,}** primeval essence."
-        self.balance_view._build_components()
-        await interaction.response.edit_message(embed=self.balance_view.build_embed(), view=self.balance_view)
+        await asyncio.to_thread(self.balance_view._build_components)
+        embed = await asyncio.to_thread(self.balance_view.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self.balance_view)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
         await _modal_error(interaction, error, "ConvertEssenceModal")
@@ -97,16 +99,17 @@ class BalanceView(GameView):
         await interaction.response.send_modal(ConvertEssenceModal(self))
 
     async def _on_absorb_all(self, interaction: discord.Interaction):
-        p = self._player()
-        essence_spent, qi_gained, new_essence, new_qi = self.game.consume_essence_for_qi(
-            self.user_id, self.display_name, p["primeval_essence"],
+        p = await asyncio.to_thread(self._player)
+        essence_spent, qi_gained, new_essence, new_qi = await asyncio.to_thread(
+            self.game.consume_essence_for_qi, self.user_id, self.display_name, p["primeval_essence"],
         )
         if essence_spent == 0:
             self.last_result = "You don't have any primeval essence to absorb."
         else:
             self.last_result = f"🌀 Absorbed **{essence_spent:,.0f}** primeval essence for **{qi_gained:,.0f}** qi."
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     def build_embed(self) -> discord.Embed:
         db = self.game.db

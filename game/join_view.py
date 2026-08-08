@@ -1,3 +1,4 @@
+import asyncio
 import traceback
 
 import discord
@@ -17,9 +18,12 @@ class CharacterNameModal(discord.ui.Modal, title="Set Character Name"):
         self.name_input.default = default
 
     async def on_submit(self, interaction: discord.Interaction):
-        self.view_ref.game.set_character_name(self.view_ref.user_id, self.view_ref.display_name, str(self.name_input.value))
-        self.view_ref.refresh()
-        await interaction.response.edit_message(embed=self.view_ref.build_embed(), view=self.view_ref)
+        await asyncio.to_thread(
+            self.view_ref.game.set_character_name, self.view_ref.user_id, self.view_ref.display_name, str(self.name_input.value),
+        )
+        await asyncio.to_thread(self.view_ref.refresh)
+        embed = await asyncio.to_thread(self.view_ref.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self.view_ref)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
         # Modal has its own separate error hook from View.on_error (see base_view.py) — this
@@ -126,38 +130,43 @@ class JoinView(GameView):
 
     async def _on_select_race(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.placeholder == "Choose your race")
-        self.game.set_race(self.user_id, self.display_name, select.values[0])
-        self.refresh()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self.game.set_race, self.user_id, self.display_name, select.values[0])
+        await asyncio.to_thread(self.refresh)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_select_path(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.placeholder == "Choose your cultivation path")
-        self.game.set_path(self.user_id, self.display_name, select.values[0])
-        self.refresh()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self.game.set_path, self.user_id, self.display_name, select.values[0])
+        await asyncio.to_thread(self.refresh)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_select_class(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.placeholder == "Choose your combat class")
-        self.game.set_class(self.user_id, self.display_name, select.values[0])
-        self.refresh()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self.game.set_class, self.user_id, self.display_name, select.values[0])
+        await asyncio.to_thread(self.refresh)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_reroll_root(self, interaction: discord.Interaction):
-        self.game.reroll_root(self.user_id, self.display_name)
-        self.refresh()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self.game.reroll_root, self.user_id, self.display_name)
+        await asyncio.to_thread(self.refresh)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_reroll_physique(self, interaction: discord.Interaction):
-        self.game.reroll_physique(self.user_id, self.display_name)
-        self.refresh()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self.game.reroll_physique, self.user_id, self.display_name)
+        await asyncio.to_thread(self.refresh)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_confirm(self, interaction: discord.Interaction):
-        self.game.confirm_character(self.user_id, self.display_name, self.base_stats)
-        self.refresh()
+        await asyncio.to_thread(self.game.confirm_character, self.user_id, self.display_name, self.base_stats)
+        await asyncio.to_thread(self.refresh)
         for child in self.children:
             child.disabled = True
-        embed = self.build_embed()
+        embed = await asyncio.to_thread(self.build_embed)
         embed.add_field(name="✅ Character Confirmed", value="Your starter inventory has been granted. Check `/inventory`!", inline=False)
         await interaction.response.edit_message(embed=embed, view=self)
 

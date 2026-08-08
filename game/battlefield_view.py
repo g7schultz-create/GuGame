@@ -226,7 +226,8 @@ class BattlefieldView(GameView):
     async def _refresh_message(self):
         if self.message is not None:
             try:
-                await self.message.edit(embed=self.build_embed(), view=self)
+                embed = await asyncio.to_thread(self.build_embed)
+                await self.message.edit(embed=embed, view=self)
             except discord.HTTPException:
                 pass
 
@@ -240,9 +241,12 @@ class BattlefieldView(GameView):
             return
         self.qi_empowered = False
         self._log_line("⏱️ You hesitate too long — your body swings on reflex!")
-        self._do_attack()
+        # _finish_round (and the create_task it can trigger via _start_round_timer) must run
+        # on the main thread -- asyncio.create_task requires a running loop in the CURRENT
+        # thread, which a asyncio.to_thread worker never has.
+        await asyncio.to_thread(self._do_attack)
         self._finish_round()
-        self._build_components()
+        await asyncio.to_thread(self._build_components)
         await self._refresh_message()
 
     # -- combat resolution ------------------------------------------------------
@@ -395,62 +399,76 @@ class BattlefieldView(GameView):
         return used
 
     async def _on_attack(self, interaction: discord.Interaction):
-        empowered = self._consume_empower()
-        if empowered:
-            self._log_line("✨ You channel Qi to guarantee your strike!")
-        self._do_attack(guaranteed_hit=empowered)
+        def _resolve():
+            empowered = self._consume_empower()
+            if empowered:
+                self._log_line("✨ You channel Qi to guarantee your strike!")
+            self._do_attack(guaranteed_hit=empowered)
+
+        await asyncio.to_thread(_resolve)
         self._finish_round()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_guard(self, interaction: discord.Interaction):
-        empowered = self._consume_empower()
-        if empowered:
-            self._log_line("✨ You channel Qi to fully brace against the blow!")
-        else:
-            self._log_line("🛡️ You brace for the next blow.")
-        self._monster_turn(incoming_reduction=1.0 if empowered else GUARD_DAMAGE_REDUCTION)
+        def _resolve():
+            empowered = self._consume_empower()
+            if empowered:
+                self._log_line("✨ You channel Qi to fully brace against the blow!")
+            else:
+                self._log_line("🛡️ You brace for the next blow.")
+            self._monster_turn(incoming_reduction=1.0 if empowered else GUARD_DAMAGE_REDUCTION)
+
+        await asyncio.to_thread(_resolve)
         self._finish_round()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_toggle_empower(self, interaction: discord.Interaction):
         self.qi_empowered = not self.qi_empowered
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_flee(self, interaction: discord.Interaction):
         # Always succeeds -- unlike hunt.py/raid.py's SPD-gated flee roll, /battlefield's
         # Withdraw is a guaranteed "bank what you've earned so far" escape hatch, per explicit
-        # request.
+        # request. Terminal (status becomes "fled", not "fighting"), so no _finish_round/timer
+        # restart here -- _end_run alone is safe to fully offload.
         self.status = "fled"
         self._log_line("🏃 You withdraw from the battlefield with what you've earned!")
-        self._end_run()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._end_run)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_class_ability(self, interaction: discord.Interaction):
         class_name = self.player["character_class"]
-        if class_name == "Tank":
-            self._log_line("🛡️ You brace with unshakable resolve — no ally around to protect but yourself!")
-            self._monster_turn(incoming_reduction=BRACE_DAMAGE_REDUCTION)
-            self._finish_round()
-        elif class_name == "Support":
-            self.inspire_rounds_remaining = INSPIRE_DURATION_ROUNDS
-            self._log_line("✨ You channel Inspire — your own STR and DEF surge!")
-            self._monster_turn()
-            self._finish_round()
-        elif class_name == "Frostbinder":
-            self._log_line("❄️ You channel Freeze!")
-            self._do_attack(str_multiplier=FREEZE_STR_MULTIPLIER, label="Freeze", freeze_chance=FREEZE_PROC_CHANCE)
-            self._finish_round()
-        else:
+        if class_name not in ("Tank", "Support", "Frostbinder"):
             await interaction.response.send_message(
                 "You haven't chosen a class yet — run `/choose_class` to unlock a class ability.", ephemeral=True,
             )
             return
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+        def _resolve():
+            if class_name == "Tank":
+                self._log_line("🛡️ You brace with unshakable resolve — no ally around to protect but yourself!")
+                self._monster_turn(incoming_reduction=BRACE_DAMAGE_REDUCTION)
+            elif class_name == "Support":
+                self.inspire_rounds_remaining = INSPIRE_DURATION_ROUNDS
+                self._log_line("✨ You channel Inspire — your own STR and DEF surge!")
+                self._monster_turn()
+            else:
+                self._log_line("❄️ You channel Freeze!")
+                self._do_attack(str_multiplier=FREEZE_STR_MULTIPLIER, label="Freeze", freeze_chance=FREEZE_PROC_CHANCE)
+
+        await asyncio.to_thread(_resolve)
+        self._finish_round()
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_soul_projection(self, interaction: discord.Interaction):
         """Independent of class -- gated on having chosen an avatar soul via /avatar instead.
@@ -469,14 +487,19 @@ class BattlefieldView(GameView):
                 f"Not enough battle Qi for Soul Projection (needs {avatar.SOUL_PROJECTION_QI_COST:,}).", ephemeral=True,
             )
             return
-        self.player_qi -= avatar.SOUL_PROJECTION_QI_COST
-        self._persist_qi()
-        self.soul_projection_rounds_remaining = avatar.soul_projection_duration(soul)
-        self._log_line(f"🌀 You channel {avatar.SOUL_PROJECTION_NAME} — {soul.name}'s power surges through you!")
-        self._do_attack(label=avatar.SOUL_PROJECTION_NAME)
+
+        def _resolve():
+            self.player_qi -= avatar.SOUL_PROJECTION_QI_COST
+            self._persist_qi()
+            self.soul_projection_rounds_remaining = avatar.soul_projection_duration(soul)
+            self._log_line(f"🌀 You channel {avatar.SOUL_PROJECTION_NAME} — {soul.name}'s power surges through you!")
+            self._do_attack(label=avatar.SOUL_PROJECTION_NAME)
+
+        await asyncio.to_thread(_resolve)
         self._finish_round()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_use_potion(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 2)
@@ -484,28 +507,34 @@ class BattlefieldView(GameView):
         if item_name == "none":
             await interaction.response.defer()
             return
-        ok, message = self.game.use_item(self.user_id, self.display_name, item_name)
-        if ok:
-            self.potions_used += 1
-            fresh = self.game.get_player_stats(self.user_id, self.display_name)
-            self.player_hp = min(self.player_max_hp, fresh["hp"] + self.hp_bonus)
-            self._log_line(f"🧪 You use {item_name} — {message}")
-            self._monster_turn()
-        else:
-            self._log_line(f"❌ Couldn't use {item_name}: {message}")
+
+        def _resolve():
+            ok, message = self.game.use_item(self.user_id, self.display_name, item_name)
+            if ok:
+                self.potions_used += 1
+                fresh = self.game.get_player_stats(self.user_id, self.display_name)
+                self.player_hp = min(self.player_max_hp, fresh["hp"] + self.hp_bonus)
+                self._log_line(f"🧪 You use {item_name} — {message}")
+                self._monster_turn()
+            else:
+                self._log_line(f"❌ Couldn't use {item_name}: {message}")
+
+        await asyncio.to_thread(_resolve)
         self._finish_round()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def on_timeout(self):
         if self.status == "fighting":
             self.status = "fled"
-            self._end_run()
+            await asyncio.to_thread(self._end_run)
         for child in self.children:
             child.disabled = True
         if self.message is not None:
             try:
-                await self.message.edit(embed=self.build_embed(), view=self)
+                embed = await asyncio.to_thread(self.build_embed)
+                await self.message.edit(embed=embed, view=self)
             except discord.HTTPException:
                 pass
 

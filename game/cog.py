@@ -1,3 +1,4 @@
+import asyncio
 import time
 from typing import Optional
 
@@ -120,7 +121,7 @@ class GameCog(commands.Cog):
 
     @tasks.loop(seconds=WORLD_BOSS_TICK_INTERVAL_SECONDS)
     async def world_boss_tick(self):
-        spawned = self.game.maybe_spawn_world_boss()
+        spawned = await asyncio.to_thread(self.game.maybe_spawn_world_boss)
         if spawned:
             await self._announce_world_boss_spawn(spawned)
 
@@ -137,7 +138,7 @@ class GameCog(commands.Cog):
 
     @tasks.loop(seconds=SPLIT_BODY_TICK_INTERVAL_SECONDS)
     async def split_body_tick(self):
-        for player in self.game.get_ready_split_body_players():
+        for player in await asyncio.to_thread(self.game.get_ready_split_body_players):
             await self._dm_split_body_ready(player)
 
     @split_body_tick.before_loop
@@ -159,7 +160,7 @@ class GameCog(commands.Cog):
         except discord.HTTPException:
             pass
         finally:
-            self.game.db.mark_split_body_notified(player["user_id"])
+            await asyncio.to_thread(self.game.db.mark_split_body_notified, player["user_id"])
 
     async def _announce_world_boss_spawn(self, boss: dict):
         if WORLD_BOSS_ANNOUNCE_CHANNEL_ID is None:
@@ -246,12 +247,12 @@ class GameCog(commands.Cog):
 
     @tasks.loop(seconds=TOURNAMENT_TICK_INTERVAL_SECONDS)
     async def tournament_tick(self):
-        result = self.game.resolve_tournament_if_ready()
+        result = await asyncio.to_thread(self.game.resolve_tournament_if_ready)
         if result and result["outcome"] == "completed":
             await self._announce_tournament_result(result)
         elif result and result["outcome"] == "cancelled":
             await self._announce_tournament_cancelled(result)
-        opened = self.game.maybe_open_tournament()
+        opened = await asyncio.to_thread(self.game.maybe_open_tournament)
         if opened:
             await self._announce_tournament_signup_open(opened)
 
@@ -266,7 +267,7 @@ class GameCog(commands.Cog):
 
     @tasks.loop(seconds=TRADE_TIMEOUT_TICK_INTERVAL_SECONDS)
     async def trade_timeout_tick(self):
-        for trade in self.game.expire_stale_trades():
+        for trade in await asyncio.to_thread(self.game.expire_stale_trades):
             await self._dm_trade_timeout(trade)
 
     @trade_timeout_tick.before_loop
@@ -365,7 +366,7 @@ class GameCog(commands.Cog):
         if member.guild.id != GUILD_ID:
             return
 
-        player = self.db.get_or_create_player(member.id, member.display_name)
+        player = await asyncio.to_thread(self.db.get_or_create_player, member.id, member.display_name)
         welcome_message = (
             f"Welcome to the game, {member.display_name}! "
             f"Your aptitude is **{player['aptitude']}**/100 — the higher it is, the faster you gain Qi.\n"
@@ -382,19 +383,22 @@ class GameCog(commands.Cog):
     @app_commands.command(name="join", description="Create or view your character")
     @app_commands.guilds(GUILD)
     async def join(self, interaction: discord.Interaction):
-        view = JoinView(interaction.user.id, self.game, interaction.user.display_name, interaction.user.display_avatar.url)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(
+            JoinView, interaction.user.id, self.game, interaction.user.display_name, interaction.user.display_avatar.url,
+        )
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="choose_class", description="One-time: pick your combat class, if your character predates classes")
     @app_commands.describe(class_name="Tank, Support, or Frostbinder")
     @app_commands.choices(class_name=[app_commands.Choice(name=f"{cls.emoji} {cls.name} ({cls.role})", value=cls.name) for cls in CLASSES.values()])
     @app_commands.guilds(GUILD)
     async def choose_class(self, interaction: discord.Interaction, class_name: app_commands.Choice[str]):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message("Choose your class as part of `/join` character creation instead.", ephemeral=True)
             return
-        ok, message = self.game.set_class(interaction.user.id, interaction.user.display_name, class_name.value)
+        ok, message = await asyncio.to_thread(self.game.set_class, interaction.user.id, interaction.user.display_name, class_name.value)
         await interaction.response.send_message(message, ephemeral=True)
 
     @app_commands.command(name="change_path", description="Switch cultivation path (Righteous/Demonic/Rogue) — costs qi and limited uses")
@@ -402,59 +406,66 @@ class GameCog(commands.Cog):
     @app_commands.choices(path_name=[app_commands.Choice(name=path.name, value=path.name) for path in PATHS.values()])
     @app_commands.guilds(GUILD)
     async def change_path(self, interaction: discord.Interaction, path_name: app_commands.Choice[str]):
-        ok, message = self.game.change_cultivation_path(interaction.user.id, interaction.user.display_name, path_name.value)
+        ok, message = await asyncio.to_thread(
+            self.game.change_cultivation_path, interaction.user.id, interaction.user.display_name, path_name.value,
+        )
         await interaction.response.send_message(message, ephemeral=True)
 
     @app_commands.command(name="tutorial", description="Learn how to play — a guided tour of all the commands")
     @app_commands.guilds(GUILD)
     async def tutorial(self, interaction: discord.Interaction):
         view = TutorialView(interaction.user.id, interaction.user.display_name)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="shop", description="Spend spirit stones on Root/Physique rerolls")
     @app_commands.guilds(GUILD)
     async def shop(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = ShopView(interaction.user.id, self.game, interaction.user.display_name)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(ShopView, interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="premium", description="Auto-reroll Root/Physique until you hit your target tier, or spend spirit stones to change your Race")
     @app_commands.guilds(GUILD)
     async def premium(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = PremiumView(interaction.user.id, self.game, interaction.user.display_name)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(PremiumView, interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="upgrade_gu", description="Fuse duplicate Gu into a higher quality, or break unwanted ones down for spirit stones")
     @app_commands.guilds(GUILD)
     async def upgrade_gu(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = GuUpgradeView(interaction.user.id, self.game, interaction.user.display_name)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(GuUpgradeView, interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="gu", description="View the Gu you own, their quality, and their effect")
     @app_commands.guilds(GUILD)
     async def gu(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = GuCollectionView(interaction.user.id, self.game, interaction.user.display_name)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(GuCollectionView, interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="verify", description="Assign yourself a Discord role matching your current cultivation rank")
     @app_commands.guilds(GUILD)
     async def verify(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
@@ -495,21 +506,22 @@ class GameCog(commands.Cog):
     @app_commands.command(name="killer_move", description="Assemble a core Gu + 10 Gu into a procedurally-generated Killer Move")
     @app_commands.guilds(GUILD)
     async def killer_move(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = KillerMoveView(interaction.user.id, self.game, interaction.user.display_name)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(KillerMoveView, interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="use_support_move", description="Activate your equipped Support Killer Move (essence/cultivation/loot boost)")
     @app_commands.guilds(GUILD)
     async def use_support_move(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        ok, message = self.game.activate_support_killer_move(interaction.user.id, interaction.user.display_name)
+        ok, message = await asyncio.to_thread(self.game.activate_support_killer_move, interaction.user.id, interaction.user.display_name)
         await interaction.response.send_message(message, ephemeral=not ok)
 
     @app_commands.command(name="profile", description="Show your profile, or someone else's")
@@ -517,14 +529,15 @@ class GameCog(commands.Cog):
     @app_commands.guilds(GUILD)
     async def profile(self, interaction: discord.Interaction, user: Optional[discord.Member] = None):
         target = user or interaction.user
-        player = self.game.get_player_stats(target.id, target.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, target.id, target.display_name)
         if not player["character_confirmed"]:
             message = NOT_CONFIRMED_MESSAGE if target.id == interaction.user.id else f"{target.display_name} hasn't finished character creation yet."
             await interaction.response.send_message(message, ephemeral=True)
             return
-        player, _ = self.db.settle_qi(target.id)
-        player = self.db.settle_hp_regen(target.id)
-        view = ProfileView(
+        player, _ = await asyncio.to_thread(self.db.settle_qi, target.id)
+        player = await asyncio.to_thread(self.db.settle_hp_regen, target.id)
+        view = await asyncio.to_thread(
+            ProfileView,
             target.id,
             self.game,
             player,
@@ -532,16 +545,17 @@ class GameCog(commands.Cog):
             target.display_avatar.url,
             viewer_id=interaction.user.id,
         )
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="cultivate", description="Cultivate to gain Qi")
     @app_commands.guilds(GUILD)
     async def cultivate(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        player, gained = self.game.cultivate(interaction.user.id, interaction.user.display_name)
+        player, gained = await asyncio.to_thread(self.game.cultivate, interaction.user.id, interaction.user.display_name)
         embed = discord.Embed(
             title=f"{interaction.user.display_name} cultivates...",
             description="You circulate your qi, drawing in the ambient energy around you.",
@@ -567,13 +581,13 @@ class GameCog(commands.Cog):
     @app_commands.command(name="qi", description="Show your Qi progress, rate, and breakthrough estimate")
     @app_commands.guilds(GUILD)
     async def qi(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
 
-        self.db.settle_qi(interaction.user.id)  # bank latest accrual before reporting
-        status = self.game.get_qi_status(interaction.user.id, interaction.user.display_name)
+        await asyncio.to_thread(self.db.settle_qi, interaction.user.id)  # bank latest accrual before reporting
+        status = await asyncio.to_thread(self.game.get_qi_status, interaction.user.id, interaction.user.display_name)
         p = status["player"]
 
         if status["at_max_realm"]:
@@ -648,22 +662,23 @@ class GameCog(commands.Cog):
     @app_commands.command(name="balance", description="Show your primeval essence, Qi progress to your next realm, and spirit stones")
     @app_commands.guilds(GUILD)
     async def balance(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = BalanceView(interaction.user.id, self.game, interaction.user.display_name)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(BalanceView, interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="breakthrough", description="Attempt a breakthrough to the next cultivation realm")
     @app_commands.guilds(GUILD)
     async def breakthrough(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
 
-        result = self.game.attempt_breakthrough(interaction.user.id, interaction.user.display_name)
+        result = await asyncio.to_thread(self.game.attempt_breakthrough, interaction.user.id, interaction.user.display_name)
 
         if result["outcome"] == "max_realm":
             await interaction.response.send_message("You've reached the peak of known cultivation... for now.", ephemeral=True)
@@ -728,49 +743,54 @@ class GameCog(commands.Cog):
     @app_commands.command(name="inventory", description="View and use your items")
     @app_commands.guilds(GUILD)
     async def inventory(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = InventoryView(interaction.user.id, self.game, interaction.user.display_name)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(InventoryView, interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="equipment", description="View and manage your equipped gear")
     @app_commands.guilds(GUILD)
     async def equipment(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        player = self.db.settle_hp_regen(interaction.user.id)
-        view = EquipmentView(interaction.user.id, self.game, player, interaction.user.display_name, interaction.user.display_avatar.url)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        player = await asyncio.to_thread(self.db.settle_hp_regen, interaction.user.id)
+        view = await asyncio.to_thread(
+            EquipmentView, interaction.user.id, self.game, player, interaction.user.display_name, interaction.user.display_avatar.url,
+        )
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="avatar", description="View and manage your Nascent Soul avatar")
     @app_commands.guilds(GUILD)
     async def avatar(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        if not self.game.is_avatar_unlocked(interaction.user.id, interaction.user.display_name):
+        if not await asyncio.to_thread(self.game.is_avatar_unlocked, interaction.user.id, interaction.user.display_name):
             await interaction.response.send_message(
                 "🔒 Your Nascent Soul avatar awakens once you reach **Nascent Soul** realm — keep cultivating!",
                 ephemeral=True,
             )
             return
-        view = AvatarView(interaction.user.id, self.game, interaction.user.display_name, interaction.user.display_avatar.url)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(AvatarView, interaction.user.id, self.game, interaction.user.display_name, interaction.user.display_avatar.url)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
 
     @app_commands.command(name="split_body", description="Send your Nascent Soul avatar to search for loot for 3 hours")
     @app_commands.guilds(GUILD)
     async def split_body(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        if not self.game.is_avatar_unlocked(interaction.user.id, interaction.user.display_name):
+        if not await asyncio.to_thread(self.game.is_avatar_unlocked, interaction.user.id, interaction.user.display_name):
             await interaction.response.send_message(
                 "🔒 Your Nascent Soul avatar awakens once you reach **Nascent Soul** realm — keep cultivating!",
                 ephemeral=True,
@@ -782,8 +802,9 @@ class GameCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        view = SplitBodyView(interaction.user.id, self.game, interaction.user.display_name)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(SplitBodyView, interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
 
     @app_commands.command(
@@ -792,25 +813,27 @@ class GameCog(commands.Cog):
     )
     @app_commands.guilds(GUILD)
     async def search_forgotten_blessed_land(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        ok, message, board = self.game.start_treasure_hunt(interaction.user.id, interaction.user.display_name)
+        ok, message, board = await asyncio.to_thread(self.game.start_treasure_hunt, interaction.user.id, interaction.user.display_name)
         if not ok:
             await interaction.response.send_message(message, ephemeral=True)
             return
-        view = TreasureHuntView(interaction.user.id, self.game, interaction.user.display_name, board)
-        await interaction.response.send_message(content=message, embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(TreasureHuntView, interaction.user.id, self.game, interaction.user.display_name, board)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(content=message, embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
 
     # -- Equipment presets (save/restore a full loadout by name — /preset_save afk, /preset_load
     # raid, etc.) -----------------------------------------------------------------------------
 
     async def _preset_name_autocomplete(self, interaction: discord.Interaction, current: str):
+        presets = await asyncio.to_thread(self.game.get_equipment_presets, interaction.user.id)
         return [
             app_commands.Choice(name=p["display_name"], value=p["display_name"])
-            for p in self.game.get_equipment_presets(interaction.user.id)
+            for p in presets
             if current.lower() in p["display_name"].lower()
         ][:25]
 
@@ -818,11 +841,11 @@ class GameCog(commands.Cog):
     @app_commands.guilds(GUILD)
     @app_commands.describe(preset_name="A name for this preset, e.g. afk / raid / farm")
     async def preset_save(self, interaction: discord.Interaction, preset_name: str):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        ok, message = self.game.save_equipment_preset(interaction.user.id, interaction.user.display_name, preset_name)
+        ok, message = await asyncio.to_thread(self.game.save_equipment_preset, interaction.user.id, interaction.user.display_name, preset_name)
         await interaction.response.send_message(message, ephemeral=not ok)
 
     @app_commands.command(name="preset_load", description="Re-equip a saved gear + manual preset")
@@ -830,11 +853,11 @@ class GameCog(commands.Cog):
     @app_commands.describe(preset_name="Which saved preset to load")
     @app_commands.autocomplete(preset_name=_preset_name_autocomplete)
     async def preset_load(self, interaction: discord.Interaction, preset_name: str):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        result = self.game.apply_equipment_preset(interaction.user.id, interaction.user.display_name, preset_name)
+        result = await asyncio.to_thread(self.game.apply_equipment_preset, interaction.user.id, interaction.user.display_name, preset_name)
         if not result["ok"]:
             await interaction.response.send_message(f"No preset named **{result['display_name']}** — check `/preset_list`.", ephemeral=True)
             return
@@ -853,11 +876,11 @@ class GameCog(commands.Cog):
     @app_commands.command(name="preset_list", description="List your saved equipment presets")
     @app_commands.guilds(GUILD)
     async def preset_list(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        presets = self.game.get_equipment_presets(interaction.user.id)
+        presets = await asyncio.to_thread(self.game.get_equipment_presets, interaction.user.id)
         if not presets:
             await interaction.response.send_message("You haven't saved any presets yet — try `/preset_save afk`.", ephemeral=True)
             return
@@ -874,11 +897,11 @@ class GameCog(commands.Cog):
     @app_commands.describe(preset_name="Which saved preset to delete")
     @app_commands.autocomplete(preset_name=_preset_name_autocomplete)
     async def preset_delete(self, interaction: discord.Interaction, preset_name: str):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        ok, message = self.game.delete_equipment_preset(interaction.user.id, preset_name)
+        ok, message = await asyncio.to_thread(self.game.delete_equipment_preset, interaction.user.id, preset_name)
         await interaction.response.send_message(message, ephemeral=not ok)
 
     @app_commands.command(name="hunt", description="Hunt a spirit beast")
@@ -886,31 +909,34 @@ class GameCog(commands.Cog):
     @app_commands.choices(realm=REALM_CHOICES)
     @app_commands.guilds(GUILD)
     async def hunt(self, interaction: discord.Interaction, realm: Optional[app_commands.Choice[str]] = None):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
         great_realm_index = int(realm.value) if realm else _default_great_realm_index(player)
         monster_name = hunt_monster_name_for_realm(great_realm_index)
-        region_modifiers = self.game.region_encounter_modifiers(interaction.user.id, interaction.user.display_name)
-        view = HuntView(
+        region_modifiers = await asyncio.to_thread(self.game.region_encounter_modifiers, interaction.user.id, interaction.user.display_name)
+        view = await asyncio.to_thread(
+            HuntView,
             interaction.user.id, self.game, player, interaction.user.display_name, interaction.user.display_avatar.url,
             monster_name, region_modifiers,
         )
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
-        notice = _region_find_notice(self.game.maybe_trigger_region_discovery(interaction.user.id, interaction.user.display_name))
+        region_find = await asyncio.to_thread(self.game.maybe_trigger_region_discovery, interaction.user.id, interaction.user.display_name)
+        notice = _region_find_notice(region_find)
         if notice:
             await interaction.followup.send(notice, ephemeral=True)
 
     @app_commands.command(name="pvp", description="Duel another cultivator (30m cooldown) — a nominal spirit stone reward for winning")
     @app_commands.guilds(GUILD)
     async def pvp(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        result = self.game.start_pvp(interaction.user.id, interaction.user.display_name)
+        result = await asyncio.to_thread(self.game.start_pvp, interaction.user.id, interaction.user.display_name)
         if not result["ok"]:
             if result.get("reason") == "no_opponents":
                 await interaction.response.send_message(
@@ -923,21 +949,23 @@ class GameCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        view = PvPView(
+        view = await asyncio.to_thread(
+            PvPView,
             interaction.user.id, self.game, player, interaction.user.display_name, interaction.user.display_avatar.url,
             result["opponent_name"], result["opponent_stats"], result["is_real"],
         )
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
 
     @app_commands.command(name="rest", description="Heal up and pick up a few spirit stones (30m cooldown)")
     @app_commands.guilds(GUILD)
     async def rest(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        result = self.game.rest(interaction.user.id, interaction.user.display_name)
+        result = await asyncio.to_thread(self.game.rest, interaction.user.id, interaction.user.display_name)
         if not result["ok"]:
             await interaction.response.send_message(
                 f"🛌 You're not tired yet — try again in **{format_duration(result['remaining_seconds'])}**.",
@@ -954,11 +982,11 @@ class GameCog(commands.Cog):
     @app_commands.command(name="meditate", description="Restore essence and HP, and gain a bit of qi (30m cooldown)")
     @app_commands.guilds(GUILD)
     async def meditate(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        result = self.game.meditate(interaction.user.id, interaction.user.display_name)
+        result = await asyncio.to_thread(self.game.meditate, interaction.user.id, interaction.user.display_name)
         if not result["ok"]:
             await interaction.response.send_message(
                 f"🧘 Your mind is still settling — try again in **{format_duration(result['remaining_seconds'])}**.",
@@ -978,36 +1006,39 @@ class GameCog(commands.Cog):
     @app_commands.choices(realm=REALM_CHOICES)
     @app_commands.guilds(GUILD)
     async def raid(self, interaction: discord.Interaction, realm: Optional[app_commands.Choice[str]] = None):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
         great_realm_index = int(realm.value) if realm else _default_great_realm_index(player)
         boss_name = raid_boss_name_for_realm(great_realm_index)
-        region_modifiers = self.game.region_encounter_modifiers(interaction.user.id, interaction.user.display_name)
-        view = RaidView(self.game, boss_name, stat_multiplier=region_modifiers["stat_multiplier"])
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        region_modifiers = await asyncio.to_thread(self.game.region_encounter_modifiers, interaction.user.id, interaction.user.display_name)
+        view = await asyncio.to_thread(RaidView, self.game, boss_name, stat_multiplier=region_modifiers["stat_multiplier"])
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
-        notice = _region_find_notice(self.game.maybe_trigger_region_discovery(interaction.user.id, interaction.user.display_name))
+        region_find = await asyncio.to_thread(self.game.maybe_trigger_region_discovery, interaction.user.id, interaction.user.display_name)
+        notice = _region_find_notice(region_find)
         if notice:
             await interaction.followup.send(notice, ephemeral=True)
 
     @app_commands.command(name="mine", description="Strike a 5-node ore vein (15m cooldown, Miner rank boosts yield, Luck boosts tier)")
     @app_commands.guilds(GUILD)
     async def mine(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        result = self.game.start_mining_vein(interaction.user.id, interaction.user.display_name)
+        result = await asyncio.to_thread(self.game.start_mining_vein, interaction.user.id, interaction.user.display_name)
         if not result["ok"]:
             await interaction.response.send_message(
                 f"⛏️ Your last dig is still paying off — try again in **{format_duration(result['remaining_seconds'])}**.",
                 ephemeral=True,
             )
             return
-        view = MiningVeinView(interaction.user.id, self.game, interaction.user.display_name, result["nodes"])
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(MiningVeinView, interaction.user.id, self.game, interaction.user.display_name, result["nodes"])
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
         notice = _region_find_notice(result.get("region_find"))
         if notice:
@@ -1016,19 +1047,20 @@ class GameCog(commands.Cog):
     @app_commands.command(name="gather", description="Forage a 5-node herb patch (15m cooldown, Gatherer rank boosts yield, Luck boosts tier)")
     @app_commands.guilds(GUILD)
     async def gather(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        result = self.game.start_gathering_patch(interaction.user.id, interaction.user.display_name)
+        result = await asyncio.to_thread(self.game.start_gathering_patch, interaction.user.id, interaction.user.display_name)
         if not result["ok"]:
             await interaction.response.send_message(
                 f"🌿 The undergrowth needs time to recover — try again in **{format_duration(result['remaining_seconds'])}**.",
                 ephemeral=True,
             )
             return
-        view = GatheringPatchView(interaction.user.id, self.game, interaction.user.display_name, result["nodes"])
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(GatheringPatchView, interaction.user.id, self.game, interaction.user.display_name, result["nodes"])
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
         notice = _region_find_notice(result.get("region_find"))
         if notice:
@@ -1037,19 +1069,20 @@ class GameCog(commands.Cog):
     @app_commands.command(name="explore", description="Hunt down a 5-find trail (15m cooldown — Luck and Explorer rank improve your odds)")
     @app_commands.guilds(GUILD)
     async def explore(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        result = self.game.start_exploration_hunt(interaction.user.id, interaction.user.display_name)
+        result = await asyncio.to_thread(self.game.start_exploration_hunt, interaction.user.id, interaction.user.display_name)
         if not result["ok"]:
             await interaction.response.send_message(
                 f"🧭 You're still resting up from your last trip — try again in **{format_duration(result['remaining_seconds'])}**.",
                 ephemeral=True,
             )
             return
-        view = ExplorationHuntView(interaction.user.id, self.game, interaction.user.display_name, result["nodes"])
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(ExplorationHuntView, interaction.user.id, self.game, interaction.user.display_name, result["nodes"])
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
         notice = _region_find_notice(result.get("region_find"))
         if notice:
@@ -1058,22 +1091,23 @@ class GameCog(commands.Cog):
     @app_commands.command(name="region", description="Choose where your character is in the world (Nascent Soul and below only)")
     @app_commands.guilds(GUILD)
     async def region(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = RegionView(interaction.user.id, self.game, interaction.user.display_name)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(RegionView, interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="cd", description="Show all your active cooldowns and timers")
     @app_commands.guilds(GUILD)
     async def cd(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
 
-        cooldowns = self.game.get_cooldowns_status(interaction.user.id, interaction.user.display_name)
+        cooldowns = await asyncio.to_thread(self.game.get_cooldowns_status, interaction.user.id, interaction.user.display_name)
         p = cooldowns["player"]
         embed = discord.Embed(title=f"⏱️ {interaction.user.display_name}'s Timers", color=discord.Color.dark_teal())
 
@@ -1090,7 +1124,7 @@ class GameCog(commands.Cog):
             inline=False,
         )
 
-        search_status = self.game.get_search_status(interaction.user.id, interaction.user.display_name)
+        search_status = await asyncio.to_thread(self.game.get_search_status, interaction.user.id, interaction.user.display_name)
         if search_status["charges"] > 0:
             search_line = f"🔍 **Search**: ✅ {search_status['charges']}/{search_status['max_charges']} charges"
         else:
@@ -1170,7 +1204,7 @@ class GameCog(commands.Cog):
         # Summarized by state rather than one line per plot — with up to 13 plots unlocked
         # at the highest realms, a full per-plot listing would badly clutter this embed.
         # What actually matters at a glance is whether anything needs attention right now.
-        farm_overview = self.game.get_farm_overview(interaction.user.id, interaction.user.display_name)
+        farm_overview = await asyncio.to_thread(self.game.get_farm_overview, interaction.user.id, interaction.user.display_name)
         ready_slots = [slot for slot in farm_overview["slots"] if slot["state"] == "ready"]
         growing_slots = [slot for slot in farm_overview["slots"] if slot["state"] == "growing"]
         empty_slots = [slot for slot in farm_overview["slots"] if slot["state"] == "empty"]
@@ -1187,7 +1221,7 @@ class GameCog(commands.Cog):
             farm_lines.append("No farm plots yet.")
         embed.add_field(name=f"Farm Plots ({farm_overview['max_slots']})", value="\n".join(farm_lines), inline=False)
 
-        buffs = self.db.get_active_buffs(interaction.user.id)
+        buffs = await asyncio.to_thread(self.db.get_active_buffs, interaction.user.id)
         now_ts = int(time.time())
         if buffs:
             # Same grouping as /qi's Active Buffs field (see the comment there) — each pill
@@ -1214,83 +1248,91 @@ class GameCog(commands.Cog):
         # No character_confirmed gate, deliberately — unlike almost every other command,
         # looking at the leaderboard doesn't touch your own state, and a brand new player
         # deciding whether to /join might reasonably want to see it first.
-        view = LeaderboardView(self.game)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(LeaderboardView, self.game)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="tournament", description="Sign up for a PvP tournament — top 3 get rewards, everyone else gets stones by rank")
     @app_commands.guilds(GUILD)
     async def tournament(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = TournamentView(self.game)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(TournamentView, self.game)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="farm", description="Plant and harvest herbs across your farm plots (more plots unlock at higher realms)")
     @app_commands.guilds(GUILD)
     async def farm(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = FarmView(interaction.user.id, self.game, interaction.user.display_name)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(FarmView, interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="alchemy", description="Craft a pill from herbs — choose a type, then a tier")
     @app_commands.guilds(GUILD)
     async def alchemy(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = AlchemyView(interaction.user.id, self.game, interaction.user.display_name)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(AlchemyView, interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="blacksmith", description="Forge a weapon or armor piece from ore, beast material, and a beast core")
     @app_commands.guilds(GUILD)
     async def blacksmith(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = BlacksmithView(interaction.user.id, self.game, interaction.user.display_name)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(BlacksmithView, interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="weapons", description="List every weapon, head, and body piece you've forged or found, and dismantle ones you don't want")
     @app_commands.guilds(GUILD)
     async def weapons(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = WeaponsView(interaction.user.id, self.game, interaction.user.display_name)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(WeaponsView, interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="accessories", description="View, attune, activate, or salvage your accessories and artifacts")
     @app_commands.guilds(GUILD)
     async def accessories(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = AccessoriesView(interaction.user.id, self.game, interaction.user.display_name)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(AccessoriesView, interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="sell", description="Sell items to an NPC vendor for spirit stones — declutter your inventory")
     @app_commands.guilds(GUILD)
     async def sell(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = SellView(interaction.user.id, self.game, interaction.user.display_name)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(SellView, interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="dao_path", description="View and allocate your Spirit Severing Dao Marks across the 14 Dao Paths")
     @app_commands.guilds(GUILD)
     async def dao_path(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
@@ -1300,13 +1342,14 @@ class GameCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        view = DaoPathView(interaction.user.id, self.game, interaction.user.display_name)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(DaoPathView, interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="transmute", description="Convert an item into a random item of the same tier (Transformation Dao Path)")
     @app_commands.guilds(GUILD)
     async def transmute(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
@@ -1316,39 +1359,42 @@ class GameCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        view = TransmuteView(interaction.user.id, self.game, interaction.user.display_name)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(TransmuteView, interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="study", description="View and manage your profession studies")
     @app_commands.guilds(GUILD)
     async def study(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = StudyView(interaction.user.id, self.game, interaction.user.display_name)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(StudyView, interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     # -- Manual/Inheritance/Secret Realm/Dream Realm system -------------------------------
 
     @app_commands.command(name="search", description="Search your region for clues, encounters, and rare discoveries (charges recharge over time)")
     @app_commands.guilds(GUILD)
     async def search(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = SearchView(interaction.user.id, self.game, interaction.user.display_name)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(SearchView, interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="search_status", description="Show your search charges, momentum, and active discovery")
     @app_commands.guilds(GUILD)
     async def search_status(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        status = self.game.get_search_status(interaction.user.id, interaction.user.display_name)
+        status = await asyncio.to_thread(self.game.get_search_status, interaction.user.id, interaction.user.display_name)
         embed = discord.Embed(title=f"🔍 {interaction.user.display_name}'s Search Status", color=discord.Color.dark_teal())
         recharge_text = f" — next in {format_duration(status['seconds_to_next_charge'])}" if status["charges"] < status["max_charges"] else ""
         embed.add_field(name="Charges", value=f"{status['charges']}/{status['max_charges']}{recharge_text}", inline=False)
@@ -1364,31 +1410,33 @@ class GameCog(commands.Cog):
     @app_commands.command(name="discovery", description="Enter your active inheritance, secret realm, dream realm, or battlefield")
     @app_commands.guilds(GUILD)
     async def discovery(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        result = self.game.enter_discovery(interaction.user.id, interaction.user.display_name)
+        result = await asyncio.to_thread(self.game.enter_discovery, interaction.user.id, interaction.user.display_name)
         if not result["ok"]:
             if result["reason"] == "expired":
                 await interaction.response.send_message("That discovery expired before you got to it. Run `/search` to find another.", ephemeral=True)
             else:
                 await interaction.response.send_message("You don't have an active discovery — run `/search` to find one first.", ephemeral=True)
             return
-        view = build_discovery_entry_view(
+        view = await asyncio.to_thread(
+            build_discovery_entry_view,
             interaction.user.id, self.game, interaction.user.display_name, interaction.user.display_avatar.url, result,
         )
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
 
     @app_commands.command(name="battlefield", description="Seek out a battlefield and fight through progressively harder waves (6h cooldown)")
     @app_commands.guilds(GUILD)
     async def battlefield(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        result = self.game.start_battlefield(interaction.user.id, interaction.user.display_name)
+        result = await asyncio.to_thread(self.game.start_battlefield, interaction.user.id, interaction.user.display_name)
         if not result["ok"]:
             if result["reason"] == "cooldown":
                 await interaction.response.send_message(
@@ -1400,11 +1448,13 @@ class GameCog(commands.Cog):
                     "You already have an active discovery waiting — resolve it with `/discovery` first.", ephemeral=True,
                 )
             return
-        view = BattlefieldView(
+        view = await asyncio.to_thread(
+            BattlefieldView,
             interaction.user.id, self.game, player, interaction.user.display_name,
             interaction.user.display_avatar.url, result["discovery"],
         )
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
 
     # -- World Boss (see world_boss.py's own module docstring) -----------------------------
@@ -1449,21 +1499,22 @@ class GameCog(commands.Cog):
     @app_commands.command(name="raidboss", description="Show the current World Boss's status")
     @app_commands.guilds(GUILD)
     async def raidboss(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        status = self.game.get_world_boss_status()
-        await interaction.response.send_message(embed=self._world_boss_status_embed(status, interaction.user.id), ephemeral=False)
+        status = await asyncio.to_thread(self.game.get_world_boss_status)
+        embed = await asyncio.to_thread(self._world_boss_status_embed, status, interaction.user.id)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
 
     @app_commands.command(name="raidboss_attack", description="Attack the current World Boss — every cultivation realm can safely join in")
     @app_commands.guilds(GUILD)
     async def raidboss_attack(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        result = self.game.start_world_boss_attack_session(interaction.user.id, interaction.user.display_name)
+        result = await asyncio.to_thread(self.game.start_world_boss_attack_session, interaction.user.id, interaction.user.display_name)
         if not result["ok"]:
             if result["reason"] == "cooldown":
                 await interaction.response.send_message(
@@ -1474,11 +1525,13 @@ class GameCog(commands.Cog):
                 await interaction.response.send_message("No World Boss is currently active — check back soon with `/raidboss`.", ephemeral=True)
             return
 
-        view = WorldBossView(
+        view = await asyncio.to_thread(
+            WorldBossView,
             interaction.user.id, self.game, interaction.user.display_name,
             interaction.user.display_avatar.url, result["boss"], on_defeat=self._announce_world_boss_defeat,
         )
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
 
     @app_commands.command(name="raidboss_spawn", description="[Admin] Force-spawn a fresh World Boss, ending any current one early")
@@ -1487,9 +1540,10 @@ class GameCog(commands.Cog):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
             return
-        boss = self.game.maybe_spawn_world_boss(force=True)
+        boss = await asyncio.to_thread(self.game.maybe_spawn_world_boss, force=True)
         roster = world_boss.WORLD_BOSSES[boss["boss_key"]]
-        self.db.log_admin_action(
+        await asyncio.to_thread(
+            self.db.log_admin_action,
             interaction.user.id, interaction.user.display_name, 0, "World Boss", "raidboss_spawn", roster["name"],
         )
         await interaction.response.send_message(f"{roster['emoji']} Force-spawned **{roster['name']}**.", ephemeral=True)
@@ -1498,72 +1552,75 @@ class GameCog(commands.Cog):
     @app_commands.command(name="manual", description="Study, refine, assemble, equip, and dismantle cultivation manual pages")
     @app_commands.guilds(GUILD)
     async def manual(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = ManualView(interaction.user.id, self.game, interaction.user.display_name)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(ManualView, interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="trade", description="Offer another player a trade of items and/or spirit stones")
     @app_commands.guilds(GUILD)
     @app_commands.describe(target="The player to trade with")
     async def trade(self, interaction: discord.Interaction, target: discord.Member):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
         if target.bot:
             await interaction.response.send_message("You can't trade with a bot.", ephemeral=True)
             return
-        target_player = self.game.get_player_stats(target.id, target.display_name)
+        target_player = await asyncio.to_thread(self.game.get_player_stats, target.id, target.display_name)
         if not target_player["character_confirmed"]:
             await interaction.response.send_message(f"{target.display_name} hasn't created a character yet.", ephemeral=True)
             return
 
-        error = self.game.can_start_trade(interaction.user.id, target.id)
+        error = await asyncio.to_thread(self.game.can_start_trade, interaction.user.id, target.id)
         if error:
             await interaction.response.send_message(error, ephemeral=True)
             return
 
-        trade_id = self.game.start_trade(interaction.user.id, target.id)
-        view = TradeRequestView(self.game, trade_id, interaction.user, target)
+        trade_id = await asyncio.to_thread(self.game.start_trade, interaction.user.id, target.id)
+        view = await asyncio.to_thread(TradeRequestView, self.game, trade_id, interaction.user, target)
         # A mention inside an embed alone doesn't ping — it has to be in the actual message
         # content for Discord to notify the target.
-        await interaction.response.send_message(content=target.mention, embed=view.build_embed(), view=view)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(content=target.mention, embed=embed, view=view)
         view.message = await interaction.original_response()
 
     @app_commands.command(name="gamble", description="Challenge another player to a winner-take-all dice gamble (1-100, high roll takes both pots)")
     @app_commands.guilds(GUILD)
     @app_commands.describe(target="The player to gamble with")
     async def gamble(self, interaction: discord.Interaction, target: discord.Member):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
         if target.bot:
             await interaction.response.send_message("You can't gamble with a bot.", ephemeral=True)
             return
-        target_player = self.game.get_player_stats(target.id, target.display_name)
+        target_player = await asyncio.to_thread(self.game.get_player_stats, target.id, target.display_name)
         if not target_player["character_confirmed"]:
             await interaction.response.send_message(f"{target.display_name} hasn't created a character yet.", ephemeral=True)
             return
 
-        error = self.game.can_start_trade(interaction.user.id, target.id)
+        error = await asyncio.to_thread(self.game.can_start_trade, interaction.user.id, target.id)
         if error:
             await interaction.response.send_message(error, ephemeral=True)
             return
 
-        trade_id = self.game.start_gamble(interaction.user.id, target.id)
-        view = TradeRequestView(self.game, trade_id, interaction.user, target)
-        await interaction.response.send_message(content=target.mention, embed=view.build_embed(), view=view)
+        trade_id = await asyncio.to_thread(self.game.start_gamble, interaction.user.id, target.id)
+        view = await asyncio.to_thread(TradeRequestView, self.game, trade_id, interaction.user, target)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(content=target.mention, embed=embed, view=view)
         view.message = await interaction.original_response()
 
     @app_commands.command(name="exchange_essence", description="Convert spirit stones into primeval essence")
     @app_commands.describe(amount="How many spirit stones to spend")
     @app_commands.guilds(GUILD)
     async def exchange_essence(self, interaction: discord.Interaction, amount: int):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
@@ -1571,8 +1628,8 @@ class GameCog(commands.Cog):
             await interaction.response.send_message("Amount must be at least 1.", ephemeral=True)
             return
 
-        stones_spent, essence_gained, new_stones, new_essence, max_essence = self.game.exchange_stones_for_essence(
-            interaction.user.id, interaction.user.display_name, amount
+        stones_spent, essence_gained, new_stones, new_essence, max_essence = await asyncio.to_thread(
+            self.game.exchange_stones_for_essence, interaction.user.id, interaction.user.display_name, amount,
         )
         if essence_gained == 0:
             reason = "your primeval essence is already full" if new_essence >= max_essence else "you don't have enough spirit stones"
@@ -1592,7 +1649,7 @@ class GameCog(commands.Cog):
     @app_commands.describe(amount="How much primeval essence to spend")
     @app_commands.guilds(GUILD)
     async def absorb_essence(self, interaction: discord.Interaction, amount: int):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
@@ -1600,8 +1657,8 @@ class GameCog(commands.Cog):
             await interaction.response.send_message("Amount must be at least 1.", ephemeral=True)
             return
 
-        essence_spent, qi_gained, new_essence, new_qi = self.game.consume_essence_for_qi(
-            interaction.user.id, interaction.user.display_name, amount
+        essence_spent, qi_gained, new_essence, new_qi = await asyncio.to_thread(
+            self.game.consume_essence_for_qi, interaction.user.id, interaction.user.display_name, amount,
         )
         if essence_spent == 0:
             await interaction.response.send_message("You don't have any primeval essence to absorb.", ephemeral=True)
@@ -1640,13 +1697,17 @@ class GameCog(commands.Cog):
             return
 
         target = member or interaction.user
-        self.game.get_player_stats(target.id, target.display_name)
-        self.db.add_item(target.id, item_name, quantity)
-        self.db.log_admin_action(
-            interaction.user.id, interaction.user.display_name,
-            target.id, target.display_name,
-            "grant_item", f"{quantity}x {item_name}",
-        )
+
+        def _do_grant():
+            self.game.get_player_stats(target.id, target.display_name)
+            self.db.add_item(target.id, item_name, quantity)
+            self.db.log_admin_action(
+                interaction.user.id, interaction.user.display_name,
+                target.id, target.display_name,
+                "grant_item", f"{quantity}x {item_name}",
+            )
+
+        await asyncio.to_thread(_do_grant)
         await interaction.response.send_message(
             f"Granted **{quantity}x {item_name}** to {target.display_name}.", ephemeral=True
         )
@@ -1663,13 +1724,17 @@ class GameCog(commands.Cog):
             return
 
         target = member or interaction.user
-        self.game.get_player_stats(target.id, target.display_name)
-        self.db.add_spirit_stones(target.id, amount)
-        self.db.log_admin_action(
-            interaction.user.id, interaction.user.display_name,
-            target.id, target.display_name,
-            "grant_stones", f"{amount:,} spirit stones",
-        )
+
+        def _do_grant():
+            self.game.get_player_stats(target.id, target.display_name)
+            self.db.add_spirit_stones(target.id, amount)
+            self.db.log_admin_action(
+                interaction.user.id, interaction.user.display_name,
+                target.id, target.display_name,
+                "grant_stones", f"{amount:,} spirit stones",
+            )
+
+        await asyncio.to_thread(_do_grant)
         await interaction.response.send_message(
             f"Granted **{amount:,}** spirit stones to {target.display_name}.", ephemeral=True
         )
@@ -1683,13 +1748,17 @@ class GameCog(commands.Cog):
             return
 
         target = member or interaction.user
-        self.game.get_player_stats(target.id, target.display_name)
-        self.db.reset_all_cooldowns(target.id)
-        self.db.log_admin_action(
-            interaction.user.id, interaction.user.display_name,
-            target.id, target.display_name,
-            "reset_cooldowns", "all action cooldowns cleared",
-        )
+
+        def _do_reset():
+            self.game.get_player_stats(target.id, target.display_name)
+            self.db.reset_all_cooldowns(target.id)
+            self.db.log_admin_action(
+                interaction.user.id, interaction.user.display_name,
+                target.id, target.display_name,
+                "reset_cooldowns", "all action cooldowns cleared",
+            )
+
+        await asyncio.to_thread(_do_reset)
         await interaction.response.send_message(
             f"Reset all cooldowns for **{target.display_name}** — mine, gather, explore, battlefield, pvp, rest, meditate, "
             f"manual change, region change, and teach (sect + personal).",
@@ -1704,7 +1773,7 @@ class GameCog(commands.Cog):
             await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
             return
         limit = max(1, min(50, limit))
-        entries = self.db.get_audit_log(limit=limit, target_id=member.id if member else None)
+        entries = await asyncio.to_thread(self.db.get_audit_log, limit=limit, target_id=member.id if member else None)
         if not entries:
             await interaction.response.send_message("No matching audit log entries.", ephemeral=True)
             return
@@ -1726,26 +1795,28 @@ class GameCog(commands.Cog):
     # deliberately deferred) -----------------------------------------------------------------
 
     async def _sect_name_autocomplete(self, interaction: discord.Interaction, current: str):
+        all_sects = await asyncio.to_thread(self.db.list_sects)
         return [
             app_commands.Choice(name=f"{sect['name']} ({sect['member_count']}/{sects.MAX_MEMBERS})", value=sect["name"])
-            for sect in self.db.list_sects()
+            for sect in all_sects
             if current.lower() in sect["name"].lower()
         ][:25]
 
     @app_commands.command(name="sect", description="View and manage your sect — buttons are gated by your rank")
     @app_commands.guilds(GUILD)
     async def sect(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = SectView(interaction.user.id, self.game, interaction.user.display_name)
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=False)
+        view = await asyncio.to_thread(SectView, interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @app_commands.command(name="sect_list", description="Browse every sect")
     @app_commands.guilds(GUILD)
     async def sect_list(self, interaction: discord.Interaction):
-        all_sects = self.game.sect_list()
+        all_sects = await asyncio.to_thread(self.game.sect_list)
         if not all_sects:
             await interaction.response.send_message("No sects exist yet — be the first with `/sect_create`!", ephemeral=True)
             return
@@ -1761,11 +1832,11 @@ class GameCog(commands.Cog):
     @app_commands.guilds(GUILD)
     @app_commands.describe(name="Your sect's name")
     async def sect_create(self, interaction: discord.Interaction, name: str):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        ok, message = self.game.sect_create(interaction.user.id, interaction.user.display_name, name)
+        ok, message = await asyncio.to_thread(self.game.sect_create, interaction.user.id, interaction.user.display_name, name)
         await interaction.response.send_message(message, ephemeral=not ok)
 
     @app_commands.command(name="sect_join", description="Apply to join a sect (needs approval from a Vice Leader or Sect Leader)")
@@ -1773,31 +1844,31 @@ class GameCog(commands.Cog):
     @app_commands.describe(name="The sect's name")
     @app_commands.autocomplete(name=_sect_name_autocomplete)
     async def sect_join(self, interaction: discord.Interaction, name: str):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        ok, message = self.game.sect_join(interaction.user.id, interaction.user.display_name, name)
+        ok, message = await asyncio.to_thread(self.game.sect_join, interaction.user.id, interaction.user.display_name, name)
         await interaction.response.send_message(message, ephemeral=not ok)
 
     @app_commands.command(name="sect_cancel_application", description="Cancel your pending sect application")
     @app_commands.guilds(GUILD)
     async def sect_cancel_application(self, interaction: discord.Interaction):
-        ok, message = self.game.sect_cancel_application(interaction.user.id, interaction.user.display_name)
+        ok, message = await asyncio.to_thread(self.game.sect_cancel_application, interaction.user.id, interaction.user.display_name)
         await interaction.response.send_message(message, ephemeral=not ok)
 
     @app_commands.command(name="sect_leave", description="Leave your current sect")
     @app_commands.guilds(GUILD)
     async def sect_leave(self, interaction: discord.Interaction):
-        ok, message = self.game.sect_leave(interaction.user.id, interaction.user.display_name)
+        ok, message = await asyncio.to_thread(self.game.sect_leave, interaction.user.id, interaction.user.display_name)
         await interaction.response.send_message(message, ephemeral=not ok)
 
     @app_commands.command(name="sect_transfer", description="[Sect Leader] Hand leadership to another member")
     @app_commands.guilds(GUILD)
     @app_commands.describe(member="The member to make Sect Leader")
     async def sect_transfer(self, interaction: discord.Interaction, member: discord.Member):
-        ok, message = self.game.sect_transfer_leadership(
-            interaction.user.id, interaction.user.display_name, member.id, member.display_name,
+        ok, message = await asyncio.to_thread(
+            self.game.sect_transfer_leadership, interaction.user.id, interaction.user.display_name, member.id, member.display_name,
         )
         await interaction.response.send_message(message, ephemeral=not ok)
 
@@ -1805,8 +1876,8 @@ class GameCog(commands.Cog):
     @app_commands.guilds(GUILD)
     @app_commands.describe(member="The member to expel")
     async def sect_kick(self, interaction: discord.Interaction, member: discord.Member):
-        ok, message = self.game.sect_kick(
-            interaction.user.id, interaction.user.display_name, member.id, member.display_name,
+        ok, message = await asyncio.to_thread(
+            self.game.sect_kick, interaction.user.id, interaction.user.display_name, member.id, member.display_name,
         )
         await interaction.response.send_message(message, ephemeral=not ok)
 
@@ -1814,8 +1885,8 @@ class GameCog(commands.Cog):
     @app_commands.guilds(GUILD)
     @app_commands.describe(member="The member to promote")
     async def sect_promote(self, interaction: discord.Interaction, member: discord.Member):
-        ok, message = self.game.sect_promote(
-            interaction.user.id, interaction.user.display_name, member.id, member.display_name,
+        ok, message = await asyncio.to_thread(
+            self.game.sect_promote, interaction.user.id, interaction.user.display_name, member.id, member.display_name,
         )
         await interaction.response.send_message(message, ephemeral=not ok)
 
@@ -1823,8 +1894,8 @@ class GameCog(commands.Cog):
     @app_commands.guilds(GUILD)
     @app_commands.describe(member="The member to demote")
     async def sect_demote(self, interaction: discord.Interaction, member: discord.Member):
-        ok, message = self.game.sect_demote(
-            interaction.user.id, interaction.user.display_name, member.id, member.display_name,
+        ok, message = await asyncio.to_thread(
+            self.game.sect_demote, interaction.user.id, interaction.user.display_name, member.id, member.display_name,
         )
         await interaction.response.send_message(message, ephemeral=not ok)
 
@@ -1832,35 +1903,35 @@ class GameCog(commands.Cog):
     @app_commands.guilds(GUILD)
     @app_commands.describe(amount="How many spirit stones to donate")
     async def sect_donate(self, interaction: discord.Interaction, amount: int):
-        ok, message = self.game.sect_donate(interaction.user.id, interaction.user.display_name, amount)
+        ok, message = await asyncio.to_thread(self.game.sect_donate, interaction.user.id, interaction.user.display_name, amount)
         await interaction.response.send_message(message, ephemeral=not ok)
 
     @app_commands.command(name="sect_withdraw", description="[Sect Leader/Vice Leader] Withdraw spirit stones from the treasury")
     @app_commands.guilds(GUILD)
     @app_commands.describe(amount="How many spirit stones to withdraw")
     async def sect_withdraw(self, interaction: discord.Interaction, amount: int):
-        ok, message = self.game.sect_withdraw(interaction.user.id, interaction.user.display_name, amount)
+        ok, message = await asyncio.to_thread(self.game.sect_withdraw, interaction.user.id, interaction.user.display_name, amount)
         await interaction.response.send_message(message, ephemeral=not ok)
 
     @app_commands.command(name="sect_motto", description="[Sect Leader] Set your sect's motto")
     @app_commands.guilds(GUILD)
     @app_commands.describe(motto="The new motto (leave blank to clear it)")
     async def sect_motto(self, interaction: discord.Interaction, motto: str = ""):
-        ok, message = self.game.sect_set_motto(interaction.user.id, interaction.user.display_name, motto)
+        ok, message = await asyncio.to_thread(self.game.sect_set_motto, interaction.user.id, interaction.user.display_name, motto)
         await interaction.response.send_message(message, ephemeral=not ok)
 
     @app_commands.command(name="sect_banner", description="[Sect Leader] Set your sect's banner emoji")
     @app_commands.guilds(GUILD)
     @app_commands.describe(banner="A single emoji to represent your sect")
     async def sect_banner(self, interaction: discord.Interaction, banner: str):
-        ok, message = self.game.sect_set_banner(interaction.user.id, interaction.user.display_name, banner)
+        ok, message = await asyncio.to_thread(self.game.sect_set_banner, interaction.user.id, interaction.user.display_name, banner)
         await interaction.response.send_message(message, ephemeral=not ok)
 
     @app_commands.command(name="sect_rename", description="[Sect Leader] Rename your sect")
     @app_commands.guilds(GUILD)
     @app_commands.describe(name="The sect's new name")
     async def sect_rename(self, interaction: discord.Interaction, name: str):
-        ok, message = self.game.sect_rename(interaction.user.id, interaction.user.display_name, name)
+        ok, message = await asyncio.to_thread(self.game.sect_rename, interaction.user.id, interaction.user.display_name, name)
         await interaction.response.send_message(message, ephemeral=not ok)
 
     # -- Mentor/disciple (Phase 2 — see sects.py's own module docstring for what's simplified
@@ -1870,31 +1941,34 @@ class GameCog(commands.Cog):
     @app_commands.guilds(GUILD)
     @app_commands.describe(member="The sect member to offer mentorship to")
     async def accept_disciple(self, interaction: discord.Interaction, member: discord.Member):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
         if member.id == interaction.user.id:
             await interaction.response.send_message("You can't take yourself as a disciple.", ephemeral=True)
             return
-        ok, reason = self.game.sect_can_offer_disciple(
-            interaction.user.id, interaction.user.display_name, member.id, member.display_name,
+        ok, reason = await asyncio.to_thread(
+            self.game.sect_can_offer_disciple, interaction.user.id, interaction.user.display_name, member.id, member.display_name,
         )
         if not ok:
             await interaction.response.send_message(reason, ephemeral=True)
             return
-        view = MentorRequestView(self.game, interaction.user, member, self.game.sect_accept_disciple, offer_label="sect disciple")
-        await interaction.response.send_message(embed=view.build_embed(), view=view)
+        view = await asyncio.to_thread(
+            MentorRequestView, self.game, interaction.user, member, self.game.sect_accept_disciple, offer_label="sect disciple",
+        )
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view)
         view.message = await interaction.original_response()
 
     @app_commands.command(name="teach", description="Teach every sect AND personal disciple who isn't currently on cooldown, in one go")
     @app_commands.guilds(GUILD)
     async def teach(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        result = self.game.teach_all(interaction.user.id, interaction.user.display_name)
+        result = await asyncio.to_thread(self.game.teach_all, interaction.user.id, interaction.user.display_name)
         if not result["ok"]:
             await interaction.response.send_message(result["reason"], ephemeral=True)
             return
@@ -1950,25 +2024,25 @@ class GameCog(commands.Cog):
     @app_commands.guilds(GUILD)
     @app_commands.describe(disciple="Which of your disciples to release")
     async def release_disciple(self, interaction: discord.Interaction, disciple: discord.Member):
-        ok, message = self.game.sect_release_disciple(
-            interaction.user.id, interaction.user.display_name, disciple.id, disciple.display_name,
+        ok, message = await asyncio.to_thread(
+            self.game.sect_release_disciple, interaction.user.id, interaction.user.display_name, disciple.id, disciple.display_name,
         )
         await interaction.response.send_message(message, ephemeral=not ok)
 
     @app_commands.command(name="leave_master", description="Part ways with your current master")
     @app_commands.guilds(GUILD)
     async def leave_master(self, interaction: discord.Interaction):
-        ok, message = self.game.sect_leave_master(interaction.user.id, interaction.user.display_name)
+        ok, message = await asyncio.to_thread(self.game.sect_leave_master, interaction.user.id, interaction.user.display_name)
         await interaction.response.send_message(message, ephemeral=not ok)
 
     @app_commands.command(name="sect_master", description="See who your sect master is, their realm, and how long you've been their disciple")
     @app_commands.guilds(GUILD)
     async def sect_master(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        info = self.game.get_sect_master_info(interaction.user.id, interaction.user.display_name)
+        info = await asyncio.to_thread(self.game.get_sect_master_info, interaction.user.id, interaction.user.display_name)
         if info is None:
             await interaction.response.send_message(
                 "You don't have a sect master right now — an Elder+ in your sect can take you on with `/accept_disciple`.",
@@ -1989,46 +2063,49 @@ class GameCog(commands.Cog):
     @app_commands.guilds(GUILD)
     @app_commands.describe(member="The player to offer personal mentorship to")
     async def master_offer(self, interaction: discord.Interaction, member: discord.Member):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
         if member.id == interaction.user.id:
             await interaction.response.send_message("You can't take yourself as a disciple.", ephemeral=True)
             return
-        ok, reason = self.game.personal_can_offer_disciple(
-            interaction.user.id, interaction.user.display_name, member.id, member.display_name,
+        ok, reason = await asyncio.to_thread(
+            self.game.personal_can_offer_disciple, interaction.user.id, interaction.user.display_name, member.id, member.display_name,
         )
         if not ok:
             await interaction.response.send_message(reason, ephemeral=True)
             return
-        view = MentorRequestView(self.game, interaction.user, member, self.game.personal_accept_disciple, offer_label="personal disciple")
-        await interaction.response.send_message(embed=view.build_embed(), view=view)
+        view = await asyncio.to_thread(
+            MentorRequestView, self.game, interaction.user, member, self.game.personal_accept_disciple, offer_label="personal disciple",
+        )
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view)
         view.message = await interaction.original_response()
 
     @app_commands.command(name="master_release", description="Release one of your personal disciples")
     @app_commands.guilds(GUILD)
     @app_commands.describe(disciple="Which of your personal disciples to release")
     async def master_release(self, interaction: discord.Interaction, disciple: discord.Member):
-        ok, message = self.game.personal_release_disciple(
-            interaction.user.id, interaction.user.display_name, disciple.id, disciple.display_name,
+        ok, message = await asyncio.to_thread(
+            self.game.personal_release_disciple, interaction.user.id, interaction.user.display_name, disciple.id, disciple.display_name,
         )
         await interaction.response.send_message(message, ephemeral=not ok)
 
     @app_commands.command(name="master_leave", description="Part ways with your personal master")
     @app_commands.guilds(GUILD)
     async def master_leave(self, interaction: discord.Interaction):
-        ok, message = self.game.personal_leave_master(interaction.user.id, interaction.user.display_name)
+        ok, message = await asyncio.to_thread(self.game.personal_leave_master, interaction.user.id, interaction.user.display_name)
         await interaction.response.send_message(message, ephemeral=not ok)
 
     @app_commands.command(name="master", description="See who your personal master is, their realm, and how long you've been their disciple")
     @app_commands.guilds(GUILD)
     async def master(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        info = self.game.get_personal_master_info(interaction.user.id, interaction.user.display_name)
+        info = await asyncio.to_thread(self.game.get_personal_master_info, interaction.user.id, interaction.user.display_name)
         if info is None:
             await interaction.response.send_message(
                 "You don't have a personal master right now — anyone can take you on with `/master_offer`.",
@@ -2049,37 +2126,38 @@ class GameCog(commands.Cog):
     @app_commands.guilds(GUILD)
     @app_commands.describe(member="The player to offer Dao Companionship to")
     async def offer_companion(self, interaction: discord.Interaction, member: discord.Member):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
         if member.id == interaction.user.id:
             await interaction.response.send_message("You can't bond with yourself.", ephemeral=True)
             return
-        ok, reason = self.game.dao_companion_can_offer(
-            interaction.user.id, interaction.user.display_name, member.id, member.display_name,
+        ok, reason = await asyncio.to_thread(
+            self.game.dao_companion_can_offer, interaction.user.id, interaction.user.display_name, member.id, member.display_name,
         )
         if not ok:
             await interaction.response.send_message(reason, ephemeral=True)
             return
-        view = DaoCompanionRequestView(self.game, interaction.user, member, self.game.dao_companion_accept)
-        await interaction.response.send_message(embed=view.build_embed(), view=view)
+        view = await asyncio.to_thread(DaoCompanionRequestView, self.game, interaction.user, member, self.game.dao_companion_accept)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view)
         view.message = await interaction.original_response()
 
     @app_commands.command(name="break_companion", description="End your current Dao Companion bond")
     @app_commands.guilds(GUILD)
     async def break_companion(self, interaction: discord.Interaction):
-        ok, message = self.game.dao_companion_break(interaction.user.id, interaction.user.display_name)
+        ok, message = await asyncio.to_thread(self.game.dao_companion_break, interaction.user.id, interaction.user.display_name)
         await interaction.response.send_message(message, ephemeral=not ok)
 
     @app_commands.command(name="companion", description="See your Dao Companion, how long you've been bonded, and the stat bonus you're getting from them")
     @app_commands.guilds(GUILD)
     async def companion(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        status = self.game.get_dao_companion_status(interaction.user.id, interaction.user.display_name)
+        status = await asyncio.to_thread(self.game.get_dao_companion_status, interaction.user.id, interaction.user.display_name)
         if status is None:
             await interaction.response.send_message(
                 "You don't have a Dao Companion right now — use `/offer_companion` to bond with someone.",
@@ -2106,11 +2184,11 @@ class GameCog(commands.Cog):
     @app_commands.command(name="dc", description="Once a day: trigger a qi burst for you AND your Dao Companion")
     @app_commands.guilds(GUILD)
     async def dc(self, interaction: discord.Interaction):
-        player = self.game.get_player_stats(interaction.user.id, interaction.user.display_name)
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        result = self.game.dao_companion_burst(interaction.user.id, interaction.user.display_name)
+        result = await asyncio.to_thread(self.game.dao_companion_burst, interaction.user.id, interaction.user.display_name)
         if not result["ok"]:
             await interaction.response.send_message(result["reason"], ephemeral=True)
             return

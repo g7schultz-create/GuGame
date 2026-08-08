@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 import discord
@@ -80,18 +81,20 @@ class StudyView(GameView):
 
     def _make_study_callback(self, profession: str):
         async def callback(interaction: discord.Interaction):
-            result = self.game.study(self.user_id, self.display_name, profession)
+            result = await asyncio.to_thread(self.game.study, self.user_id, self.display_name, profession)
             self.last_result = _format_result(result)
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 
     async def _on_cancel(self, interaction: discord.Interaction):
-        result = self.game.cancel_study(self.user_id, self.display_name)
+        result = await asyncio.to_thread(self.game.cancel_study, self.user_id, self.display_name)
         self.last_result = _format_result(result)
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     def build_embed(self) -> discord.Embed:
         player = self.game.get_player_stats(self.user_id, self.display_name)

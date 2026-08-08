@@ -1,3 +1,4 @@
+import asyncio
 import discord
 
 from . import search_data
@@ -104,17 +105,19 @@ class SearchView(GameView):
     async def _on_pick_region(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 0)
         self.selected_region = select.values[0]
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_pick_focus(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 1)
-        self.game.set_search_focus(self.user_id, self.display_name, select.values[0])
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self.game.set_search_focus, self.user_id, self.display_name, select.values[0])
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_search(self, interaction: discord.Interaction):
-        out = self.game.run_search(self.user_id, self.display_name, self.selected_region)
+        out = await asyncio.to_thread(self.game.run_search, self.user_id, self.display_name, self.selected_region)
         if not out["ok"]:
             if out["reason"] == "active_discovery":
                 await interaction.response.send_message("You already have a discovery waiting — use `/discovery` to enter or abandon it first.", ephemeral=True)
@@ -123,28 +126,31 @@ class SearchView(GameView):
             return
         self.last_result = _format_result_text(out)
         self.last_result_is_discovery = out["result"] in (search_data.SPECIAL_RESULTS | {"clue_completed"})
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_enter_discovery(self, interaction: discord.Interaction):
         """Hands this same message straight off to whichever View the active discovery needs
         (DiscoveryView/BattlefieldView/RegionDreamRealmView — see build_discovery_entry_view)
         instead of making the player run a separate /discovery command for a brand-new
         message — the whole point of merging the two."""
-        result = self.game.enter_discovery(self.user_id, self.display_name)
+        result = await asyncio.to_thread(self.game.enter_discovery, self.user_id, self.display_name)
         if not result["ok"]:
             self.last_result = (
                 "That discovery expired before you got to it — Search again to find another."
                 if result["reason"] == "expired" else "You don't have an active discovery."
             )
             self.last_result_is_discovery = False
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
             return
-        new_view = build_discovery_entry_view(
-            self.user_id, self.game, self.display_name, interaction.user.display_avatar.url, result,
+        new_view = await asyncio.to_thread(
+            build_discovery_entry_view, self.user_id, self.game, self.display_name, interaction.user.display_avatar.url, result,
         )
-        await interaction.response.edit_message(embed=new_view.build_embed(), view=new_view)
+        embed = await asyncio.to_thread(new_view.build_embed)
+        await interaction.response.edit_message(embed=embed, view=new_view)
         new_view.message = await interaction.original_response()
 
     def build_embed(self) -> discord.Embed:

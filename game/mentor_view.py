@@ -1,3 +1,5 @@
+import asyncio
+
 import discord
 
 from .base_view import GameView
@@ -36,8 +38,8 @@ class MentorRequestView(GameView):
         if interaction.user.id != self.target.id:
             await interaction.response.send_message("Only the invited player can accept this.", ephemeral=True)
             return
-        ok, message = self.accept_callback(
-            self.master.id, self.master.display_name, self.target.id, self.target.display_name,
+        ok, message = await asyncio.to_thread(
+            self.accept_callback, self.master.id, self.master.display_name, self.target.id, self.target.display_name,
         )
         for child in self.children:
             child.disabled = True

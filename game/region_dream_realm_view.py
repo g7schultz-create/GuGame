@@ -6,6 +6,7 @@ existing narrative-stage /search dream realm (DiscoveryView's room-by-room loop,
 this), there's nothing to walk through room-by-room -- one Attempt rolls the trial and ends it.
 """
 
+import asyncio
 import discord
 
 from . import search_data
@@ -49,35 +50,39 @@ class RegionDreamRealmView(GameView):
         self.add_item(back_button)
 
     async def _on_attempt(self, interaction: discord.Interaction):
-        self.result = self.game.resolve_region_dream_realm(self.user_id, self.display_name, self.discovery)
+        self.result = await asyncio.to_thread(self.game.resolve_region_dream_realm, self.user_id, self.display_name, self.discovery)
         self.finished = True
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_leave(self, interaction: discord.Interaction):
-        self.game.abandon_discovery(self.user_id, self.discovery["discovery_id"])
+        await asyncio.to_thread(self.game.abandon_discovery, self.user_id, self.discovery["discovery_id"])
         self.abandoned = True
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_back_to_search(self, interaction: discord.Interaction):
         """Returns to the Search hub on this same message — see DiscoveryView's identical
         handler for why self.stop() matters here."""
         from .search_view import SearchView  # local import: search_view imports this module
         self.stop()
-        new_view = SearchView(self.user_id, self.game, self.display_name)
-        await interaction.response.edit_message(embed=new_view.build_embed(), view=new_view)
+        new_view = await asyncio.to_thread(SearchView, self.user_id, self.game, self.display_name)
+        embed = await asyncio.to_thread(new_view.build_embed)
+        await interaction.response.edit_message(embed=embed, view=new_view)
         new_view.message = await interaction.original_response()
 
     async def on_timeout(self):
         if not self.finished and not self.abandoned:
-            self.game.abandon_discovery(self.user_id, self.discovery["discovery_id"])
+            await asyncio.to_thread(self.game.abandon_discovery, self.user_id, self.discovery["discovery_id"])
             self.abandoned = True
         for child in self.children:
             child.disabled = True
         if self.message is not None:
             try:
-                await self.message.edit(embed=self.build_embed(), view=self)
+                embed = await asyncio.to_thread(self.build_embed)
+                await self.message.edit(embed=embed, view=self)
             except discord.HTTPException:
                 pass
 

@@ -1,3 +1,4 @@
+import asyncio
 from typing import Optional
 
 import discord
@@ -89,8 +90,9 @@ class GuCollectionView(GameView):
     def _make_filter_callback(self, quality: Optional[str]):
         async def callback(interaction: discord.Interaction):
             self.tier_filter = quality
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
         return callback
 
     def build_embed(self) -> discord.Embed:

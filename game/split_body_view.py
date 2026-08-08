@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 import discord
@@ -68,10 +69,11 @@ class SplitBodyView(GameView):
         self.add_item(button)
 
     async def _on_progress(self, interaction: discord.Interaction):
-        result = self.game.progress_split_body(self.user_id, self.display_name)
+        result = await asyncio.to_thread(self.game.progress_split_body, self.user_id, self.display_name)
         self.last_result = _format_result(result)
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     def build_embed(self) -> discord.Embed:
         player = self.game.get_player_stats(self.user_id, self.display_name)

@@ -1,3 +1,4 @@
+import asyncio
 import time
 from typing import Optional
 
@@ -189,8 +190,9 @@ class ProfileView(GameView):
     def _make_tab_callback(self, key: str):
         async def callback(interaction: discord.Interaction):
             self.active_tab = key
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 
@@ -199,8 +201,9 @@ class ProfileView(GameView):
             self.inventory_category = category
             self.inventory_subcategory = _default_subcategory(category)
             self.inventory_result = None
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 
@@ -209,15 +212,17 @@ class ProfileView(GameView):
         value = select.values[0]
         self.inventory_subcategory = None if value == "none" else value
         self.inventory_result = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_use_item(self, interaction: discord.Interaction):
         select = next(child for child in self.children if isinstance(child, discord.ui.Select))
         item_name = select.values[0]
-        _, self.inventory_result = self.game.use_item(self.user_id, self.display_name, item_name)
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        _, self.inventory_result = await asyncio.to_thread(self.game.use_item, self.user_id, self.display_name, item_name)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     def build_embed(self) -> discord.Embed:
         return {
@@ -581,8 +586,9 @@ class InventoryView(GameView):
             self.active_subcategory = _default_subcategory(category)
             self.selected_item = None
             self.last_result = None
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 
@@ -591,8 +597,9 @@ class InventoryView(GameView):
             self.active_subcategory = subcategory
             self.selected_item = None
             self.last_result = None
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 
@@ -600,8 +607,9 @@ class InventoryView(GameView):
         select = next(child for child in self.children if isinstance(child, discord.ui.Select))
         self.selected_item = select.values[0]
         self.last_result = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     def _make_use_callback(self, quantity: int):
         async def callback(interaction: discord.Interaction):
@@ -609,24 +617,29 @@ class InventoryView(GameView):
             # defer first so we have up to 15 minutes to finish instead of Discord's normal
             # 3-second ack window (same fix as premium_view.py's "until broke" reroll; without
             # this, a big stack's Use All raises "Unknown interaction" 404 on edit_message once
-            # the token's already expired).
+            # the token's already expired). Now also off the event loop entirely via
+            # asyncio.to_thread, so hundreds of round-trips no longer freeze every OTHER
+            # user's activity for that same window either.
             await interaction.response.defer()
             item_name = self.selected_item
-            used, message = self.game.use_item_multiple(self.user_id, self.display_name, item_name, quantity)
+            used, message = await asyncio.to_thread(self.game.use_item_multiple, self.user_id, self.display_name, item_name, quantity)
             self.last_result = message if used <= 1 else f"Used **{used}x {item_name}**. {message}"
-            if self.game.get_inventory(self.user_id).get(item_name, 0) <= 0:
+            inventory = await asyncio.to_thread(self.game.get_inventory, self.user_id)
+            if inventory.get(item_name, 0) <= 0:
                 self.selected_item = None
-            self._build_components()
-            await interaction.edit_original_response(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.edit_original_response(embed=embed, view=self)
 
         return callback
 
     async def _on_manage_equipment(self, interaction: discord.Interaction):
         from .equipment_view import EquipmentView  # local import: avoids a circular import at module load time
 
-        player = self.game.get_player_stats(self.user_id, self.display_name)
-        view = EquipmentView(self.user_id, self.game, player, self.display_name, interaction.user.display_avatar.url)
-        await interaction.response.edit_message(embed=view.build_embed(), view=view)
+        player = await asyncio.to_thread(self.game.get_player_stats, self.user_id, self.display_name)
+        view = await asyncio.to_thread(EquipmentView, self.user_id, self.game, player, self.display_name, interaction.user.display_avatar.url)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.edit_message(embed=embed, view=view)
 
     def _equipment_embed(self) -> discord.Embed:
         equipped = self.game.get_equipped(self.user_id)

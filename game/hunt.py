@@ -317,7 +317,8 @@ class HuntView(GameView):
     async def _refresh_message(self):
         if self.message is not None:
             try:
-                await self.message.edit(embed=self.build_embed(), view=self)
+                embed = await asyncio.to_thread(self.build_embed)
+                await self.message.edit(embed=embed, view=self)
             except discord.HTTPException:
                 pass
 
@@ -331,9 +332,12 @@ class HuntView(GameView):
             return  # this round already resolved on its own (or the hunt ended) before this fired
         self.qi_empowered = False  # an unused Empower doesn't carry over into a forced auto-attack
         self._log_line("⏱️ You hesitate too long — your body swings on reflex!")
-        self._do_attack()
+        # _finish_round (and the create_task it can trigger via _start_round_timer) must run
+        # on the main thread -- asyncio.create_task requires a running loop in the CURRENT
+        # thread, which a asyncio.to_thread worker never has.
+        await asyncio.to_thread(self._do_attack)
         self._finish_round()
-        self._build_components()
+        await asyncio.to_thread(self._build_components)
         await self._refresh_message()
 
     # -- combat resolution ---------------------------------------------------
@@ -588,20 +592,25 @@ class HuntView(GameView):
         return used
 
     async def _on_attack(self, interaction: discord.Interaction):
-        empowered = self._consume_empower()
-        if empowered:
-            self._log_line("✨ You channel Qi to guarantee your strike!")
-        self._do_attack(guaranteed_hit=empowered)
+        def _resolve():
+            empowered = self._consume_empower()
+            if empowered:
+                self._log_line("✨ You channel Qi to guarantee your strike!")
+            self._do_attack(guaranteed_hit=empowered)
+
+        await asyncio.to_thread(_resolve)
         self._finish_round()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_observe(self, interaction: discord.Interaction):
         self._log_line("🔍 You study the beast's movements.")
-        self._monster_turn()
+        await asyncio.to_thread(self._monster_turn)
         self._finish_round()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     def _apply_guard_or_potion_qi_restore(self):
         """River Walker-family physique's "Using Guard or a potion restores 3% of max battle
@@ -619,58 +628,72 @@ class HuntView(GameView):
             self._log_line(f"💧 Your physique restores {restored} battle Qi.")
 
     async def _on_guard(self, interaction: discord.Interaction):
-        empowered = self._consume_empower()
-        if empowered:
-            self._log_line("✨ You channel Qi to fully brace against the blow!")
-        else:
-            self._log_line("🛡️ You brace for the next blow.")
-        # Iron Skin-family physique's Guard stack (permanent for the rest of the encounter —
-        # see _monster_turn) and River Walker-family physique's Guard/potion Qi restore.
-        self._guard_stacks = min(2, self._guard_stacks + 1)
-        self._apply_guard_or_potion_qi_restore()
-        self._monster_turn(incoming_reduction=1.0 if empowered else GUARD_DAMAGE_REDUCTION)
+        def _resolve():
+            empowered = self._consume_empower()
+            if empowered:
+                self._log_line("✨ You channel Qi to fully brace against the blow!")
+            else:
+                self._log_line("🛡️ You brace for the next blow.")
+            # Iron Skin-family physique's Guard stack (permanent for the rest of the
+            # encounter — see _monster_turn) and River Walker-family physique's Guard/potion
+            # Qi restore.
+            self._guard_stacks = min(2, self._guard_stacks + 1)
+            self._apply_guard_or_potion_qi_restore()
+            self._monster_turn(incoming_reduction=1.0 if empowered else GUARD_DAMAGE_REDUCTION)
+
+        await asyncio.to_thread(_resolve)
         self._finish_round()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_toggle_empower(self, interaction: discord.Interaction):
         self.qi_empowered = not self.qi_empowered
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_flee(self, interaction: discord.Interaction):
-        stats = self._player_combat_stats()
-        chance = FLEE_BASE_CHANCE + (stats["spd_stat"] - self.monster.spd_stat) * FLEE_CHANCE_PER_SPD_DIFF
-        chance += self._trait_bonus("flee_chance_flat")
-        chance = max(MIN_FLEE_CHANCE, min(MAX_FLEE_CHANCE, chance))
-        fled = random.random() < chance
-        # Void-family physique: once per encounter, a failed flee gets one immediate reroll
-        # at the same chance, before the monster's own punishing counter-attack — the reroll
-        # itself is final either way, same "second result is final" convention this session's
-        # other reroll mechanics already use.
-        if not fled and not self._flee_reroll_used and self._trait_bonus("flee_reroll_once"):
-            self._flee_reroll_used = True
+        def _resolve():
+            stats = self._player_combat_stats()
+            chance = FLEE_BASE_CHANCE + (stats["spd_stat"] - self.monster.spd_stat) * FLEE_CHANCE_PER_SPD_DIFF
+            chance += self._trait_bonus("flee_chance_flat")
+            chance = max(MIN_FLEE_CHANCE, min(MAX_FLEE_CHANCE, chance))
             fled = random.random() < chance
+            # Void-family physique: once per encounter, a failed flee gets one immediate
+            # reroll at the same chance, before the monster's own punishing counter-attack —
+            # the reroll itself is final either way, same "second result is final" convention
+            # this session's other reroll mechanics already use.
+            if not fled and not self._flee_reroll_used and self._trait_bonus("flee_reroll_once"):
+                self._flee_reroll_used = True
+                fled = random.random() < chance
+                if fled:
+                    self._log_line("🌀 Your physique bends space just enough for a second chance!")
             if fled:
-                self._log_line("🌀 Your physique bends space just enough for a second chance!")
-        if fled:
-            self.status = "fled"
-            self._log_line("🏃 You break away and escape the fight!")
-        else:
+                self.status = "fled"
+                self._log_line("🏃 You break away and escape the fight!")
+                return False
             self._log_line("❌ You fail to escape!")
             self._monster_turn()
+            return True
+
+        needs_finish = await asyncio.to_thread(_resolve)
+        if needs_finish:
             self._finish_round()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_gu_ability(self, interaction: discord.Interaction):
-        gu = self._equipped_gu()
+        gu = await asyncio.to_thread(self._equipped_gu)
         ability = gu.active_ability if gu else None
         if not ability:
             await interaction.response.send_message("You have no active Gu ability equipped.", ephemeral=True)
             return
         # Sturdy Frame-family physique's "first Gu activation each encounter costs 1 less
         # Qi" — applied before the affordability check, so it can help you afford the ability.
+        # Matches the pre-refactor behavior exactly: the flag is consumed here, before the
+        # affordability check, not only on a successful cast.
         qi_cost = ability.qi_cost
         if not self._first_gu_use_discounted:
             discount = self._trait_bonus("first_gu_use_discount_flat")
@@ -680,76 +703,88 @@ class HuntView(GameView):
         if self.player_qi < qi_cost:
             await interaction.response.send_message(f"Not enough Qi to use {ability.name} (needs {qi_cost}).", ephemeral=True)
             return
-        self.player_qi -= qi_cost
-        self._persist_qi()
-        self._track_battle_qi_spent(qi_cost)
-        self._log_line(f"🐛 You channel {ability.name}!")
-        result = self._do_attack(str_multiplier=ability.str_multiplier, label=ability.name, is_technique=True)
-        # Moonlight-family physique: the first Gu ability that MISSES each encounter refunds
-        # half its Qi cost — a miss here specifically means "didn't hit" (not a dodge, which
-        # still counts as your Gu doing its job, just evaded).
-        if result is not None and not result.hit and not self._gu_miss_refunded:
-            refund_pct = self._trait_bonus("gu_miss_qi_refund_pct")
-            if refund_pct:
-                self._gu_miss_refunded = True
-                refund = round(qi_cost * refund_pct)
-                if refund > 0:
-                    self.player_qi = min(self.player_max_qi, self.player_qi + refund)
-                    self._persist_qi()
-                    self._log_line(f"🌙 The miss wasn't a total loss — {refund} Qi flows back to you.")
+
+        def _resolve():
+            self.player_qi -= qi_cost
+            self._persist_qi()
+            self._track_battle_qi_spent(qi_cost)
+            self._log_line(f"🐛 You channel {ability.name}!")
+            result = self._do_attack(str_multiplier=ability.str_multiplier, label=ability.name, is_technique=True)
+            # Moonlight-family physique: the first Gu ability that MISSES each encounter
+            # refunds half its Qi cost — a miss here specifically means "didn't hit" (not a
+            # dodge, which still counts as your Gu doing its job, just evaded).
+            if result is not None and not result.hit and not self._gu_miss_refunded:
+                refund_pct = self._trait_bonus("gu_miss_qi_refund_pct")
+                if refund_pct:
+                    self._gu_miss_refunded = True
+                    refund = round(qi_cost * refund_pct)
+                    if refund > 0:
+                        self.player_qi = min(self.player_max_qi, self.player_qi + refund)
+                        self._persist_qi()
+                        self._log_line(f"🌙 The miss wasn't a total loss — {refund} Qi flows back to you.")
+
+        await asyncio.to_thread(_resolve)
         self._finish_round()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_killer_move(self, interaction: discord.Interaction):
         """Additive alongside _on_gu_ability above, not a replacement -- reads the separate
         equipped_combat_killer_move_id column (see GameManager.get_equipped_killer_move), spent
         from the same live self.player_qi tracking Empower/Gu-ability already use."""
-        move = self.game.get_equipped_killer_move(self.player, "combat")
+        move = await asyncio.to_thread(self.game.get_equipped_killer_move, self.player, "combat")
         if not move:
             await interaction.response.send_message("You have no Killer Move equipped in your Combat slot.", ephemeral=True)
             return
-        qi_cost = self.game.killer_move_qi_cost(self.player, move)
+        qi_cost = await asyncio.to_thread(self.game.killer_move_qi_cost, self.player, move)
         if self.player_qi < qi_cost:
             await interaction.response.send_message(f"Not enough Qi to use {move['name']} (needs {qi_cost:,}).", ephemeral=True)
             return
-        self.player_qi -= qi_cost
-        self._persist_qi()
-        self._track_battle_qi_spent(qi_cost)
-        self._log_line(f"🌀 You unleash {move['name']}!")
-        if move["kind"] == "damage":
-            self._do_attack(str_multiplier=move["effects"]["str_multiplier"], label=move["name"], is_technique=True)
-            self._finish_round()
-        else:
-            self.game.apply_killer_move_buff(self.user_id, self.player, move)
-            self._log_line(f"✨ {move['name']} surges through you!")
-            self._monster_turn()
-            self._finish_round()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+        def _resolve():
+            self.player_qi -= qi_cost
+            self._persist_qi()
+            self._track_battle_qi_spent(qi_cost)
+            self._log_line(f"🌀 You unleash {move['name']}!")
+            if move["kind"] == "damage":
+                self._do_attack(str_multiplier=move["effects"]["str_multiplier"], label=move["name"], is_technique=True)
+            else:
+                self.game.apply_killer_move_buff(self.user_id, self.player, move)
+                self._log_line(f"✨ {move['name']} surges through you!")
+                self._monster_turn()
+
+        await asyncio.to_thread(_resolve)
+        self._finish_round()
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_class_ability(self, interaction: discord.Interaction):
         class_name = self.player["character_class"]
-        if class_name == "Tank":
-            self._log_line("🛡️ You brace with unshakable resolve — no ally around to protect but yourself!")
-            self._monster_turn(incoming_reduction=BRACE_DAMAGE_REDUCTION)
-            self._finish_round()
-        elif class_name == "Support":
-            self.inspire_rounds_remaining = INSPIRE_DURATION_ROUNDS
-            self._log_line("✨ You channel Inspire — your own STR and DEF surge!")
-            self._monster_turn()
-            self._finish_round()
-        elif class_name == "Frostbinder":
-            self._log_line("❄️ You channel Freeze!")
-            self._do_attack(str_multiplier=FREEZE_STR_MULTIPLIER, label="Freeze", freeze_chance=FREEZE_PROC_CHANCE, is_technique=True)
-            self._finish_round()
-        else:
+        if class_name not in ("Tank", "Support", "Frostbinder"):
             await interaction.response.send_message(
                 "You haven't chosen a class yet — run `/choose_class` to unlock a class ability.", ephemeral=True,
             )
             return
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+        def _resolve():
+            if class_name == "Tank":
+                self._log_line("🛡️ You brace with unshakable resolve — no ally around to protect but yourself!")
+                self._monster_turn(incoming_reduction=BRACE_DAMAGE_REDUCTION)
+            elif class_name == "Support":
+                self.inspire_rounds_remaining = INSPIRE_DURATION_ROUNDS
+                self._log_line("✨ You channel Inspire — your own STR and DEF surge!")
+                self._monster_turn()
+            else:
+                self._log_line("❄️ You channel Freeze!")
+                self._do_attack(str_multiplier=FREEZE_STR_MULTIPLIER, label="Freeze", freeze_chance=FREEZE_PROC_CHANCE, is_technique=True)
+
+        await asyncio.to_thread(_resolve)
+        self._finish_round()
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_soul_projection(self, interaction: discord.Interaction):
         """Independent of class -- gated on having chosen an avatar soul via /avatar instead.
@@ -768,24 +803,30 @@ class HuntView(GameView):
                 f"Not enough battle Qi for Soul Projection (needs {avatar.SOUL_PROJECTION_QI_COST:,}).", ephemeral=True,
             )
             return
-        self.player_qi -= avatar.SOUL_PROJECTION_QI_COST
-        self._persist_qi()
-        self.soul_projection_rounds_remaining = avatar.soul_projection_duration(soul)
-        self._log_line(f"🌀 You channel {avatar.SOUL_PROJECTION_NAME} — {soul.name}'s power surges through you!")
-        self._do_attack(label=avatar.SOUL_PROJECTION_NAME, is_technique=True)
+
+        def _resolve():
+            self.player_qi -= avatar.SOUL_PROJECTION_QI_COST
+            self._persist_qi()
+            self.soul_projection_rounds_remaining = avatar.soul_projection_duration(soul)
+            self._log_line(f"🌀 You channel {avatar.SOUL_PROJECTION_NAME} — {soul.name}'s power surges through you!")
+            self._do_attack(label=avatar.SOUL_PROJECTION_NAME, is_technique=True)
+
+        await asyncio.to_thread(_resolve)
         self._finish_round()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_change_gu(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 2)
         choice = select.values[0]
         if choice == "__unequip__":
-            self.game.unequip_item(self.user_id, self.display_name, "gu_ability")
+            await asyncio.to_thread(self.game.unequip_item, self.user_id, self.display_name, "gu_ability")
         elif choice != "none":
-            self.game.equip_item(self.user_id, self.display_name, "gu_ability", choice)
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self.game.equip_item, self.user_id, self.display_name, "gu_ability", choice)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_use_potion(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 4)
@@ -793,19 +834,24 @@ class HuntView(GameView):
         if item_name == "none":
             await interaction.response.defer()
             return
-        ok, message = self.game.use_item(self.user_id, self.display_name, item_name)
-        if ok:
-            self.potions_used += 1
-            fresh = self.game.get_player_stats(self.user_id, self.display_name)
-            self.player_hp = min(self.player_max_hp, fresh["hp"] + self.hp_bonus)
-            self._log_line(f"🧪 You use {item_name} — {message}")
-            self._apply_guard_or_potion_qi_restore()
-            self._monster_turn()
-        else:
-            self._log_line(f"❌ Couldn't use {item_name}: {message}")
+
+        def _resolve():
+            ok, message = self.game.use_item(self.user_id, self.display_name, item_name)
+            if ok:
+                self.potions_used += 1
+                fresh = self.game.get_player_stats(self.user_id, self.display_name)
+                self.player_hp = min(self.player_max_hp, fresh["hp"] + self.hp_bonus)
+                self._log_line(f"🧪 You use {item_name} — {message}")
+                self._apply_guard_or_potion_qi_restore()
+                self._monster_turn()
+            else:
+                self._log_line(f"❌ Couldn't use {item_name}: {message}")
+
+        await asyncio.to_thread(_resolve)
         self._finish_round()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def on_timeout(self):
         if self.status == "fighting":
@@ -814,7 +860,8 @@ class HuntView(GameView):
             child.disabled = True
         if self.message is not None:
             try:
-                await self.message.edit(embed=self.build_embed(), view=self)
+                embed = await asyncio.to_thread(self.build_embed)
+                await self.message.edit(embed=embed, view=self)
             except discord.HTTPException:
                 pass
 

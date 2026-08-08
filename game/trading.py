@@ -1,3 +1,4 @@
+import asyncio
 import discord
 
 from . import accessories_data
@@ -243,15 +244,18 @@ class TradeCurrencyModal(discord.ui.Modal, title="Offer Currency"):
 
         clamp_notes = []
         for currency, amount in requested.items():
-            clamped = self.trade_window.game.set_trade_currency(
-                self.trade_window.trade_id, self.user_id, interaction.user.display_name, currency, amount
+            clamped = await asyncio.to_thread(
+                self.trade_window.game.set_trade_currency,
+                self.trade_window.trade_id, self.user_id, interaction.user.display_name, currency, amount,
             )
             if clamped != amount:
                 _, label = CURRENCY_LABELS[currency]
                 clamp_notes.append(f"{label}: offered {clamped} instead of {amount}")
 
-        self.trade_window._build_components()
-        await interaction.response.edit_message(embed=self.trade_window.build_embed(), view=self.trade_window)
+        await asyncio.to_thread(self.trade_window._build_components)
+
+        embed = await asyncio.to_thread(self.trade_window.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self.trade_window)
         if clamp_notes:
             await interaction.followup.send("You didn't have enough for some of that — " + "; ".join(clamp_notes) + ".", ephemeral=True)
 
@@ -557,7 +561,7 @@ class TradeAddItemView(GameView):
             self.selected_item = None
             self.tier_filter = None
             self.item_page = 0
-            self._build_components()
+            await asyncio.to_thread(self._build_components)
             await interaction.response.edit_message(view=self)
 
         return callback
@@ -568,7 +572,7 @@ class TradeAddItemView(GameView):
             self.selected_item = None
             self.tier_filter = None
             self.item_page = 0
-            self._build_components()
+            await asyncio.to_thread(self._build_components)
             await interaction.response.edit_message(view=self)
 
         return callback
@@ -578,7 +582,7 @@ class TradeAddItemView(GameView):
         self.tier_filter = None if choice == ALL_TIERS_VALUE else choice
         self.selected_item = None
         self.item_page = 0
-        self._build_components()
+        await asyncio.to_thread(self._build_components)
         await interaction.response.edit_message(view=self)
 
     async def _on_pick_item(self, interaction: discord.Interaction):
@@ -589,7 +593,7 @@ class TradeAddItemView(GameView):
             self.item_page += 1
         else:
             self.selected_item = choice
-        self._build_components()
+        await asyncio.to_thread(self._build_components)
         await interaction.response.edit_message(view=self)
 
     def _make_add_callback(self, quantity: int):
@@ -599,12 +603,12 @@ class TradeAddItemView(GameView):
                 # A unique instance is all-or-nothing (1 or 0) regardless of whether Add
                 # 1/10/All was clicked — there's only ever one of it to offer.
                 gear_id = int(selected[len(INSTANCE_VALUE_PREFIX):])
-                gear = self.game.db.get_crafted_gear(gear_id)
+                gear = await asyncio.to_thread(self.game.db.get_crafted_gear, gear_id)
                 display_name = blacksmith.crafted_gear_display_name(gear["base_type"], gear["tier"], gear["gear_id"]) if gear else "that piece"
-                added_ok = self.game.add_trade_crafted_gear(self.trade_id, self.user_id, interaction.user.display_name, gear_id)
+                added_ok = await asyncio.to_thread(self.game.add_trade_crafted_gear, self.trade_id, self.user_id, interaction.user.display_name, gear_id)
                 if added_ok:
                     self.selected_item = None
-                self._build_components()
+                await asyncio.to_thread(self._build_components)
                 content = f"Added **{display_name}** to your offer." if added_ok else f"**{display_name}** is no longer available to offer."
                 await interaction.response.edit_message(content=content, view=self)
                 await self.trade_window.refresh()
@@ -612,12 +616,12 @@ class TradeAddItemView(GameView):
 
             if selected and selected.startswith(MANUAL_VALUE_PREFIX):
                 manual_id = int(selected[len(MANUAL_VALUE_PREFIX):])
-                manual = self.game.db.get_manual(manual_id)
+                manual = await asyncio.to_thread(self.game.db.get_manual, manual_id)
                 display_name = f"{manual['name']} (R{manual['rank']} {manual['rarity']})" if manual else "that manual"
-                added_ok = self.game.add_trade_manual(self.trade_id, self.user_id, interaction.user.display_name, manual_id)
+                added_ok = await asyncio.to_thread(self.game.add_trade_manual, self.trade_id, self.user_id, interaction.user.display_name, manual_id)
                 if added_ok:
                     self.selected_item = None
-                self._build_components()
+                await asyncio.to_thread(self._build_components)
                 content = f"Added **{display_name}** to your offer." if added_ok else f"**{display_name}** is no longer available to offer."
                 await interaction.response.edit_message(content=content, view=self)
                 await self.trade_window.refresh()
@@ -625,13 +629,13 @@ class TradeAddItemView(GameView):
 
             if selected and selected.startswith(ACCESSORY_VALUE_PREFIX):
                 instance_id = int(selected[len(ACCESSORY_VALUE_PREFIX):])
-                instance = self.game.db.get_accessory_instance(instance_id)
+                instance = await asyncio.to_thread(self.game.db.get_accessory_instance, instance_id)
                 affix = accessories_data.ITEMS.get(instance["item_id"]) if instance else None
                 display_name = f"{affix.name} #{instance_id}" if affix else "that piece"
-                added_ok = self.game.add_trade_accessory(self.trade_id, self.user_id, interaction.user.display_name, instance_id)
+                added_ok = await asyncio.to_thread(self.game.add_trade_accessory, self.trade_id, self.user_id, interaction.user.display_name, instance_id)
                 if added_ok:
                     self.selected_item = None
-                self._build_components()
+                await asyncio.to_thread(self._build_components)
                 content = f"Added **{display_name}** to your offer." if added_ok else f"**{display_name}** is no longer available to offer."
                 await interaction.response.edit_message(content=content, view=self)
                 await self.trade_window.refresh()
@@ -643,20 +647,20 @@ class TradeAddItemView(GameView):
                 page_id = selected[len(PAGE_VALUE_PREFIX):]
                 page = manual_data.PAGES.get(page_id)
                 display_name = page.name if page else page_id
-                added = self.game.add_trade_page(self.trade_id, self.user_id, interaction.user.display_name, page_id, quantity)
-                if added and self._remaining(selected) == 0:
+                added = await asyncio.to_thread(self.game.add_trade_page, self.trade_id, self.user_id, interaction.user.display_name, page_id, quantity)
+                if added and await asyncio.to_thread(self._remaining, selected) == 0:
                     self.selected_item = None
-                self._build_components()
+                await asyncio.to_thread(self._build_components)
                 content = f"Added {added}x **{display_name}** to your offer." if added else f"You have no more **{display_name}** left to offer."
                 await interaction.response.edit_message(content=content, view=self)
                 await self.trade_window.refresh()
                 return
 
             item_name = selected
-            added = self.game.add_trade_item(self.trade_id, self.user_id, interaction.user.display_name, item_name, quantity)
-            if added and self._remaining(item_name) == 0:
+            added = await asyncio.to_thread(self.game.add_trade_item, self.trade_id, self.user_id, interaction.user.display_name, item_name, quantity)
+            if added and await asyncio.to_thread(self._remaining, item_name) == 0:
                 self.selected_item = None  # nothing left of this item to keep targeting
-            self._build_components()
+            await asyncio.to_thread(self._build_components)
             content = f"Added {added}x **{item_name}** to your offer." if added else f"You have no more **{item_name}** left to offer."
             await interaction.response.edit_message(content=content, view=self)
             await self.trade_window.refresh()
@@ -724,7 +728,7 @@ class TradeWindowView(GameView):
             if interaction.user.id != member.id:
                 await interaction.response.send_message("That's not your row.", ephemeral=True)
                 return
-            picker = TradeAddItemView(self.game, self.trade_id, member.id, self)
+            picker = await asyncio.to_thread(TradeAddItemView, self.game, self.trade_id, member.id, self)
             await interaction.response.send_message("Choose a category to add an item to your offer:", view=picker, ephemeral=True)
 
         return callback
@@ -734,7 +738,7 @@ class TradeWindowView(GameView):
             if interaction.user.id != member.id:
                 await interaction.response.send_message("That's not your row.", ephemeral=True)
                 return
-            current_offer = self.game.get_trade_offer(self.trade_id, member.id)
+            current_offer = await asyncio.to_thread(self.game.get_trade_offer, self.trade_id, member.id)
             await interaction.response.send_modal(TradeCurrencyModal(self, member.id, current_offer))
 
         return callback
@@ -744,9 +748,10 @@ class TradeWindowView(GameView):
             if interaction.user.id != member.id:
                 await interaction.response.send_message("That's not your row.", ephemeral=True)
                 return
-            self.game.clear_trade_offer(self.trade_id, member.id)
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self.game.clear_trade_offer, self.trade_id, member.id)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 
@@ -757,10 +762,11 @@ class TradeWindowView(GameView):
                 return
 
             if self.mode == "gamble":
-                result = self.game.confirm_gamble(self.trade_id, member.id)
+                result = await asyncio.to_thread(self.game.confirm_gamble, self.trade_id, member.id)
                 if result["status"] == "waiting":
-                    self._build_components()
-                    await interaction.response.edit_message(embed=self.build_embed(), view=self)
+                    await asyncio.to_thread(self._build_components)
+                    embed = await asyncio.to_thread(self.build_embed)
+                    await interaction.response.edit_message(embed=embed, view=self)
                 elif result["status"] == "completed":
                     winner = self.initiator if result["winner_id"] == self.initiator.id else self.target
                     loser = self.target if winner is self.initiator else self.initiator
@@ -779,10 +785,11 @@ class TradeWindowView(GameView):
                     )
                 return
 
-            result = self.game.confirm_trade(self.trade_id, member.id)
+            result = await asyncio.to_thread(self.game.confirm_trade, self.trade_id, member.id)
             if result == "waiting":
-                self._build_components()
-                await interaction.response.edit_message(embed=self.build_embed(), view=self)
+                await asyncio.to_thread(self._build_components)
+                embed = await asyncio.to_thread(self.build_embed)
+                await interaction.response.edit_message(embed=embed, view=self)
             elif result == "completed":
                 await self._finish(interaction, "✅ Trade Complete", "Both players confirmed — items and spirit stones have been exchanged!", discord.Color.green())
             else:
@@ -791,7 +798,7 @@ class TradeWindowView(GameView):
         return callback
 
     async def _on_cancel(self, interaction: discord.Interaction):
-        self.game.cancel_trade(self.trade_id)
+        await asyncio.to_thread(self.game.cancel_trade, self.trade_id)
         await self._finish(interaction, "❌ Trade Cancelled", f"{interaction.user.display_name} cancelled the trade.", discord.Color.red())
 
     async def _finish(self, interaction: discord.Interaction, title: str, description: str, color: discord.Color):
@@ -806,7 +813,7 @@ class TradeWindowView(GameView):
         if self.finished:
             return
         self.finished = True
-        self.game.cancel_trade(self.trade_id)
+        await asyncio.to_thread(self.game.cancel_trade, self.trade_id)
         for child in self.children:
             child.disabled = True
         if self.message is not None:
@@ -819,9 +826,10 @@ class TradeWindowView(GameView):
     async def refresh(self):
         if self.finished or self.message is None:
             return
-        self._build_components()
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
         try:
-            await self.message.edit(embed=self.build_embed(), view=self)
+            await self.message.edit(embed=embed, view=self)
         except discord.HTTPException:
             pass
 
@@ -862,9 +870,10 @@ class TradeRequestView(GameView):
         if interaction.user.id != self.target.id:
             await interaction.response.send_message("Only the invited player can accept this trade.", ephemeral=True)
             return
-        self.game.accept_trade(self.trade_id)
-        window = TradeWindowView(self.game, self.trade_id, self.initiator, self.target)
-        await interaction.response.edit_message(embed=window.build_embed(), view=window)
+        await asyncio.to_thread(self.game.accept_trade, self.trade_id)
+        window = await asyncio.to_thread(TradeWindowView, self.game, self.trade_id, self.initiator, self.target)
+        embed = await asyncio.to_thread(window.build_embed)
+        await interaction.response.edit_message(embed=embed, view=window)
         window.message = await interaction.original_response()
         self.stop()
 
@@ -873,7 +882,7 @@ class TradeRequestView(GameView):
         if interaction.user.id not in (self.initiator.id, self.target.id):
             await interaction.response.send_message("This isn't your trade.", ephemeral=True)
             return
-        self.game.decline_trade(self.trade_id)
+        await asyncio.to_thread(self.game.decline_trade, self.trade_id)
         for child in self.children:
             child.disabled = True
         embed = discord.Embed(title="🤝 Trade Declined", description="This trade request was declined.", color=discord.Color.red())
@@ -881,7 +890,7 @@ class TradeRequestView(GameView):
         self.stop()
 
     async def on_timeout(self):
-        self.game.decline_trade(self.trade_id)
+        await asyncio.to_thread(self.game.decline_trade, self.trade_id)
         for child in self.children:
             child.disabled = True
         if self.message is not None:

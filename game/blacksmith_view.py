@@ -1,3 +1,4 @@
+import asyncio
 import discord
 
 from . import blacksmith, equipment, professions
@@ -68,18 +69,20 @@ class BlacksmithView(GameView):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 0)
         self.selected_type = select.values[0]
         self.last_result = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_pick_tier(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 1)
         self.selected_tier = int(select.values[0])
         self.last_result = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_craft(self, interaction: discord.Interaction):
-        result = self.game.craft_gear(self.user_id, self.display_name, self.selected_type, self.selected_tier)
+        result = await asyncio.to_thread(self.game.craft_gear, self.user_id, self.display_name, self.selected_type, self.selected_tier)
         if not result["ok"]:
             self.last_result = result["reason"]
         elif result["success"]:
@@ -91,8 +94,9 @@ class BlacksmithView(GameView):
         if result.get("materials_refunded"):
             refund_text = ", ".join(f"{qty}x {mat}" for mat, qty in result["materials_refunded"].items())
             self.last_result += f" ✨ Your root salvaged {refund_text} back."
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     def build_embed(self) -> discord.Embed:
         player = self.game.get_player_stats(self.user_id, self.display_name)

@@ -12,6 +12,7 @@ adding danger. That's also why there's no Guard/potion row here (see HuntView/Ba
 -- those exist to mitigate incoming damage, which never happens against this boss.
 """
 
+import asyncio
 import discord
 
 from . import world_boss
@@ -72,12 +73,13 @@ class WorldBossView(GameView):
         self.add_item(leave_button)
 
     async def _on_attack(self, interaction: discord.Interaction):
-        result = self.game.resolve_world_boss_swing(self.user_id, self.display_name, self.boss_instance_id)
+        result = await asyncio.to_thread(self.game.resolve_world_boss_swing, self.user_id, self.display_name, self.boss_instance_id)
         if not result["ok"]:
             self.status = "boss_gone"
             self._log_line("💨 The World Boss is already gone — someone else must have finished it (or it expired).")
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
             return
 
         self.swings_used += 1
@@ -103,15 +105,18 @@ class WorldBossView(GameView):
         elif self.swings_used >= self.max_swings:
             self.status = "left"
 
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
         if result["defeated"] and self.on_defeat:
             await self.on_defeat(self.end_summary)
 
     async def _on_leave(self, interaction: discord.Interaction):
         self.status = "left"
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def on_timeout(self):
         if self.status == "fighting":
@@ -120,7 +125,8 @@ class WorldBossView(GameView):
             child.disabled = True
         if self.message is not None:
             try:
-                await self.message.edit(embed=self.build_embed(), view=self)
+                embed = await asyncio.to_thread(self.build_embed)
+                await self.message.edit(embed=embed, view=self)
             except discord.HTTPException:
                 pass
 

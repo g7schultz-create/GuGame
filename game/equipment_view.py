@@ -1,3 +1,4 @@
+import asyncio
 import discord
 
 from . import accessories_data
@@ -375,7 +376,7 @@ class EquipmentView(GameView):
     def _make_category_callback(self, category_key: str):
         async def callback(interaction: discord.Interaction):
             self.selected_category = category_key
-            player = self.game.get_player_stats(self.user_id, self.display_name)
+            player = await asyncio.to_thread(self.game.get_player_stats, self.user_id, self.display_name)
             slot_keys = self._effective_slot_keys(category_key, player)
             # Single-slot categories (Head, Body, Weapon, ... and Gu for anyone without Twin
             # Gu Sovereign Physique) jump straight to slot management — no point showing a
@@ -383,8 +384,9 @@ class EquipmentView(GameView):
             if len(slot_keys) == 1:
                 self.selected_slot = slot_keys[0]
             self.last_result = None
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 
@@ -392,15 +394,17 @@ class EquipmentView(GameView):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 0)
         self.selected_slot = select.values[0]
         self.last_result = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     def _make_gu_sort_mode_callback(self, key: str):
         async def callback(interaction: discord.Interaction):
             self.gu_sort_mode = key
             self.gu_item_page = 0
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 
@@ -414,52 +418,60 @@ class EquipmentView(GameView):
         elif choice != "none":
             self.gu_sort_stat = choice
             self.gu_item_page = 0
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_pick_item(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 0)
         choice = select.values[0]
         if choice == NAV_PREV_VALUE:
             self.gu_item_page = max(0, self.gu_item_page - 1)
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
             return
         if choice == NAV_NEXT_VALUE:
             self.gu_item_page += 1
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
             return
-        if self.selected_slot in MANUAL_SLOT_NAME:
-            manual_slot = MANUAL_SLOT_NAME[self.selected_slot]
-            if choice == "__unequip__":
-                _, self.last_result = self.game.unequip_manual(self.user_id, self.display_name, manual_slot)
+        def _resolve():
+            if self.selected_slot in MANUAL_SLOT_NAME:
+                manual_slot = MANUAL_SLOT_NAME[self.selected_slot]
+                if choice == "__unequip__":
+                    _, result = self.game.unequip_manual(self.user_id, self.display_name, manual_slot)
+                else:
+                    manual_id = int(choice[len(MANUAL_VALUE_PREFIX):])
+                    _, result = self.game.equip_manual(self.user_id, self.display_name, manual_id, manual_slot)
+            elif choice == "__unequip__":
+                if self.selected_slot in self.game.ACCESSORY_ARTIFACT_SLOT_TYPES:
+                    _, result = self.game.unequip_accessory_artifact(self.user_id, self.display_name, self.selected_slot)
+                else:
+                    _, result = self.game.unequip_item(self.user_id, self.display_name, self.selected_slot)
+            elif choice.startswith(INSTANCE_VALUE_PREFIX):
+                gear_id = int(choice[len(INSTANCE_VALUE_PREFIX):])
+                _, result = self.game.equip_crafted_gear(self.user_id, self.display_name, gear_id)
+            elif choice.startswith(ACCESSORY_VALUE_PREFIX):
+                instance_id = int(choice[len(ACCESSORY_VALUE_PREFIX):])
+                _, result = self.game.equip_accessory_artifact(self.user_id, self.display_name, self.selected_slot, instance_id)
             else:
-                manual_id = int(choice[len(MANUAL_VALUE_PREFIX):])
-                _, self.last_result = self.game.equip_manual(self.user_id, self.display_name, manual_id, manual_slot)
-        elif choice == "__unequip__":
-            if self.selected_slot in self.game.ACCESSORY_ARTIFACT_SLOT_TYPES:
-                _, self.last_result = self.game.unequip_accessory_artifact(self.user_id, self.display_name, self.selected_slot)
-            else:
-                _, self.last_result = self.game.unequip_item(self.user_id, self.display_name, self.selected_slot)
-        elif choice.startswith(INSTANCE_VALUE_PREFIX):
-            gear_id = int(choice[len(INSTANCE_VALUE_PREFIX):])
-            _, self.last_result = self.game.equip_crafted_gear(self.user_id, self.display_name, gear_id)
-        elif choice.startswith(ACCESSORY_VALUE_PREFIX):
-            instance_id = int(choice[len(ACCESSORY_VALUE_PREFIX):])
-            _, self.last_result = self.game.equip_accessory_artifact(self.user_id, self.display_name, self.selected_slot, instance_id)
-        else:
-            _, self.last_result = self.game.equip_item(self.user_id, self.display_name, self.selected_slot, choice)
-        self.refresh()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+                _, result = self.game.equip_item(self.user_id, self.display_name, self.selected_slot, choice)
+            self.refresh()
+            return result
+
+        self.last_result = await asyncio.to_thread(_resolve)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_back(self, interaction: discord.Interaction):
         if self.selected_slot:
             # Single-slot categories skipped their own picker screen (see
             # _make_category_callback), so backing out of slot management on one of those
             # goes all the way to the top level instead of a picker with nothing useful on it.
-            player = self.game.get_player_stats(self.user_id, self.display_name)
+            player = await asyncio.to_thread(self.game.get_player_stats, self.user_id, self.display_name)
             slot_keys = self._effective_slot_keys(self.selected_category, player)
             self.selected_slot = None
             if len(slot_keys) == 1:
@@ -467,14 +479,16 @@ class EquipmentView(GameView):
         else:
             self.selected_category = None
         self.last_result = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_profile(self, interaction: discord.Interaction):
         from .views import ProfileView  # local import: avoids a circular import at module load time
 
-        view = ProfileView(self.user_id, self.game, self.player, self.display_name, self.avatar_url)
-        await interaction.response.edit_message(embed=view.build_embed(), view=view)
+        view = await asyncio.to_thread(ProfileView, self.user_id, self.game, self.player, self.display_name, self.avatar_url)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.edit_message(embed=embed, view=view)
 
     def _describe_slot(self, slot_key: str) -> str:
         """One formatted line (or two, for gear with a stats readout) for a single slot's

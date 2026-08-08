@@ -4,6 +4,7 @@ gear (a procedurally-rolled tier system, see game/avatar_gear.py -- drops from /
 bosses), and feed it Soul Nourishing Pills + Soul Crystals to level it up.
 """
 
+import asyncio
 import discord
 
 from . import avatar, avatar_gear
@@ -61,8 +62,9 @@ class AvatarView(GameView):
         async def callback(interaction: discord.Interaction):
             self.active_tab = key
             self.last_result = None
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 
@@ -144,22 +146,25 @@ class AvatarView(GameView):
     async def _on_pick_soul(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 1)
         soul_name = select.values[0]
-        was_first_pick = self._status()["soul"] is None
-        ok, msg = self.game.choose_avatar_soul(self.user_id, self.display_name, soul_name)
+        status = await asyncio.to_thread(self._status)
+        was_first_pick = status["soul"] is None
+        ok, msg = await asyncio.to_thread(self.game.choose_avatar_soul, self.user_id, self.display_name, soul_name)
         self.last_result = msg
         if ok and was_first_pick:
             # Nowhere useful to look at right after your very first pick besides the gear you
             # just got auto-equipped -- flow straight there instead of leaving them on the
             # same Soul tab staring at the choice they just made.
             self.active_tab = "gear"
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_pick_slot(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 1)
         self.selected_slot = select.values[0]
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_pick_item(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 2)
@@ -168,18 +173,22 @@ class AvatarView(GameView):
             await interaction.response.defer()
             return
         if value == "__unequip__":
-            ok, msg = self.game.unequip_avatar_gear_instance(self.user_id, self.display_name, self.selected_slot)
+            ok, msg = await asyncio.to_thread(self.game.unequip_avatar_gear_instance, self.user_id, self.display_name, self.selected_slot)
         else:
-            ok, msg = self.game.equip_avatar_gear_instance(self.user_id, self.display_name, self.selected_slot, int(value))
+            ok, msg = await asyncio.to_thread(
+                self.game.equip_avatar_gear_instance, self.user_id, self.display_name, self.selected_slot, int(value),
+            )
         self.last_result = msg
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_level_up(self, interaction: discord.Interaction):
-        ok, msg = self.game.avatar_level_up(self.user_id, self.display_name)
+        ok, msg = await asyncio.to_thread(self.game.avatar_level_up, self.user_id, self.display_name)
         self.last_result = msg
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     # -- embed building ---------------------------------------------------------------
 

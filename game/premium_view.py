@@ -1,3 +1,4 @@
+import asyncio
 from collections import Counter
 
 import discord
@@ -140,59 +141,66 @@ class PremiumView(GameView):
         self.selected_kind = select.values[0]
         self.pending = None
         self.last_result = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_pick_target(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 1)
         self.target_tier = select.values[0]
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_pick_race(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 1)
         self.selected_race = select.values[0]
         self.last_result = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_change_race(self, interaction: discord.Interaction):
-        ok, message = self.game.change_race(self.user_id, self.display_name, self.selected_race)
+        ok, message = await asyncio.to_thread(self.game.change_race, self.user_id, self.display_name, self.selected_race)
         self.last_result = message
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_roll(self, interaction: discord.Interaction):
         # A full "until broke" run can be hundreds of DB round-trips — defer first so we
         # have up to 15 minutes to finish instead of Discord's normal 3-second ack window.
         await interaction.response.defer()
         buy_fn = self.game.premium_root_reroll if self.selected_kind == "root" else self.game.premium_physique_reroll
-        rolls, hit_target, ran_out_of_money = buy_fn(self.user_id, self.display_name, self.target_tier)
+        rolls, hit_target, ran_out_of_money = await asyncio.to_thread(buy_fn, self.user_id, self.display_name, self.target_tier)
         emoji, label = KIND_LABELS[self.selected_kind]
         if not rolls:
             self.last_result = "Not enough spirit stones to roll even once."
         else:
             self.pending = _best_roll(rolls)
             self.last_result = _format_result(f"{emoji} {label}", rolls, hit_target, ran_out_of_money, self.target_tier)
-        self._build_components()
-        await interaction.edit_original_response(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.edit_original_response(embed=embed, view=self)
 
     async def _on_keep(self, interaction: discord.Interaction):
         self.pending = None
         self.last_result = "Kept what you had."
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_take(self, interaction: discord.Interaction):
         tier, name = self.pending
         if self.selected_kind == "root":
-            self.game.db.set_root(self.user_id, tier, name)
+            await asyncio.to_thread(self.game.db.set_root, self.user_id, tier, name)
         else:
-            self.game.db.set_physique(self.user_id, tier, name)
+            await asyncio.to_thread(self.game.db.set_physique, self.user_id, tier, name)
         self.pending = None
         self.last_result = f"Took the new one: **{name}** ({tier})!"
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     def _race_embed_fields(self, embed: discord.Embed, player: dict):
         embed.add_field(name="🧬 Current Race", value=_format_race(chargen.get_race(player["race"])), inline=False)

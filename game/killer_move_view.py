@@ -1,3 +1,4 @@
+import asyncio
 from collections import Counter
 from typing import Optional
 
@@ -263,15 +264,17 @@ class KillerMoveView(GameView):
         async def callback(interaction: discord.Interaction):
             self.active_tab = tab_key
             self.last_result = None
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
         return callback
 
     def _make_slot_callback(self, slot_key: str):
         async def callback(interaction: discord.Interaction):
             self.target_slot = slot_key
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
         return callback
 
     async def _on_pick_rarity(self, interaction: discord.Interaction):
@@ -283,8 +286,9 @@ class KillerMoveView(GameView):
         self.rarity_filter = None if value == "all" else value
         self.core_page = 0
         self.component_page = 0
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_pick_core(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 2)
@@ -295,8 +299,9 @@ class KillerMoveView(GameView):
             self.core_page += 1
         else:
             self.core_gu_name = None if value == "none" else value
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_pick_component(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 3)
@@ -307,25 +312,29 @@ class KillerMoveView(GameView):
             self.component_page += 1
         elif value != "none" and len(self.component_gu_names) < 10:
             self.component_gu_names.append(value)
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_remove_last(self, interaction: discord.Interaction):
         if self.component_gu_names:
             self.component_gu_names.pop()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_clear(self, interaction: discord.Interaction):
         self.core_gu_name = None
         self.component_gu_names = []
         self.core_page = 0
         self.component_page = 0
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_assemble(self, interaction: discord.Interaction):
-        result = self.game.assemble_killer_move(
+        result = await asyncio.to_thread(
+            self.game.assemble_killer_move,
             self.user_id, self.display_name, self.target_slot, self.core_gu_name, self.component_gu_names,
         )
         if result["ok"]:
@@ -335,28 +344,32 @@ class KillerMoveView(GameView):
             self.component_gu_names = []
         else:
             self.last_result = f"❌ {result['reason']}"
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_pick_move(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 1)
         value = select.values[0]
         self.selected_move_id = None if value == "none" else int(value)
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_equip(self, interaction: discord.Interaction):
-        ok, message = self.game.equip_killer_move(self.user_id, self.display_name, self.selected_move_id)
+        ok, message = await asyncio.to_thread(self.game.equip_killer_move, self.user_id, self.display_name, self.selected_move_id)
         self.last_result = message
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     def _make_unequip_callback(self, slot: str):
         async def callback(interaction: discord.Interaction):
-            ok, message = self.game.unequip_killer_move(self.user_id, self.display_name, slot)
+            ok, message = await asyncio.to_thread(self.game.unequip_killer_move, self.user_id, self.display_name, slot)
             self.last_result = message
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
         return callback
 
     # -- embed --------------------------------------------------------------------------

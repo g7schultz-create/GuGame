@@ -303,6 +303,13 @@ class GameDatabase:
     def connect(self):
         con = sqlite3.connect(self.db_path)
         con.row_factory = sqlite3.Row
+        # WAL lets readers proceed while a writer is mid-transaction instead of fully
+        # serializing on the default rollback journal; busy_timeout makes a genuinely
+        # contended write retry for up to 5s instead of raising "database is locked"
+        # immediately. journal_mode is persisted in the db file itself (a no-op after the
+        # first call), busy_timeout is per-connection so it's set every time.
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA busy_timeout=5000")
         return con
 
     def setup(self):

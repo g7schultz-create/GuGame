@@ -1,3 +1,5 @@
+import asyncio
+
 import discord
 
 from . import accessories_data, avatar_gear, blacksmith
@@ -306,8 +308,9 @@ class SellView(GameView):
             self.subcategory = _default_sell_subcategory(category)
             self.selected = None
             self.last_result = None
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 
@@ -316,8 +319,9 @@ class SellView(GameView):
             self.subcategory = subcategory
             self.selected = None
             self.last_result = None
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 
@@ -326,18 +330,22 @@ class SellView(GameView):
         value = select.values[0]
         self.selected = None if value == "none" else value
         self.last_result = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     def _make_sell_callback(self, quantity: int):
         async def callback(interaction: discord.Interaction):
             item_name = self.selected
-            ok, message, _stones = self.game.sell_item(self.user_id, self.display_name, item_name, quantity)
+            ok, message, _stones = await asyncio.to_thread(self.game.sell_item, self.user_id, self.display_name, item_name, quantity)
             self.last_result = message
-            if ok and self.game.get_inventory(self.user_id).get(item_name, 0) == 0:
-                self.selected = None
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            if ok:
+                inventory = await asyncio.to_thread(self.game.get_inventory, self.user_id)
+                if inventory.get(item_name, 0) == 0:
+                    self.selected = None
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 
@@ -345,18 +353,19 @@ class SellView(GameView):
         selected = self.selected
         if selected.startswith(GEAR_INSTANCE_PREFIX):
             gear_id = int(selected[len(GEAR_INSTANCE_PREFIX):])
-            ok, message = self.game.dismantle_crafted_gear(self.user_id, self.display_name, gear_id)
+            ok, message = await asyncio.to_thread(self.game.dismantle_crafted_gear, self.user_id, self.display_name, gear_id)
         elif selected.startswith(ACCESSORY_INSTANCE_PREFIX):
             instance_id = int(selected[len(ACCESSORY_INSTANCE_PREFIX):])
-            ok, message = self.game.salvage_accessory_artifact(self.user_id, self.display_name, instance_id)
+            ok, message = await asyncio.to_thread(self.game.salvage_accessory_artifact, self.user_id, self.display_name, instance_id)
         else:
             instance_id = int(selected[len(AVATAR_INSTANCE_PREFIX):])
-            ok, message = self.game.sell_avatar_gear_instance(self.user_id, self.display_name, instance_id)
+            ok, message = await asyncio.to_thread(self.game.sell_avatar_gear_instance, self.user_id, self.display_name, instance_id)
         self.last_result = message
         if ok:
             self.selected = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_sell_all_same_tier(self, interaction: discord.Interaction):
         """Bulk-dismantles/sells every owned, unequipped crafted gear or avatar gear instance
@@ -366,34 +375,43 @@ class SellView(GameView):
         every instance still needs its own row deleted individually either way."""
         selected = self.selected
         if selected.startswith(GEAR_INSTANCE_PREFIX):
-            gear = self.game.db.get_crafted_gear(int(selected[len(GEAR_INSTANCE_PREFIX):]))
+            gear = await asyncio.to_thread(self.game.db.get_crafted_gear, int(selected[len(GEAR_INSTANCE_PREFIX):]))
             if gear is None:
                 self.last_result = "That item is no longer available."
             else:
                 slot_type, tier = gear["slot_type"], gear["tier"]
-                targets = self._same_tier_gear_ids(slot_type, tier)
-                count = sum(1 for gid in targets if self.game.dismantle_crafted_gear(self.user_id, self.display_name, gid)[0])
+                targets = await asyncio.to_thread(self._same_tier_gear_ids, slot_type, tier)
+                count = 0
+                for gid in targets:
+                    ok, _ = await asyncio.to_thread(self.game.dismantle_crafted_gear, self.user_id, self.display_name, gid)
+                    if ok:
+                        count += 1
                 stones = count * blacksmith.dismantle_stones(tier)
                 self.last_result = (
                     f"Dismantled {count}x Tier {tier} {slot_type} pieces — recovered materials + {stones:,} 🪙 total."
                     if count else "Nothing left to sell at that tier."
                 )
         else:
-            inst = self.game.db.get_avatar_gear_instance(int(selected[len(AVATAR_INSTANCE_PREFIX):]))
+            inst = await asyncio.to_thread(self.game.db.get_avatar_gear_instance, int(selected[len(AVATAR_INSTANCE_PREFIX):]))
             if inst is None:
                 self.last_result = "That item is no longer available."
             else:
                 slot_type, tier = inst["slot_type"], inst["tier"]
-                targets = self._same_tier_avatar_gear_ids(slot_type, tier)
-                count = sum(1 for iid in targets if self.game.sell_avatar_gear_instance(self.user_id, self.display_name, iid)[0])
+                targets = await asyncio.to_thread(self._same_tier_avatar_gear_ids, slot_type, tier)
+                count = 0
+                for iid in targets:
+                    ok, _ = await asyncio.to_thread(self.game.sell_avatar_gear_instance, self.user_id, self.display_name, iid)
+                    if ok:
+                        count += 1
                 stones = count * avatar_gear.sell_stones(tier)
                 self.last_result = (
                     f"Sold {count}x {avatar_gear.tier_name(tier)} {slot_type} pieces for {stones:,} 🪙 total."
                     if count else "Nothing left to sell at that tier."
                 )
         self.selected = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_sell_all_same_name(self, interaction: discord.Interaction):
         """Bulk-salvages every owned, unequipped, non-Unique accessory/artifact instance
@@ -401,15 +419,18 @@ class SellView(GameView):
         re-checks ownership/equipped/rarity per call, same reasoning as
         _on_sell_all_same_tier."""
         instance_id = int(self.selected[len(ACCESSORY_INSTANCE_PREFIX):])
-        entry = next(
-            (e for e in self.game.get_player_accessories_artifacts(self.user_id) if e["instance_id"] == instance_id), None,
-        )
+        accessories = await asyncio.to_thread(self.game.get_player_accessories_artifacts, self.user_id)
+        entry = next((e for e in accessories if e["instance_id"] == instance_id), None)
         if entry is None:
             self.last_result = "That item is no longer available."
         else:
             affix = entry["affix"]
-            targets = self._same_name_accessory_ids(entry["item_id"])
-            count = sum(1 for iid in targets if self.game.salvage_accessory_artifact(self.user_id, self.display_name, iid)[0])
+            targets = await asyncio.to_thread(self._same_name_accessory_ids, entry["item_id"])
+            count = 0
+            for iid in targets:
+                ok, _ = await asyncio.to_thread(self.game.salvage_accessory_artifact, self.user_id, self.display_name, iid)
+                if ok:
+                    count += 1
             rarity_star = accessories_data.RARITY_ORDER.index(affix.rarity) + 1
             stones = count * affix.rank * rarity_star * self.game.SALVAGE_STONES_PER_RANK_RARITY_STAR
             self.last_result = (
@@ -417,8 +438,9 @@ class SellView(GameView):
                 if count else "Nothing left to sell with that name."
             )
         self.selected = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     def build_embed(self) -> discord.Embed:
         player = self.game.get_player_stats(self.user_id, self.display_name)

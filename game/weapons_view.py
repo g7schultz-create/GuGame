@@ -1,3 +1,5 @@
+import asyncio
+
 import discord
 
 from . import blacksmith
@@ -94,15 +96,17 @@ class WeaponsView(GameView):
         value = select.values[0]
         self.selected_gear_id = int(value) if value != "none" else None
         self.last_result = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_dismantle(self, interaction: discord.Interaction):
-        ok, message = self.game.dismantle_crafted_gear(self.user_id, self.display_name, self.selected_gear_id)
+        ok, message = await asyncio.to_thread(self.game.dismantle_crafted_gear, self.user_id, self.display_name, self.selected_gear_id)
         self.last_result = message
         self.selected_gear_id = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_dismantle_all(self, interaction: discord.Interaction):
         """Bulk-dismantles every owned, unequipped piece sharing the selected piece's exact
@@ -114,21 +118,26 @@ class WeaponsView(GameView):
         # up to real DB work across several dismantle_crafted_gear calls -- same defer-before-
         # the-loop fix already applied to Inventory's Use All / Alchemy's Make All.
         await interaction.response.defer()
-        gear = self.game.db.get_crafted_gear(self.selected_gear_id) if self.selected_gear_id else None
+        gear = await asyncio.to_thread(self.game.db.get_crafted_gear, self.selected_gear_id) if self.selected_gear_id else None
         if gear is None:
             self.last_result = "That item is no longer available."
         else:
             slot_type, tier = gear["slot_type"], gear["tier"]
-            targets = self._same_tier_gear_ids(slot_type, tier)
-            count = sum(1 for gid in targets if self.game.dismantle_crafted_gear(self.user_id, self.display_name, gid)[0])
+            targets = await asyncio.to_thread(self._same_tier_gear_ids, slot_type, tier)
+            count = 0
+            for gid in targets:
+                ok, _ = await asyncio.to_thread(self.game.dismantle_crafted_gear, self.user_id, self.display_name, gid)
+                if ok:
+                    count += 1
             stones = count * blacksmith.dismantle_stones(tier)
             self.last_result = (
                 f"Dismantled {count}x Tier {tier} {slot_type} pieces — recovered materials + {stones:,} 🪙 total."
                 if count else "Nothing left to dismantle at that tier."
             )
         self.selected_gear_id = None
-        self._build_components()
-        await interaction.edit_original_response(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.edit_original_response(embed=embed, view=self)
 
     def build_embed(self) -> discord.Embed:
         owned = self._owned()

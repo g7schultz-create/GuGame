@@ -145,7 +145,8 @@ class PvPView(GameView):
     async def _refresh_message(self):
         if self.message is not None:
             try:
-                await self.message.edit(embed=self.build_embed(), view=self)
+                embed = await asyncio.to_thread(self.build_embed)
+                await self.message.edit(embed=embed, view=self)
             except discord.HTTPException:
                 pass
 
@@ -159,9 +160,14 @@ class PvPView(GameView):
             return
         self.qi_empowered = False
         self._log_line("⏱️ You hesitate too long — your body swings on reflex!")
-        self._do_attack()
+
+        # _finish_round (and the create_task it can trigger via _start_round_timer) must run
+        # on the main thread -- asyncio.create_task requires a running loop in the CURRENT
+        # thread, which a asyncio.to_thread worker never has. Only the DB-touching combat
+        # resolution itself is offloaded; _finish_round/_build_components stay on the loop.
+        await asyncio.to_thread(self._do_attack)
         self._finish_round()
-        self._build_components()
+        await asyncio.to_thread(self._build_components)
         await self._refresh_message()
 
     # -- combat resolution ---------------------------------------------------
@@ -249,47 +255,64 @@ class PvPView(GameView):
         return used
 
     async def _on_attack(self, interaction: discord.Interaction):
-        empowered = self._consume_empower()
-        if empowered:
-            self._log_line("You channel Qi to guarantee your strike!")
-        self._do_attack(guaranteed_hit=empowered)
+        def _resolve():
+            empowered = self._consume_empower()
+            if empowered:
+                self._log_line("You channel Qi to guarantee your strike!")
+            self._do_attack(guaranteed_hit=empowered)
+
+        # _finish_round (and the create_task it can trigger) must run on the main thread, not
+        # inside a to_thread worker -- see _round_timeout's comment for why.
+        await asyncio.to_thread(_resolve)
         self._finish_round()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_guard(self, interaction: discord.Interaction):
-        empowered = self._consume_empower()
-        if empowered:
-            self._log_line("You channel Qi to fully brace against the blow!")
-        else:
-            self._log_line("You brace for the next blow.")
-        self._opponent_turn(incoming_reduction=1.0 if empowered else GUARD_DAMAGE_REDUCTION)
+        def _resolve():
+            empowered = self._consume_empower()
+            if empowered:
+                self._log_line("You channel Qi to fully brace against the blow!")
+            else:
+                self._log_line("You brace for the next blow.")
+            self._opponent_turn(incoming_reduction=1.0 if empowered else GUARD_DAMAGE_REDUCTION)
+
+        await asyncio.to_thread(_resolve)
         self._finish_round()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_toggle_empower(self, interaction: discord.Interaction):
         self.qi_empowered = not self.qi_empowered
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_flee(self, interaction: discord.Interaction):
-        stats = self._player_combat_stats()
-        chance = FLEE_BASE_CHANCE + (stats["spd_stat"] - self.opponent_stats["spd_stat"]) * FLEE_CHANCE_PER_SPD_DIFF
-        chance = max(MIN_FLEE_CHANCE, min(MAX_FLEE_CHANCE, chance))
-        if random.random() < chance:
-            self.status = "fled"
-            self._restore_starting_hp()
-            self._log_line("You break away and escape the duel!")
-        else:
+        def _resolve():
+            stats = self._player_combat_stats()
+            chance = FLEE_BASE_CHANCE + (stats["spd_stat"] - self.opponent_stats["spd_stat"]) * FLEE_CHANCE_PER_SPD_DIFF
+            chance = max(MIN_FLEE_CHANCE, min(MAX_FLEE_CHANCE, chance))
+            if random.random() < chance:
+                self.status = "fled"
+                self._restore_starting_hp()
+                self._log_line("You break away and escape the duel!")
+                return False
             self._log_line("You fail to escape!")
             self._opponent_turn()
+            return True
+
+        needs_finish = await asyncio.to_thread(_resolve)
+        if needs_finish:
             self._finish_round()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_gu_ability(self, interaction: discord.Interaction):
-        gu = self._equipped_gu()
+        gu = await asyncio.to_thread(self._equipped_gu)
         ability = gu.active_ability if gu else None
         if not ability:
             await interaction.response.send_message("You have no active Gu ability equipped.", ephemeral=True)
@@ -297,37 +320,47 @@ class PvPView(GameView):
         if self.player_qi < ability.qi_cost:
             await interaction.response.send_message(f"Not enough Qi to use {ability.name} (needs {ability.qi_cost}).", ephemeral=True)
             return
-        self.player_qi -= ability.qi_cost
-        self._persist_qi()
-        self._log_line(f"You channel {ability.name}!")
-        self._do_attack(str_multiplier=ability.str_multiplier, label=ability.name, is_technique=True)
+
+        def _resolve():
+            self.player_qi -= ability.qi_cost
+            self._persist_qi()
+            self._log_line(f"You channel {ability.name}!")
+            self._do_attack(str_multiplier=ability.str_multiplier, label=ability.name, is_technique=True)
+
+        await asyncio.to_thread(_resolve)
         self._finish_round()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_killer_move(self, interaction: discord.Interaction):
         """Additive alongside _on_gu_ability above, not a replacement -- see hunt.py's
         identical twin for the full reasoning."""
-        move = self.game.get_equipped_killer_move(self.player, "combat")
+        move = await asyncio.to_thread(self.game.get_equipped_killer_move, self.player, "combat")
         if not move:
             await interaction.response.send_message("You have no Killer Move equipped in your Combat slot.", ephemeral=True)
             return
-        qi_cost = self.game.killer_move_qi_cost(self.player, move)
+        qi_cost = await asyncio.to_thread(self.game.killer_move_qi_cost, self.player, move)
         if self.player_qi < qi_cost:
             await interaction.response.send_message(f"Not enough Qi to use {move['name']} (needs {qi_cost:,}).", ephemeral=True)
             return
-        self.player_qi -= qi_cost
-        self._persist_qi()
-        self._log_line(f"You unleash {move['name']}!")
-        if move["kind"] == "damage":
-            self._do_attack(str_multiplier=move["effects"]["str_multiplier"], label=move["name"], is_technique=True)
-        else:
-            self.game.apply_killer_move_buff(self.user_id, self.player, move)
-            self._log_line(f"{move['name']} surges through you!")
-            self._opponent_turn()
+
+        def _resolve():
+            self.player_qi -= qi_cost
+            self._persist_qi()
+            self._log_line(f"You unleash {move['name']}!")
+            if move["kind"] == "damage":
+                self._do_attack(str_multiplier=move["effects"]["str_multiplier"], label=move["name"], is_technique=True)
+            else:
+                self.game.apply_killer_move_buff(self.user_id, self.player, move)
+                self._log_line(f"{move['name']} surges through you!")
+                self._opponent_turn()
+
+        await asyncio.to_thread(_resolve)
         self._finish_round()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_use_potion(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 2)
@@ -335,28 +368,34 @@ class PvPView(GameView):
         if item_name == "none":
             await interaction.response.defer()
             return
-        ok, message = self.game.use_item(self.user_id, self.display_name, item_name)
-        if ok:
-            self.potions_used += 1
-            fresh = self.game.get_player_stats(self.user_id, self.display_name)
-            self.player_hp = min(self.player_max_hp, fresh["hp"] + self.hp_bonus)
-            self._log_line(f"You use {item_name} — {message}")
-            self._opponent_turn()
-        else:
-            self._log_line(f"Couldn't use {item_name}: {message}")
+
+        def _resolve():
+            ok, message = self.game.use_item(self.user_id, self.display_name, item_name)
+            if ok:
+                self.potions_used += 1
+                fresh = self.game.get_player_stats(self.user_id, self.display_name)
+                self.player_hp = min(self.player_max_hp, fresh["hp"] + self.hp_bonus)
+                self._log_line(f"You use {item_name} — {message}")
+                self._opponent_turn()
+            else:
+                self._log_line(f"Couldn't use {item_name}: {message}")
+
+        await asyncio.to_thread(_resolve)
         self._finish_round()
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def on_timeout(self):
         if self.status == "fighting":
             self.status = "fled"
-            self._restore_starting_hp()
+            await asyncio.to_thread(self._restore_starting_hp)
         for child in self.children:
             child.disabled = True
         if self.message is not None:
             try:
-                await self.message.edit(embed=self.build_embed(), view=self)
+                embed = await asyncio.to_thread(self.build_embed)
+                await self.message.edit(embed=embed, view=self)
             except discord.HTTPException:
                 pass
 

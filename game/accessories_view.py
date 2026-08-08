@@ -1,3 +1,4 @@
+import asyncio
 import discord
 
 from . import accessories_data
@@ -123,42 +124,48 @@ class AccessoriesView(GameView):
         self.slot_type_filter = None if value == "all" else value
         self.selected_instance_id = None
         self.last_result = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_pick_item(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 1)
         value = select.values[0]
         self.selected_instance_id = int(value) if value != "none" else None
         self.last_result = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_attune(self, interaction: discord.Interaction):
-        ok, message = self.game.attune_accessory_artifact(self.user_id, self.display_name, self.selected_instance_id)
+        ok, message = await asyncio.to_thread(self.game.attune_accessory_artifact, self.user_id, self.display_name, self.selected_instance_id)
         self.last_result = message
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_unattune(self, interaction: discord.Interaction):
-        ok, message = self.game.unattune_accessory_artifact(self.user_id, self.display_name, self.selected_instance_id)
+        ok, message = await asyncio.to_thread(self.game.unattune_accessory_artifact, self.user_id, self.display_name, self.selected_instance_id)
         self.last_result = message
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_salvage(self, interaction: discord.Interaction):
-        ok, message = self.game.salvage_accessory_artifact(self.user_id, self.display_name, self.selected_instance_id)
+        ok, message = await asyncio.to_thread(self.game.salvage_accessory_artifact, self.user_id, self.display_name, self.selected_instance_id)
         self.last_result = message
         if ok:
             self.selected_instance_id = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_activate(self, interaction: discord.Interaction):
-        ok, message = self.game.activate_accessory_artifact(self.user_id, self.display_name, self.selected_instance_id)
+        ok, message = await asyncio.to_thread(self.game.activate_accessory_artifact, self.user_id, self.display_name, self.selected_instance_id)
         self.last_result = message
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     def build_embed(self) -> discord.Embed:
         owned = self._filtered_owned()

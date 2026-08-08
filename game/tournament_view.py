@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 import discord
@@ -97,21 +98,24 @@ class TournamentView(GameView):
         self.add_item(leave_button)
 
     async def _on_start(self, interaction: discord.Interaction):
-        result = self.game.open_tournament_signup(interaction.user.id, interaction.user.display_name)
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        result = await asyncio.to_thread(self.game.open_tournament_signup, interaction.user.id, interaction.user.display_name)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send(result["join_message"], ephemeral=True)
 
     async def _on_join(self, interaction: discord.Interaction):
-        ok, message = self.game.join_tournament(interaction.user.id, interaction.user.display_name)
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        ok, message = await asyncio.to_thread(self.game.join_tournament, interaction.user.id, interaction.user.display_name)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send(message, ephemeral=True)
 
     async def _on_leave(self, interaction: discord.Interaction):
-        ok, message = self.game.leave_tournament(interaction.user.id)
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        ok, message = await asyncio.to_thread(self.game.leave_tournament, interaction.user.id)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send(message, ephemeral=True)
 
     def build_embed(self) -> discord.Embed:

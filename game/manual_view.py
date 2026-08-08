@@ -1,3 +1,5 @@
+import asyncio
+
 import discord
 
 from . import chargen, manual_data, manual_gen
@@ -174,8 +176,9 @@ class ManualView(GameView):
         async def callback(interaction: discord.Interaction):
             self.active_tab = key
             self.last_result = None
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 
@@ -376,8 +379,9 @@ class ManualView(GameView):
             self.page_studied_filter = key
             self.page_tier_filter = None
             self.page_list_page = 0
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 
@@ -386,8 +390,9 @@ class ManualView(GameView):
         choice = select.values[0]
         self.page_tier_filter = None if choice == "all" else int(choice)
         self.page_list_page = 0
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_pick_page(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 3)
@@ -401,28 +406,34 @@ class ManualView(GameView):
             return
         else:
             self.selected_page_id = choice
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_study(self, interaction: discord.Interaction):
-        ok, message = self.game.study_page(self.user_id, self.display_name, self.selected_page_id)
+        ok, message = await asyncio.to_thread(self.game.study_page, self.user_id, self.display_name, self.selected_page_id)
         self.last_result = message
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_refine(self, interaction: discord.Interaction):
-        ok, message = self.game.refine_page(self.user_id, self.display_name, self.selected_page_id)
+        ok, message = await asyncio.to_thread(self.game.refine_page, self.user_id, self.display_name, self.selected_page_id)
         self.last_result = message
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_dismantle_page(self, interaction: discord.Interaction):
-        ok, message = self.game.dismantle_page(self.user_id, self.display_name, self.selected_page_id, 1)
+        ok, message = await asyncio.to_thread(self.game.dismantle_page, self.user_id, self.display_name, self.selected_page_id, 1)
         self.last_result = message
-        if ok and self._owned_pages().get(self.selected_page_id) is None:
-            self.selected_page_id = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        if ok:
+            owned = await asyncio.to_thread(self._owned_pages)
+            if owned.get(self.selected_page_id) is None:
+                self.selected_page_id = None
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_study_all(self, interaction: discord.Interaction):
         """Studies every currently-filtered unstudied page one at a time -- reuses study_page
@@ -430,32 +441,36 @@ class ManualView(GameView):
         backend method, same reasoning as /weapons' Dismantle All. Deferred since a large
         filtered set means many real DB writes back to back."""
         await interaction.response.defer()
-        targets = [page_id for page_id, info in self._sorted_filtered_pages_by_tier(self.page_studied_filter, self.page_tier_filter) if not info["studied"]]
+        filtered = await asyncio.to_thread(self._sorted_filtered_pages_by_tier, self.page_studied_filter, self.page_tier_filter)
+        targets = [page_id for page_id, info in filtered if not info["studied"]]
         count = 0
         for page_id in targets:
-            ok, _ = self.game.study_page(self.user_id, self.display_name, page_id)
+            ok, _ = await asyncio.to_thread(self.game.study_page, self.user_id, self.display_name, page_id)
             if ok:
                 count += 1
             else:
                 break  # ran out of insight dust (or some other refusal) -- stop rather than looping over guaranteed failures
         self.last_result = f"📖 Studied {count}x page{'s' if count != 1 else ''}." if count else "Nothing left to study — no insight dust, or nothing matched the filter."
-        self._build_components()
-        await interaction.edit_original_response(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.edit_original_response(embed=embed, view=self)
 
     async def _on_refine_all(self, interaction: discord.Interaction):
         """Advances every currently-filtered, refine-eligible page by exactly one refinement
         level -- mirrors the single Refine button's one-shot-per-click semantics, just fanned
         out across the whole filtered set in one click instead of one page at a time."""
         await interaction.response.defer()
-        targets = [page_id for page_id, info in self._sorted_filtered_pages_by_tier(self.page_studied_filter, self.page_tier_filter) if self._refine_eligible(info)]
+        filtered = await asyncio.to_thread(self._sorted_filtered_pages_by_tier, self.page_studied_filter, self.page_tier_filter)
+        targets = [page_id for page_id, info in filtered if self._refine_eligible(info)]
         count = 0
         for page_id in targets:
-            ok, _ = self.game.refine_page(self.user_id, self.display_name, page_id)
+            ok, _ = await asyncio.to_thread(self.game.refine_page, self.user_id, self.display_name, page_id)
             if ok:
                 count += 1
         self.last_result = f"✨ Refined {count}x page{'s' if count != 1 else ''}." if count else "Nothing left to refine — no page here has enough spare duplicates."
-        self._build_components()
-        await interaction.edit_original_response(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.edit_original_response(embed=embed, view=self)
 
     def _make_assemble_studied_filter_callback(self, key: str):
         async def callback(interaction: discord.Interaction):
@@ -463,8 +478,9 @@ class ManualView(GameView):
             self.assemble_type_filter = None
             self.assemble_type_filter_page = 0
             self.assemble_list_page = 0
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 
@@ -482,8 +498,9 @@ class ManualView(GameView):
             rank_str, category = choice.split(":", 1)
             self.assemble_type_filter = (int(rank_str), category)
             self.assemble_list_page = 0
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_pick_assemble_pages(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 3)
@@ -502,18 +519,20 @@ class ManualView(GameView):
             checked = [v for v in raw_values if v != "none"]
             preserved = [pid for pid in self.assemble_selection if pid not in visible_ids]
             self.assemble_selection = (preserved + checked)[:self.ASSEMBLE_MAX_PAGES]
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_assemble(self, interaction: discord.Interaction):
-        ok, message, manual = self.game.assemble_manual(self.user_id, self.display_name, self.assemble_selection)
+        ok, message, manual = await asyncio.to_thread(self.game.assemble_manual, self.user_id, self.display_name, self.assemble_selection)
         self.last_result = message
         if ok:
             self.assemble_selection = []
             self.selected_manual_id = manual["manual_id"]
             self.active_tab = "manuals"
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_pick_manual(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 1)
@@ -522,34 +541,38 @@ class ManualView(GameView):
             await interaction.response.defer()
             return
         self.selected_manual_id = int(choice)
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     def _make_equip_callback(self, slot: str):
         async def callback(interaction: discord.Interaction):
-            ok, message = self.game.equip_manual(self.user_id, self.display_name, self.selected_manual_id, slot)
+            ok, message = await asyncio.to_thread(self.game.equip_manual, self.user_id, self.display_name, self.selected_manual_id, slot)
             self.last_result = message
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 
     def _make_unequip_callback(self, slot: str):
         async def callback(interaction: discord.Interaction):
-            ok, message = self.game.unequip_manual(self.user_id, self.display_name, slot)
+            ok, message = await asyncio.to_thread(self.game.unequip_manual, self.user_id, self.display_name, slot)
             self.last_result = message
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 
     async def _on_dismantle_manual(self, interaction: discord.Interaction):
-        ok, message = self.game.dismantle_manual(self.user_id, self.display_name, self.selected_manual_id)
+        ok, message = await asyncio.to_thread(self.game.dismantle_manual, self.user_id, self.display_name, self.selected_manual_id)
         self.last_result = message
         if ok:
             self.selected_manual_id = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     # -- embed ------------------------------------------------------------------------------
 

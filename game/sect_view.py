@@ -1,3 +1,4 @@
+import asyncio
 import traceback
 
 import discord
@@ -57,11 +58,14 @@ class CreateSectModal(discord.ui.Modal, title="Found a Sect"):
         self.sect_view = sect_view
 
     async def on_submit(self, interaction: discord.Interaction):
-        ok, message = self.sect_view.game.sect_create(self.sect_view.user_id, self.sect_view.display_name, str(self.name_input.value))
+        ok, message = await asyncio.to_thread(
+            self.sect_view.game.sect_create, self.sect_view.user_id, self.sect_view.display_name, str(self.name_input.value),
+        )
         self.sect_view.last_result = message
-        self.sect_view.refresh()
-        self.sect_view._build_components()
-        await interaction.response.edit_message(embed=self.sect_view.build_embed(), view=self.sect_view)
+        await asyncio.to_thread(self.sect_view.refresh)
+        await asyncio.to_thread(self.sect_view._build_components)
+        embed = await asyncio.to_thread(self.sect_view.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self.sect_view)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
         await _modal_error(interaction, error, "CreateSectModal")
@@ -85,14 +89,13 @@ class TreasuryModal(discord.ui.Modal):
             await interaction.response.send_message(f"'{raw}' isn't a whole number.", ephemeral=True)
             return
         game = self.sect_view.game
-        if self.action == "donate":
-            ok, message = game.sect_donate(self.sect_view.user_id, self.sect_view.display_name, amount)
-        else:
-            ok, message = game.sect_withdraw(self.sect_view.user_id, self.sect_view.display_name, amount)
+        fn = game.sect_donate if self.action == "donate" else game.sect_withdraw
+        ok, message = await asyncio.to_thread(fn, self.sect_view.user_id, self.sect_view.display_name, amount)
         self.sect_view.last_result = message
-        self.sect_view.refresh()
-        self.sect_view._build_components()
-        await interaction.response.edit_message(embed=self.sect_view.build_embed(), view=self.sect_view)
+        await asyncio.to_thread(self.sect_view.refresh)
+        await asyncio.to_thread(self.sect_view._build_components)
+        embed = await asyncio.to_thread(self.sect_view.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self.sect_view)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
         await _modal_error(interaction, error, "TreasuryModal")
@@ -113,24 +116,30 @@ class SectInfoModal(discord.ui.Modal, title="Edit Sect"):
     async def on_submit(self, interaction: discord.Interaction):
         game = self.sect_view.game
         user_id, display_name = self.sect_view.user_id, self.sect_view.display_name
-        sect = game.sect_status(user_id, display_name)["sect"]
-        messages = []
         new_name = str(self.name_input.value).strip()
-        if new_name and new_name != sect["name"]:
-            ok, message = game.sect_rename(user_id, display_name, new_name)
-            messages.append(message)
         new_motto = str(self.motto_input.value)
-        if new_motto != sect["motto"]:
-            ok, message = game.sect_set_motto(user_id, display_name, new_motto)
-            messages.append(message)
         new_banner = str(self.banner_input.value).strip()
-        if new_banner and new_banner != sect["banner"]:
-            ok, message = game.sect_set_banner(user_id, display_name, new_banner)
-            messages.append(message)
+
+        def _apply_edits():
+            sect = game.sect_status(user_id, display_name)["sect"]
+            messages = []
+            if new_name and new_name != sect["name"]:
+                _, message = game.sect_rename(user_id, display_name, new_name)
+                messages.append(message)
+            if new_motto != sect["motto"]:
+                _, message = game.sect_set_motto(user_id, display_name, new_motto)
+                messages.append(message)
+            if new_banner and new_banner != sect["banner"]:
+                _, message = game.sect_set_banner(user_id, display_name, new_banner)
+                messages.append(message)
+            return messages
+
+        messages = await asyncio.to_thread(_apply_edits)
         self.sect_view.last_result = "\n".join(messages) if messages else "No changes made."
-        self.sect_view.refresh()
-        self.sect_view._build_components()
-        await interaction.response.edit_message(embed=self.sect_view.build_embed(), view=self.sect_view)
+        await asyncio.to_thread(self.sect_view.refresh)
+        await asyncio.to_thread(self.sect_view._build_components)
+        embed = await asyncio.to_thread(self.sect_view.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self.sect_view)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
         await _modal_error(interaction, error, "SectInfoModal")
@@ -297,8 +306,9 @@ class SectView(GameView):
             self.manage_action = action
             self.manage_page = 0
             self.last_result = None
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 
@@ -307,8 +317,9 @@ class SectView(GameView):
         self.selected_application_id = None
         self.applications_page = 0
         self.last_result = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_pick_manage_target(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 0)
@@ -325,17 +336,18 @@ class SectView(GameView):
                 "promote": self.game.sect_promote, "demote": self.game.sect_demote,
                 "kick": self.game.sect_kick, "transfer": self.game.sect_transfer_leadership,
             }[self.manage_action]
-            ok, message = method(self.user_id, self.display_name, target_id, target_name)
+            ok, message = await asyncio.to_thread(method, self.user_id, self.display_name, target_id, target_name)
             self.last_result = message
-            self.refresh()
+            await asyncio.to_thread(self.refresh)
             # Transfer changes the ACTOR's own rank (Leader -> Vice Leader), so re-picking
             # another target on the same screen no longer makes sense — bounce back to main.
             # Promote/demote/kick stay on this screen so a Leader can work through several
             # members in one sitting without re-opening the button each time.
             if ok and self.manage_action == "transfer":
                 self.screen = "main"
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_pick_application(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 0)
@@ -346,45 +358,51 @@ class SectView(GameView):
             self.applications_page += 1
         elif choice != "none":
             self.selected_application_id = int(choice)
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_approve_application(self, interaction: discord.Interaction):
-        ok, message = self.game.sect_approve_application(self.user_id, self.display_name, self.selected_application_id)
+        ok, message = await asyncio.to_thread(self.game.sect_approve_application, self.user_id, self.display_name, self.selected_application_id)
         self.last_result = message
-        self.refresh()
+        await asyncio.to_thread(self.refresh)
         self.selected_application_id = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_reject_application(self, interaction: discord.Interaction):
-        ok, message = self.game.sect_reject_application(self.user_id, self.display_name, self.selected_application_id)
+        ok, message = await asyncio.to_thread(self.game.sect_reject_application, self.user_id, self.display_name, self.selected_application_id)
         self.last_result = message
         self.selected_application_id = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_cancel_application(self, interaction: discord.Interaction):
-        ok, message = self.game.sect_cancel_application(self.user_id, self.display_name)
+        ok, message = await asyncio.to_thread(self.game.sect_cancel_application, self.user_id, self.display_name)
         self.last_result = message
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_leave(self, interaction: discord.Interaction):
-        ok, message = self.game.sect_leave(self.user_id, self.display_name)
+        ok, message = await asyncio.to_thread(self.game.sect_leave, self.user_id, self.display_name)
         self.last_result = message
-        self.refresh()
+        await asyncio.to_thread(self.refresh)
         self.screen = "main"
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_back(self, interaction: discord.Interaction):
         self.screen = "main"
         self.manage_action = None
         self.selected_application_id = None
         self.last_result = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     # -- embed ------------------------------------------------------------------------------
 

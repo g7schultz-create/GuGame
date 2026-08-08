@@ -1,3 +1,4 @@
+import asyncio
 import discord
 
 from . import treasure_hunt
@@ -55,13 +56,14 @@ class TreasureHuntView(GameView):
                 await interaction.response.defer()
                 return
             category = self.board[index]
-            emoji, label = treasure_hunt.grant_tile_reward(self.game, self.user_id, self.display_name, category)
+            emoji, label = await asyncio.to_thread(treasure_hunt.grant_tile_reward, self.game, self.user_id, self.display_name, category)
             self.revealed[index] = True
             self.revealed_emoji[index] = emoji
             self.revealed_labels[index] = category.title()
             self.found.append((emoji, label))
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 

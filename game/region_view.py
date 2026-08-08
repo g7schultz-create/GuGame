@@ -1,3 +1,4 @@
+import asyncio
 import discord
 
 from . import world_regions
@@ -57,11 +58,12 @@ class RegionView(GameView):
     async def _on_pick_region(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 0)
         self.selected_region = select.values[0]
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_travel(self, interaction: discord.Interaction):
-        result = self.game.set_world_region(self.user_id, self.display_name, self.selected_region)
+        result = await asyncio.to_thread(self.game.set_world_region, self.user_id, self.display_name, self.selected_region)
         if not result["ok"]:
             if result["reason"] == "cooldown":
                 self.last_message = f"🧭 You just changed regions — travel again in {format_duration(result['remaining_seconds'])}."
@@ -71,8 +73,9 @@ class RegionView(GameView):
                 self.last_message = "❌ Couldn't travel there."
         else:
             self.last_message = f"{result['region'].emoji} You settle into **{result['region'].name}**."
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     def build_embed(self) -> discord.Embed:
         status = self._status()

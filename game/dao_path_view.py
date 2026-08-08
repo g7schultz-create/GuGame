@@ -1,3 +1,4 @@
+import asyncio
 from typing import Optional
 
 import discord
@@ -77,20 +78,22 @@ class DaoPathView(GameView):
         select = next(child for child in self.children if isinstance(child, discord.ui.Select))
         self.selected_path = select.values[0]
         self.last_result = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     def _make_allocate_callback(self, amount: Optional[int]):
         async def callback(interaction: discord.Interaction):
-            banked, invested = self._current_marks()
+            banked, invested = await asyncio.to_thread(self._current_marks)
             room = dao_paths.DAO_MARKS_CAP_PER_PATH - invested
             spend = min(banked, room) if amount is None else min(amount, banked, room)
             if spend <= 0:
                 self.last_result = "Nothing to allocate — you're either out of banked Dao Marks or this path is already maxed."
             else:
-                _, self.last_result = self.game.allocate_dao_marks(self.user_id, self.selected_path, spend)
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+                _, self.last_result = await asyncio.to_thread(self.game.allocate_dao_marks, self.user_id, self.selected_path, spend)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 

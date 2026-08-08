@@ -1,3 +1,4 @@
+import asyncio
 from typing import Optional
 
 import discord
@@ -78,8 +79,9 @@ class TransmuteView(GameView):
             self.active_subcategory = _default_subcategory(category)
             self.selected_item = None
             self.last_result = None
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 
@@ -88,8 +90,9 @@ class TransmuteView(GameView):
             self.active_subcategory = subcategory
             self.selected_item = None
             self.last_result = None
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 
@@ -98,16 +101,18 @@ class TransmuteView(GameView):
         value = select.values[0]
         self.selected_item = None if value == "none" else value
         self.last_result = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_transmute(self, interaction: discord.Interaction):
-        ok, message = self.game.transmute_item(self.user_id, self.display_name, self.selected_item)
+        ok, message = await asyncio.to_thread(self.game.transmute_item, self.user_id, self.display_name, self.selected_item)
         self.last_result = message
         if ok:
             self.selected_item = None
-        self._build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     def build_embed(self) -> discord.Embed:
         status = self.game.get_transmute_status(self.user_id)

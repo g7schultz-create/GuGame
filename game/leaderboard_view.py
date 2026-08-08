@@ -1,3 +1,5 @@
+import asyncio
+
 import discord
 
 from . import realms
@@ -51,8 +53,9 @@ class LeaderboardView(GameView):
     def _make_callback(self, key: str):
         async def callback(interaction: discord.Interaction):
             self.active_category = key
-            self._build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         return callback
 
