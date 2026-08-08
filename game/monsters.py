@@ -365,19 +365,25 @@ from .content.monsters.duskwraith_barrens import (
     DUSKWRAITH_REAVER_WARLORD_RAID_GROUP,
     HOLLOW_MARROW_COLOSSUS_RAID_GROUP,
 )
+from .content.monsters.dao_seeking import (
+    DAO_SEEKING_MONSTERS,
+    HEAVEN_DEFYING_DAO_TYRANT_RAID_GROUP,
+    WORLD_SUNDERING_INTENT_COLOSSUS_RAID_GROUP,
+)
 
 # HUNT_MONSTERS_BY_REALM: realm_index -> [Monster, ...], the pool hunt_monster_name_for_realm
-# picks from. Every realm except 0, 1, 2, and 3 still has exactly one generic generated
+# picks from. Every realm except 0, 1, 2, 3, and 5 still has exactly one generic generated
 # monster, so its own encounter behavior is completely unchanged; realm 0 has a real pool
 # (Ironhide Boar, unchanged, plus the Verdant Borderlands catalog), realm 1 has Hundred Beast
-# Mountains, realm 2 has Crimson Furnace Province, and realm 3 now has Duskwraith Barrens —
-# like realms 1 and 2, there was no pre-existing hand-authored realm-3 hunt monster to keep
-# as an anchor, so all 8 are new.
+# Mountains, realm 2 has Crimson Furnace Province, realm 3 has Duskwraith Barrens, and realm 5
+# now has Ten Thousand Dao Wilderness — like realms 1, 2, and 3, there was no pre-existing
+# hand-authored realm-5 hunt monster to keep as an anchor, so all 8 are new.
 HUNT_MONSTERS_BY_REALM = {
     HUNT_ANCHOR_REALM_INDEX: [IRONHIDE_BOAR, *VERDANT_BORDERLANDS_MONSTERS],
     1: HUNDRED_BEAST_MOUNTAINS_MONSTERS,
     2: CRIMSON_FURNACE_PROVINCE_MONSTERS,
     3: DUSKWRAITH_BARRENS_MONSTERS,
+    5: DAO_SEEKING_MONSTERS,
 }
 for _realm_index in range(len(realms.GREAT_REALMS)):
     if _realm_index not in HUNT_MONSTERS_BY_REALM:
@@ -387,18 +393,20 @@ for _realm_index in range(len(realms.GREAT_REALMS)):
 # groups per realm, mirroring HUNT_MONSTERS_BY_REALM's own pool restructure. Realm 0 has just
 # Blood Fang Wolf Alpha (replacing its old _generate_raid_group placeholder); realm 1 has
 # TWO real groups — Boar King (untouched, still the region's "first" raid) and Thunderhorn
-# Herd Tyrant (the brief's own "second" raid); realms 2 and 3 now also have two each —
-# Crimson Furnace Lion King/Star-Iron Devourer, and Duskwraith Reaver Warlord/Hollow Marrow
-# Colossus — with no pre-existing raid to preserve at either realm, so all four of those are
-# new (replacing the old single-group placeholder outright). Every realm gets a weighted-
-# random pick among its own groups (by each group's main boss's encounter_weight); every
-# realm past 3 still has exactly one generic generated group, so its own behavior is
-# completely unchanged.
+# Herd Tyrant (the brief's own "second" raid); realms 2, 3, and 5 now also have two each —
+# Crimson Furnace Lion King/Star-Iron Devourer, Duskwraith Reaver Warlord/Hollow Marrow
+# Colossus, and Heaven-Defying Dao Tyrant/World-Sundering Intent Colossus — with no
+# pre-existing raid to preserve at any of those realms, so all of those pairs are new
+# (replacing the old single-group placeholder outright). Every realm gets a weighted-random
+# pick among its own groups (by each group's main boss's encounter_weight); every realm past
+# 0-3 and 5 still has exactly one generic generated group, so its own behavior is completely
+# unchanged.
 RAID_GROUPS_BY_REALM = {
     RAID_ANCHOR_REALM_INDEX: [[BOAR_KING, BOAR_GUARD, BOAR_SKIRMISHER], HUNDRED_BEAST_MOUNTAINS_RAID_GROUP],
     HUNT_ANCHOR_REALM_INDEX: [VERDANT_BORDERLANDS_RAID_GROUP],
     2: [CRIMSON_FURNACE_LION_KING_RAID_GROUP, STAR_IRON_DEVOURER_RAID_GROUP],
     3: [DUSKWRAITH_REAVER_WARLORD_RAID_GROUP, HOLLOW_MARROW_COLOSSUS_RAID_GROUP],
+    5: [HEAVEN_DEFYING_DAO_TYRANT_RAID_GROUP, WORLD_SUNDERING_INTENT_COLOSSUS_RAID_GROUP],
 }
 for _realm_index in range(len(realms.GREAT_REALMS)):
     if _realm_index not in RAID_GROUPS_BY_REALM:

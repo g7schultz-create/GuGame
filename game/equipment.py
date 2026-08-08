@@ -343,11 +343,13 @@ from .content.gu_families import VERDANT_BORDERLANDS_GU_FAMILIES  # noqa: E402
 from .content.gu_families_hundred_beast_mountains import GU_FAMILIES_HUNDRED_BEAST_MOUNTAINS  # noqa: E402
 from .content.gu_families_crimson_furnace import GU_FAMILIES_CRIMSON_FURNACE  # noqa: E402
 from .content.gu_families_duskwraith_barrens import GU_FAMILIES_DUSKWRAITH_BARRENS  # noqa: E402
+from .content.gu_families_dao_seeking import GU_FAMILIES_DAO_SEEKING  # noqa: E402
 
 GU_FAMILIES.update(VERDANT_BORDERLANDS_GU_FAMILIES)
 GU_FAMILIES.update(GU_FAMILIES_HUNDRED_BEAST_MOUNTAINS)
 GU_FAMILIES.update(GU_FAMILIES_CRIMSON_FURNACE)
 GU_FAMILIES.update(GU_FAMILIES_DUSKWRAITH_BARRENS)
+GU_FAMILIES.update(GU_FAMILIES_DAO_SEEKING)
 
 # Shared by every place that renders an Equipment's stat_bonuses (equipment_view.py's slot
 # list, views.py's Inventory "Equipment" tab, and this module's own Gu descriptions) so the
