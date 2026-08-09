@@ -117,6 +117,7 @@ ALIASES = {
     "killer_move": ["km"], "use_support_move": ["usm"], "verify": ["v"],
     "search_forgotten_blessed_land": ["sfbl", "sf"],
     "teach": ["te"],
+    "inheritance_ground": ["ig"],
 }
 
 
@@ -370,4 +371,14 @@ def register_text_commands(bot: commands.Bot, cog):
     bot.add_command(commands.Command(
         text_grant_stones, name="grant_stones", aliases=ALIASES["grant_stones"],
         help=cog.grant_stones.description,
+    ))
+
+    async def text_inheritance_ground(
+        ctx: commands.Context, member1: discord.Member, member2: discord.Member, member3: discord.Member = None,
+    ):
+        await cog.inheritance_ground.callback(cog, ShimInteraction(ctx), member1, member2, member3)
+
+    bot.add_command(commands.Command(
+        text_inheritance_ground, name="inheritance_ground", aliases=ALIASES["inheritance_ground"],
+        help=f"{cog.inheritance_ground.description} Usage: i inheritance_ground @member1 @member2 [@member3]",
     ))

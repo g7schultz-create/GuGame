@@ -46,6 +46,7 @@ from .study_view import StudyView
 from .search_view import SearchView
 from .treasure_hunt_view import TreasureHuntView
 from .discovery_view import AbandonDiscoveryView, build_discovery_entry_view
+from .inheritance_ground_view import AbandonInheritanceGroundView, InheritanceGroundLobbyView
 from .region_view import RegionView
 from .battlefield_view import BattlefieldView
 from .world_boss_view import WorldBossView
@@ -1004,6 +1005,68 @@ class GameCog(commands.Cog):
         notice = _region_find_notice(region_find)
         if notice:
             await interaction.followup.send(notice, ephemeral=True)
+
+    @app_commands.command(name="inheritance_ground", description="Invite 2-3 others to explore an ancient inheritance ground together (3-4 player team)")
+    @app_commands.describe(
+        member1="First required teammate", member2="Second required teammate",
+        member3="Optional 4th teammate",
+    )
+    @app_commands.guilds(GUILD)
+    async def inheritance_ground(
+        self, interaction: discord.Interaction, member1: discord.Member, member2: discord.Member,
+        member3: Optional[discord.Member] = None,
+    ):
+        leader = interaction.user
+        invitees = [member1, member2] + ([member3] if member3 else [])
+        if any(m.bot for m in invitees):
+            await interaction.response.send_message("You can't invite a bot.", ephemeral=True)
+            return
+        if len({leader.id, *[m.id for m in invitees]}) != len(invitees) + 1:
+            await interaction.response.send_message("Pick 2-3 different teammates — not yourself, and not each other twice.", ephemeral=True)
+            return
+
+        leader_player = await asyncio.to_thread(self.game.get_player_stats, leader.id, leader.display_name)
+        if not leader_player["character_confirmed"]:
+            await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
+            return
+        if self.game.has_active_inheritance_ground(leader_player):
+            abandon_view = AbandonInheritanceGroundView(leader.id, self.game)
+            await interaction.response.send_message("🗺️ Finish your current inheritance ground run first!", view=abandon_view, ephemeral=True)
+            return
+        remaining = self.game.inheritance_ground_cooldown_remaining(leader_player)
+        if remaining > 0:
+            await interaction.response.send_message(
+                f"You're still recovering from your last inheritance ground run — try again in **{format_duration(remaining)}**.",
+                ephemeral=True,
+            )
+            return
+
+        # Third-person here (about each invitee), unlike InheritanceGroundLobbyView's own
+        # accept-time re-check of this exact same eligibility, which is "you"-phrased since
+        # that one's checking the clicking player themselves.
+        for m in invitees:
+            ok, reason_code, reason_remaining = await asyncio.to_thread(self.game.check_inheritance_ground_eligibility, m.id, m.display_name)
+            if not ok:
+                messages = {
+                    "not_confirmed": f"**{m.display_name}** hasn't confirmed a character yet.",
+                    "already_active": f"**{m.display_name}** is already in another inheritance ground run.",
+                    "on_cooldown": f"**{m.display_name}** is still recovering from their last run — {format_duration(reason_remaining)} left.",
+                }
+                await interaction.response.send_message(f"Can't invite them right now: {messages[reason_code]}", ephemeral=True)
+                return
+
+        ground_key = "blood_sea_ancestor"  # only one ground exists so far -- see inheritance_ground_data.GROUNDS
+        # Constructed directly, NOT via asyncio.to_thread -- see InheritanceGroundLobbyView's
+        # own construction note in inheritance_ground_view.py for why this is a hard rule for
+        # every View/Modal in this codebase.
+        view = InheritanceGroundLobbyView(self.game, leader, invitees, ground_key)
+        embed = await asyncio.to_thread(view.build_embed)
+        mentions = " ".join(m.mention for m in invitees)
+        await interaction.response.send_message(
+            content=f"{mentions} — **{leader.display_name}** invites you on an inheritance ground run!",
+            embed=embed, view=view, ephemeral=False,
+        )
+        view.message = await interaction.original_response()
 
     @app_commands.command(name="mine", description="Strike a 5-node ore vein (15m cooldown, Miner rank boosts yield, Luck boosts tier)")
     @app_commands.guilds(GUILD)

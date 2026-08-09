@@ -123,6 +123,9 @@ SOURCE_RARITY_MULTIPLIERS = {
     "secret_realm_boss": {"Epic": 1.15, "Legendary": 1.15, "Mythic": 1.15, "Divine": 1.15, "Unique": 1.15},
     "dream_completion": {"Mythic": 1.35, "Divine": 1.35, "Unique": 1.35},
     "forbidden": {"Legendary": 1.25, "Mythic": 1.25, "Divine": 1.25, "Unique": 1.25},
+    # /inheritance_ground -- a real multi-player commitment (invite 2-3 others, clear 2 stages
+    # + a Final Trial), so its loot pool leans a bit richer than solo inheritance_final.
+    "inheritance_ground": {"Legendary": 1.3, "Mythic": 1.3, "Divine": 1.3, "Unique": 1.3},
 }
 
 # -- Gu role weights by source (section 12) -------------------------------------------------

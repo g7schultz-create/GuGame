@@ -209,6 +209,18 @@ class GameDatabase:
         # participant's flag gets cleared together at whichever terminal state the raid ends on
         # (victory/wiped/abandoned), not just the player who ran /raid.
         "active_raid_started_ts": "INTEGER DEFAULT 0",
+        # /inheritance_ground's own "one at a time" gate -- same shape/reasoning as
+        # active_raid_started_ts above (shared multi-player encounter, invited team rather than
+        # an open join, cleared for every team member together at whichever terminal state the
+        # run ends on: lobby cancelled, trial failed, or the betrayal stage resolves). Shipped
+        # with GameManager.abandon_active_inheritance_ground + a UI escape hatch from day one
+        # (see AbandonInheritanceGroundView) rather than added reactively -- see the raid flee
+        # bug fixed in commit 0b6b712 for why that matters.
+        "active_inheritance_ground_started_ts": "INTEGER DEFAULT 0",
+        # Per-player cooldown, set on every team member once a run ends (complete OR abandoned)
+        # -- same "last_x_ts + GameManager._check_cooldown" convention as
+        # last_battlefield_ts/BATTLEFIELD_COOLDOWN_SECONDS.
+        "last_inheritance_ground_ts": "INTEGER DEFAULT 0",
 
         # World region (see world_regions.py / /region) -- a mortal-realm (Nascent Soul and
         # below) character's chosen geographic zone, separate from search_data.REGIONS'
@@ -4275,6 +4287,33 @@ class GameDatabase:
         con = self.connect()
         placeholders = ",".join("?" for _ in user_ids)
         con.execute(f"UPDATE players SET active_raid_started_ts = 0 WHERE user_id IN ({placeholders})", user_ids)
+        con.commit()
+        con.close()
+
+    def start_active_inheritance_ground_bulk(self, user_ids: list, ts: int):
+        if not user_ids:
+            return
+        con = self.connect()
+        placeholders = ",".join("?" for _ in user_ids)
+        con.execute(f"UPDATE players SET active_inheritance_ground_started_ts = ? WHERE user_id IN ({placeholders})", [ts, *user_ids])
+        con.commit()
+        con.close()
+
+    def clear_active_inheritance_ground_bulk(self, user_ids: list):
+        if not user_ids:
+            return
+        con = self.connect()
+        placeholders = ",".join("?" for _ in user_ids)
+        con.execute(f"UPDATE players SET active_inheritance_ground_started_ts = 0 WHERE user_id IN ({placeholders})", user_ids)
+        con.commit()
+        con.close()
+
+    def set_inheritance_ground_cooldown_bulk(self, user_ids: list, ts: int):
+        if not user_ids:
+            return
+        con = self.connect()
+        placeholders = ",".join("?" for _ in user_ids)
+        con.execute(f"UPDATE players SET last_inheritance_ground_ts = ? WHERE user_id IN ({placeholders})", [ts, *user_ids])
         con.commit()
         con.close()
 

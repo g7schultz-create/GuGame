@@ -5,10 +5,10 @@ import time
 from typing import Optional
 
 from . import (
-    accessories_data, accessories_gen, alchemy, avatar, avatar_gear, blacksmith, chargen, combat,
-    dao_companion, dao_paths, discovery_gen, equipment, exploration, gathering, gu_types, items,
-    killer_move_gen, manual_data, manual_gen, professions, realms, search_data, sects, split_body,
-    tournament, treasure_hunt, world_boss, world_regions,
+    accessories_data, accessories_gen, alchemy, avatar, avatar_gear, blacksmith, canon_gu, chargen, combat,
+    dao_companion, dao_paths, discovery_gen, equipment, exploration, gathering, gu_types,
+    inheritance_ground_data, items, killer_move_gen, manual_data, manual_gen, professions, realms,
+    search_data, sects, split_body, tournament, treasure_hunt, world_boss, world_regions,
 )
 from .character_data import PATHS, PHYSIQUE_TIER_ORDER, RACES, ROOT_TIER_ORDER
 from .database import GameDatabase
@@ -872,6 +872,165 @@ class GameManager:
         RaidView instance still existing or being reachable. Safe to call even if they were
         never really stuck (a no-op UPDATE against a user_id not currently flagged)."""
         self.db.clear_active_raid_bulk([user_id])
+
+    # -- /inheritance_ground: 3-4 player INVITED team (see InheritanceGroundLobbyView), a few
+    # branching-choice stages, an auto-resolved Final Trial, then the betrayal twist -- see
+    # game/inheritance_ground_data.py for the content shape and game/inheritance_ground_view.py
+    # for the UI. Same "one at a time" gate shape as /hunt and /raid, but bulk-cleared for the
+    # WHOLE invited team together (not just the leader) at every terminal state, and shipped
+    # with an Abandon escape hatch from day one -- see the raid flee bug fixed in commit
+    # 0b6b712 for why that matters, rather than adding it reactively after someone gets stuck.
+    ACTIVE_INHERITANCE_GROUND_STALE_SECONDS = 2 * 3600
+    # Bigger commitment than solo Battlefield (BATTLEFIELD_COOLDOWN_SECONDS, 6h) since it needs
+    # 2-3 other willing players' time too -- tunable.
+    INHERITANCE_GROUND_COOLDOWN_SECONDS = 8 * 3600
+    # Team power (see _inheritance_ground_team_power) needed per member, scaled by the ground's
+    # own gu_rank. First-pass estimate, NOT checked against live player power the way
+    # WORLD_BOSS_MAX_HP was (no real teams have attempted this yet) -- likely needs tuning once
+    # they do, same caveat this session's Dao Seeking region content shipped with.
+    INHERITANCE_GROUND_POWER_PER_MEMBER_PER_RANK = 300
+
+    def has_active_inheritance_ground(self, player: dict) -> bool:
+        started = player["active_inheritance_ground_started_ts"]
+        return bool(started) and (time.time() - started) < self.ACTIVE_INHERITANCE_GROUND_STALE_SECONDS
+
+    def inheritance_ground_cooldown_remaining(self, player: dict) -> int:
+        return self._check_cooldown(player, "last_inheritance_ground_ts", self.INHERITANCE_GROUND_COOLDOWN_SECONDS)
+
+    def check_inheritance_ground_eligibility(self, user_id: int, name: str) -> tuple:
+        """Used both when the leader first invites AND when each invitee is about to accept --
+        conditions (cooldown, another run started elsewhere) can change during the lobby's own
+        up-to-5-minute window, so this is re-checked fresh at both points rather than trusted
+        from invite time. Returns (ok, reason_code, remaining_cooldown_seconds) -- a code
+        rather than a pre-formatted string since the two call sites need different grammar
+        (cog.py's invite-time check is third-person about an invitee, InheritanceGroundLobbyView's
+        accept-time check is second-person about the clicking player themselves).
+        reason_code is one of "not_confirmed"/"already_active"/"on_cooldown"/None (ok)."""
+        player = self.db.get_or_create_player(user_id, name)
+        if not player["character_confirmed"]:
+            return False, "not_confirmed", 0
+        if self.has_active_inheritance_ground(player):
+            return False, "already_active", 0
+        remaining = self.inheritance_ground_cooldown_remaining(player)
+        if remaining > 0:
+            return False, "on_cooldown", remaining
+        return True, None, 0
+
+    def start_active_inheritance_ground(self, user_ids: list):
+        self.db.start_active_inheritance_ground_bulk(user_ids, int(time.time()))
+
+    def abandon_active_inheritance_ground(self, user_id: int):
+        """Self-service escape hatch, same reasoning as abandon_active_raid above."""
+        self.db.clear_active_inheritance_ground_bulk([user_id])
+
+    def finish_inheritance_ground_run(self, user_ids: list):
+        """Called at every terminal state (lobby cancelled/timed out before starting, Final
+        Trial failed, or the betrayal stage resolves) -- releases the active flag AND starts
+        the shared cooldown for every team member together, one call covering both."""
+        now = int(time.time())
+        self.db.clear_active_inheritance_ground_bulk(user_ids)
+        self.db.set_inheritance_ground_cooldown_bulk(user_ids, now)
+
+    def resolve_inheritance_ground_stage(self, ground_key: str, stage_index: int, option_id: str, team: list) -> dict:
+        """team: [(user_id, name), ...]. A GROUP decision (whichever team member clicked first
+        already decided which option_id this is -- see InheritanceGroundView._on_stage_option)
+        resolved ONCE for the whole team, not per-player. Deducts stone_cost_per_member from
+        every member via spend_spirit_stones's own atomic all-or-nothing clamp (a member who
+        can't afford it just doesn't pay -- never blocks the group's progress over one poor
+        member). Returns {"success", "power_delta", "flavor", "option_label"}."""
+        ground = inheritance_ground_data.GROUNDS[ground_key]
+        stage = ground["stages"][stage_index]
+        option = next(o for o in stage["options"] if o["id"] == option_id)
+        cost = option.get("stone_cost_per_member", 0)
+        if cost:
+            for user_id, _name in team:
+                self.db.spend_spirit_stones(user_id, cost)
+        success = random.random() < option["success_chance"]
+        power_delta = option["success_power_delta"] if success else option["failure_power_delta"]
+        flavor = option["success_flavor"] if success else option["failure_flavor"]
+        if "{volunteer}" in flavor:
+            volunteer_name = random.choice(team)[1]
+            flavor = flavor.format(volunteer=volunteer_name)
+        return {"success": success, "power_delta": power_delta, "flavor": flavor, "option_label": option["label"]}
+
+    def _inheritance_ground_team_power(self, team: list) -> float:
+        """Sums each member's full (base + gear) combat stats, weighted the same way
+        equipment.gear_power_score_from_stats already scores a gear PIECE's stat_bonuses --
+        reused here against a full player's combined stats rather than just a delta, since it's
+        already a reasonable relative per-stat weighting and inventing a second one would be
+        pure duplication."""
+        total = 0.0
+        for user_id, name in team:
+            player = self.db.get_or_create_player(user_id, name)
+            bonuses = self.compute_equipment_bonuses(user_id)["stats"]
+            stats = {
+                "str_stat": player["str_stat"] + bonuses["str_stat"], "atk_stat": player["atk_stat"] + bonuses["atk_stat"],
+                "def_stat": player["def_stat"] + bonuses["def_stat"], "spd_stat": player["spd_stat"] + bonuses["spd_stat"],
+                "luck_stat": player["luck_stat"] + bonuses["luck_stat"], "hp": player["max_hp"] + bonuses["hp"],
+                "qi_stat": player["qi_stat"] + bonuses["qi_stat"],
+            }
+            total += equipment.gear_power_score_from_stats(stats)
+        return total
+
+    def resolve_inheritance_ground_trial(self, ground_key: str, team: list, trial_power_modifier: float) -> dict:
+        """team: [(user_id, name), ...]. trial_power_modifier is the running sum of every
+        stage's power_delta so far -- real branching choices actually swing this roll, not
+        just flavor. Returns {"success", "team_power", "threshold"}."""
+        ground = inheritance_ground_data.GROUNDS[ground_key]
+        team_power = self._inheritance_ground_team_power(team) + trial_power_modifier
+        threshold = self.INHERITANCE_GROUND_POWER_PER_MEMBER_PER_RANK * ground["gu_rank"] * len(team)
+        return {"success": team_power >= threshold, "team_power": team_power, "threshold": threshold}
+
+    def grant_inheritance_ground_share_reward(self, ground_key: str, user_id: int, name: str) -> str:
+        """One independent reward roll per Share-choosing member -- same "roll once per
+        participant" convention raid.py's own _on_victory uses for its per-participant loot,
+        rather than one shared pool awkwardly split across heterogeneous reward kinds (stones
+        vs items vs pages vs a whole manual don't divide evenly). Reuses the exact
+        rank/difficulty/rarity-scaled machinery /search's own inheritance discoveries use."""
+        ground = inheritance_ground_data.GROUNDS[ground_key]
+        rng = random.Random()
+        category = discovery_gen.weighted_choice(search_data.INHERITANCE_FINAL_CHEST_TABLE, rng)
+        reward = discovery_gen.generate_loot(category, "inheritance_ground", ground["gu_rank"], "Standard", ground.get("tags", []), rng)
+        return self.grant_reward(user_id, name, reward)
+
+    def grant_inheritance_ground_bonus_gu(self, ground_key: str, user_id: int, name: str) -> str:
+        """The backstab prize -- a GUARANTEED canon Gu roll (unlike canon_gu.roll_canon_gu_drop,
+        which is chance-gated for a normal kill; this is the explicit reward for winning the
+        betrayal, so it must always land), same rank-eligibility/weighting canon_gu's own
+        roll_canon_gu_drop uses, just skipping its RNG "does anything drop at all" gate."""
+        ground = inheritance_ground_data.GROUNDS[ground_key]
+        gu_rank = ground["gu_rank"]
+        eligible = [
+            gu for gu in canon_gu.CANON_GU
+            if gu["drop_weight"] > 0 and gu["gu_rank"] in (gu_rank, max(1, gu_rank - 1))
+        ]
+        if not eligible:
+            # Extremely unlikely given the canon catalog's rank coverage, but a backstab winner
+            # must never end up empty-handed for finding no eligible Gu at this rank.
+            self.db.add_spirit_stones(user_id, 500)
+            return "500 spirit stones (no matching Core Gu was found at this rank)"
+        chosen = random.choices(eligible, weights=[gu["drop_weight"] for gu in eligible], k=1)[0]
+        gu_name = equipment.gu_item_name(chosen["name"], "Common")
+        self.db.add_item(user_id, gu_name, 1)
+        return gu_name
+
+    def resolve_inheritance_ground_betrayal(self, backstabbers: list) -> dict:
+        """backstabbers: [(user_id, name), ...], already confirmed len >= 1 by the caller. A
+        solo backstabber just wins outright (no opponent to duel); 2+ fight an FFA via
+        tournament.run_battle_royale, the exact same frozen-snapshot "last one standing"
+        simulator /tournament itself uses -- no new combat logic needed. Returns
+        {"winner_user_id", "winner_name", "duel": run_battle_royale's own result dict, or None
+        for the solo case}."""
+        if len(backstabbers) == 1:
+            user_id, name = backstabbers[0]
+            return {"winner_user_id": user_id, "winner_name": name, "duel": None}
+        participants = [
+            {"user_id": user_id, "name": name, "snapshot": self._tournament_combat_snapshot(user_id, name)}
+            for user_id, name in backstabbers
+        ]
+        result = tournament.run_battle_royale(participants)
+        winner = next(p for p in result["placements"] if p["rank"] == 1)
+        return {"winner_user_id": winner["user_id"], "winner_name": winner["name"], "duel": result}
 
     # -- /search_forgotten_blessed_land treasure-hunt board (see game/treasure_hunt.py) --------
     TREASURE_HUNT_REALM_GATE = 2  # Core Formation's great_realm_index
