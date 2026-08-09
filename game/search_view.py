@@ -146,9 +146,10 @@ class SearchView(GameView):
             embed = await asyncio.to_thread(self.build_embed)
             await interaction.response.edit_message(embed=embed, view=self)
             return
-        new_view = await asyncio.to_thread(
-            build_discovery_entry_view, self.user_id, self.game, self.display_name, interaction.user.display_avatar.url, result,
-        )
+        # Constructed directly, NOT via asyncio.to_thread -- can return a BattlefieldView,
+        # whose __init__ calls asyncio.create_task (see cog.py's /discovery command for the
+        # full reasoning -- both entry points share this same helper).
+        new_view = build_discovery_entry_view(self.user_id, self.game, self.display_name, interaction.user.display_avatar.url, result)
         embed = await asyncio.to_thread(new_view.build_embed)
         await interaction.response.edit_message(embed=embed, view=new_view)
         new_view.message = await interaction.original_response()

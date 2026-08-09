@@ -916,8 +916,12 @@ class GameCog(commands.Cog):
         great_realm_index = int(realm.value) if realm else _default_great_realm_index(player)
         monster_name = hunt_monster_name_for_realm(great_realm_index)
         region_modifiers = await asyncio.to_thread(self.game.region_encounter_modifiers, interaction.user.id, interaction.user.display_name)
-        view = await asyncio.to_thread(
-            HuntView,
+        # Constructed directly, NOT via asyncio.to_thread -- HuntView.__init__ itself calls
+        # asyncio.create_task (to start the round timer), which requires a running loop on the
+        # CURRENT thread; a to_thread worker thread never has one. The __init__ DB reads are
+        # brief single-row lookups, not a bulk loop, so this doesn't reintroduce the hang this
+        # migration targeted.
+        view = HuntView(
             interaction.user.id, self.game, player, interaction.user.display_name, interaction.user.display_avatar.url,
             monster_name, region_modifiers,
         )
@@ -949,8 +953,9 @@ class GameCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        view = await asyncio.to_thread(
-            PvPView,
+        # Constructed directly, NOT via asyncio.to_thread -- see the identical note on
+        # HuntView's construction above (PvPView.__init__ also calls asyncio.create_task).
+        view = PvPView(
             interaction.user.id, self.game, player, interaction.user.display_name, interaction.user.display_avatar.url,
             result["opponent_name"], result["opponent_stats"], result["is_real"],
         )
@@ -1013,7 +1018,9 @@ class GameCog(commands.Cog):
         great_realm_index = int(realm.value) if realm else _default_great_realm_index(player)
         boss_name = raid_boss_name_for_realm(great_realm_index)
         region_modifiers = await asyncio.to_thread(self.game.region_encounter_modifiers, interaction.user.id, interaction.user.display_name)
-        view = await asyncio.to_thread(RaidView, self.game, boss_name, stat_multiplier=region_modifiers["stat_multiplier"])
+        # Constructed directly, NOT via asyncio.to_thread -- see the identical note on
+        # HuntView's construction above (RaidView.__init__ also calls asyncio.create_task).
+        view = RaidView(self.game, boss_name, stat_multiplier=region_modifiers["stat_multiplier"])
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
@@ -1421,8 +1428,11 @@ class GameCog(commands.Cog):
             else:
                 await interaction.response.send_message("You don't have an active discovery — run `/search` to find one first.", ephemeral=True)
             return
-        view = await asyncio.to_thread(
-            build_discovery_entry_view,
+        # Constructed directly, NOT via asyncio.to_thread -- can return a BattlefieldView,
+        # whose __init__ calls asyncio.create_task (see the identical note on HuntView's
+        # construction above). The one non-DB-safe branch (BattlefieldView's "player" lookup)
+        # is a single brief row read, not a bulk loop.
+        view = build_discovery_entry_view(
             interaction.user.id, self.game, interaction.user.display_name, interaction.user.display_avatar.url, result,
         )
         embed = await asyncio.to_thread(view.build_embed)
@@ -1448,8 +1458,9 @@ class GameCog(commands.Cog):
                     "You already have an active discovery waiting — resolve it with `/discovery` first.", ephemeral=True,
                 )
             return
-        view = await asyncio.to_thread(
-            BattlefieldView,
+        # Constructed directly, NOT via asyncio.to_thread -- see the identical note on
+        # HuntView's construction above (BattlefieldView.__init__ also calls asyncio.create_task).
+        view = BattlefieldView(
             interaction.user.id, self.game, player, interaction.user.display_name,
             interaction.user.display_avatar.url, result["discovery"],
         )
