@@ -137,23 +137,32 @@ def race_physique_damage_reduction(race_name: Optional[str], physique_tier_name:
 
 # "Nameless Immortal Root"/"Nameless Immortal Physique" (see character_data.ROOT_TIERS/
 # PHYSIQUE_TIERS' own "Unique" entries) are deliberately exempt from the one-holder-per-name
-# scarcity every other Unique-tier name is bound by -- per explicit request ("many people can
-# roll it"), so they never count as "claimed" for either exhausting the Unique tier's pool or
-# being filtered out of it. Both live in one set since root/physique names never collide.
+# scarcity every other Unique-tier (and now Godly-tier) name is bound by -- per explicit
+# request ("many people can roll it"), so they never count as "claimed" for either exhausting
+# that tier's pool or being filtered out of it. Both live in one set since root/physique names
+# never collide.
 GENERIC_UNIQUE_NAMES = {"Nameless Immortal Root", "Nameless Immortal Physique"}
+
+# Tiers with one-holder-per-name scarcity (see _roll_tier/_unique_pool below). "Godly" only
+# ever appears in PHYSIQUE_TIERS (character_data.PHYSIQUE_TIER_ORDER, not the root ladder) --
+# tiers.get() on a ladder that doesn't have it just returns None and is skipped, same as
+# "Unique" already being looked up safely on ladders that always have it.
+SCARCE_TIER_NAMES = ("Unique", "Godly")
 
 
 def _roll_tier(tier_weights: dict, tiers: dict, claimed_unique_names: set) -> str:
     weights = dict(tier_weights)
-    unique_tier = tiers.get("Unique")
-    if unique_tier is not None:
-        exclusive_names = [n for n in unique_tier.names if n not in GENERIC_UNIQUE_NAMES]
-        has_generic_fallback = len(exclusive_names) < len(unique_tier.names)
+    for scarce_tier_name in SCARCE_TIER_NAMES:
+        scarce_tier = tiers.get(scarce_tier_name)
+        if scarce_tier is None:
+            continue
+        exclusive_names = [n for n in scarce_tier.names if n not in GENERIC_UNIQUE_NAMES]
+        has_generic_fallback = len(exclusive_names) < len(scarce_tier.names)
         claimed_exclusive_count = len(claimed_unique_names & set(exclusive_names))
         # A generic fallback name (if this tier has one) is always still rollable no matter how
-        # many exclusive names are claimed, so the Unique tier itself never needs disabling.
+        # many exclusive names are claimed, so the tier itself never needs disabling.
         if not has_generic_fallback and claimed_exclusive_count >= len(exclusive_names):
-            weights.pop("Unique", None)
+            weights.pop(scarce_tier_name, None)
     names = list(weights.keys())
     return random.choices(names, weights=list(weights.values()), k=1)[0]
 
@@ -165,14 +174,14 @@ def _unique_pool(tier, claimed_unique_names: set) -> list:
 def roll_root(claimed_unique_names: set) -> tuple:
     tier_name = _roll_tier(ROOT_TIER_WEIGHTS, ROOT_TIERS, claimed_unique_names)
     tier = ROOT_TIERS[tier_name]
-    pool = tier.names if tier_name != "Unique" else _unique_pool(tier, claimed_unique_names)
+    pool = _unique_pool(tier, claimed_unique_names) if tier_name in SCARCE_TIER_NAMES else tier.names
     return tier_name, random.choice(pool)
 
 
 def roll_physique(claimed_unique_names: set) -> tuple:
     tier_name = _roll_tier(PHYSIQUE_TIER_WEIGHTS, PHYSIQUE_TIERS, claimed_unique_names)
     tier = PHYSIQUE_TIERS[tier_name]
-    pool = tier.names if tier_name != "Unique" else _unique_pool(tier, claimed_unique_names)
+    pool = _unique_pool(tier, claimed_unique_names) if tier_name in SCARCE_TIER_NAMES else tier.names
     return tier_name, random.choice(pool)
 
 

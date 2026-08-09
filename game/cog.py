@@ -723,6 +723,12 @@ class GameCog(commands.Cog):
             embed.add_field(name="📚 Dao Comprehension", value=f"Bonus insight refunded +{result['bonus_qi']:,.2f} qi!", inline=False)
         if success and result["stat_grown"]:
             embed.add_field(name="✨ Bonus Stat Growth", value=f"+1 {chargen.STAT_LABELS[result['stat_grown']]}!", inline=False)
+        if success and result.get("godly_stat_grown"):
+            embed.add_field(
+                name="👑 Godly Growth",
+                value=f"+{result['godly_stat_bonus']:,} {chargen.STAT_LABELS[result['godly_stat_grown']]} (2% of current)!",
+                inline=False,
+            )
         if success and result.get("epic_vigor_granted"):
             minutes = self.game.EPIC_PHYSIQUE_BREAKTHROUGH_BUFF_DURATION_SECONDS // 60
             embed.add_field(

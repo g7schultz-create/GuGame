@@ -1255,8 +1255,17 @@ _root_spec(
 )
 
 
-PHYSIQUE_TIER_ORDER = ROOT_TIER_ORDER
-PHYSIQUE_TIER_WEIGHTS = ROOT_TIER_WEIGHTS
+# Genuinely separate objects from ROOT_TIER_ORDER/ROOT_TIER_WEIGHTS (not aliases) so a
+# physique-only tier -- Godly, below -- can exist without leaking into the root ladder
+# (ROOT_TIERS has no "Godly" entry; roll_root would KeyError if it ever rolled one). Every
+# call site that used to treat these as interchangeable with the root versions (manager.py's
+# reroll-batch helpers, shop.py's _best_roll, premium_view.py's tier select/histogram) now
+# takes the correct list explicitly instead of assuming they're the same object.
+PHYSIQUE_TIER_ORDER = list(ROOT_TIER_ORDER) + ["Godly"]
+PHYSIQUE_TIER_WEIGHTS = dict(ROOT_TIER_WEIGHTS)
+# ~1-in-100,000: the rest of the table already sums to 10000, so a weight of 0.1 lands at
+# 0.1 / 10000.1 ~= 1/100001 -- deliberately far rarer than Unique's own 10/10000 (1/1000).
+PHYSIQUE_TIER_WEIGHTS["Godly"] = 0.1
 
 PHYSIQUE_TIERS: Dict[str, Tier] = {
     "Common": Tier(
@@ -1391,6 +1400,25 @@ PHYSIQUE_TIERS: Dict[str, Tier] = {
             "Heavenly Lunar Physique": "Each attack this encounter further weakens the target's defense against you, up to +25% armor penetration at full stacks.",
             "Twin Gu Sovereign Physique": "Can bind and equip a second Gu — its passive stat bonuses apply, but only the first Gu's combat ability and any named special effects (Fixed Immortal Travel, Worldly Escape, Battle Intent, etc.) remain active.",
         },
+    ),
+    "Godly": Tier(
+        name="Godly",
+        emoji="👑",
+        # Identical package to Unique above (same stat_bonuses, just copied rather than
+        # shared, so either tier's numbers can be tuned independently later) plus its own
+        # extra passive -- deliberately not a bigger Main Stat/HP/DEF package, since the
+        # request was "same stats as Unique" with the growth passive as the sole upgrade.
+        display_bonuses=[
+            "+100% Main Stat", "+50% HP", "+50% DEF", "+50% Stat Growth", "+50 Luck",
+            "+15% Cultivation Speed", "+15% Breakthrough Chance", "+20% Qi Recovery",
+            "+20% Dao Comprehension", "+15% Tribulation Success", "+2% Random Stat per Breakthrough",
+        ],
+        passive="Every breakthrough permanently grows a random stat by 2% of its current value (see GameManager.attempt_breakthrough).",
+        stat_bonuses={
+            "str_pct": 1.00, "hp_pct": 0.50, "def_pct": 0.50, "luck_flat": 50, "cultivation_speed_pct": 0.15,
+            "breakthrough_chance_pct": 0.15, "qi_recovery_pct": 0.20, "dao_comprehension_pct": 0.20,
+        },
+        names=["Godly Physique"],
     ),
 }
 
@@ -2061,6 +2089,19 @@ _physique_spec(
     "Lunar Sunder: each successful basic Attack this encounter further weakens the target's "
     "defense against you, +5% armor penetration per stack, up to +25% at 5 stacks.",
     {"lunar_stack_armor_pen_pct": 0.05},
+)
+
+# Godly tier's sole physique -- its whole mechanic (permanently grow a random stat by 2% of
+# its current value on every breakthrough) is a direct name check in
+# GameManager.attempt_breakthrough, not a stat_bonuses key, same carve-out Primordial Origin
+# Body already gets (see content/validation.py's BESPOKE_MECHANIC_PHYSIQUE_NAMES) -- so this
+# spec exists purely to satisfy "every physique needs a description" and carries no
+# stat_bonuses of its own; the shared Godly Tier package above already matches Unique's.
+_physique_spec(
+    "Godly Physique", "Godly", ("heaven",),
+    "Every breakthrough permanently grows a random stat by 2% of its current value, on top "
+    "of the same package Unique-tier physiques carry.",
+    {},
 )
 
 

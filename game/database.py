@@ -2523,12 +2523,14 @@ class GameDatabase:
     # -- Character creation (/join) --------------------------------------
 
     def get_claimed_names(self, name_column: str, tier_column: str) -> set:
-        """Names already taken by a confirmed character at the Unique tier, for uniqueness checks."""
+        """Names already taken by a confirmed character at the Unique or Godly tier, for
+        uniqueness checks (see chargen.SCARCE_TIER_NAMES -- Godly only ever appears on the
+        physique side, so this IN clause is a harmless no-op when called for root columns)."""
         con = self.connect()
         cur = con.cursor()
         cur.execute(
             f"SELECT DISTINCT {name_column} AS name FROM players "
-            f"WHERE {tier_column} = 'Unique' AND {name_column} IS NOT NULL AND character_confirmed = 1"
+            f"WHERE {tier_column} IN ('Unique', 'Godly') AND {name_column} IS NOT NULL AND character_confirmed = 1"
         )
         names = {row["name"] for row in cur.fetchall()}
         con.close()

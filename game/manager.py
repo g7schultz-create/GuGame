@@ -10,7 +10,7 @@ from . import (
     killer_move_gen, manual_data, manual_gen, professions, realms, search_data, sects, split_body,
     tournament, treasure_hunt, world_boss, world_regions,
 )
-from .character_data import PATHS, RACES, ROOT_TIER_ORDER
+from .character_data import PATHS, PHYSIQUE_TIER_ORDER, RACES, ROOT_TIER_ORDER
 from .database import GameDatabase
 from .items import ITEMS, roll_essence_restoration_pill_drop
 
@@ -232,9 +232,9 @@ class GameManager:
     # choice as a single reroll.
     SHOP_BATCH_ROLL_COUNT = 10
 
-    def _buy_reroll_batch(self, buy_one, user_id: int, name: str, target_tier: str, attempts: int = None):
+    def _buy_reroll_batch(self, buy_one, tier_order: list, user_id: int, name: str, target_tier: str, attempts: int = None):
         attempts = attempts or self.SHOP_BATCH_ROLL_COUNT
-        target_rank = ROOT_TIER_ORDER.index(target_tier)
+        target_rank = tier_order.index(target_tier)
         rolls = []
         hit_target = False
         for _ in range(attempts):
@@ -242,7 +242,7 @@ class GameManager:
             if not ok:
                 break
             rolls.append((tier, roll_name))
-            if ROOT_TIER_ORDER.index(tier) >= target_rank:
+            if tier_order.index(tier) >= target_rank:
                 hit_target = True
                 break
         return rolls, hit_target
@@ -250,10 +250,10 @@ class GameManager:
     def buy_root_reroll_batch(self, user_id: int, name: str, target_tier: str, attempts: int = None):
         """Returns (rolls: [(tier, name), ...], hit_target: bool) — rolls is every attempt
         actually made (1 to attempts long); the last entry is the new pending candidate."""
-        return self._buy_reroll_batch(self.buy_root_reroll, user_id, name, target_tier, attempts)
+        return self._buy_reroll_batch(self.buy_root_reroll, ROOT_TIER_ORDER, user_id, name, target_tier, attempts)
 
     def buy_physique_reroll_batch(self, user_id: int, name: str, target_tier: str, attempts: int = None):
-        return self._buy_reroll_batch(self.buy_physique_reroll, user_id, name, target_tier, attempts)
+        return self._buy_reroll_batch(self.buy_physique_reroll, PHYSIQUE_TIER_ORDER, user_id, name, target_tier, attempts)
 
     # /premium — like the shop batch above, but keeps rolling until the player either hits
     # their target tier or literally can't afford another roll, instead of stopping at a
@@ -264,9 +264,9 @@ class GameManager:
     # stones are left.
     PREMIUM_MAX_ROLLS_PER_CLICK = 500
 
-    def _premium_reroll(self, buy_one, user_id: int, name: str, target_tier: str, max_rolls: int = None):
+    def _premium_reroll(self, buy_one, tier_order: list, user_id: int, name: str, target_tier: str, max_rolls: int = None):
         max_rolls = max_rolls or self.PREMIUM_MAX_ROLLS_PER_CLICK
-        target_rank = ROOT_TIER_ORDER.index(target_tier)
+        target_rank = tier_order.index(target_tier)
         rolls = []
         hit_target = False
         ran_out_of_money = False
@@ -276,17 +276,17 @@ class GameManager:
                 ran_out_of_money = True
                 break
             rolls.append((tier, roll_name))
-            if ROOT_TIER_ORDER.index(tier) >= target_rank:
+            if tier_order.index(tier) >= target_rank:
                 hit_target = True
                 break
         return rolls, hit_target, ran_out_of_money
 
     def premium_root_reroll(self, user_id: int, name: str, target_tier: str, max_rolls: int = None):
         """Returns (rolls: [(tier, name), ...], hit_target: bool, ran_out_of_money: bool)."""
-        return self._premium_reroll(self.buy_root_reroll, user_id, name, target_tier, max_rolls)
+        return self._premium_reroll(self.buy_root_reroll, ROOT_TIER_ORDER, user_id, name, target_tier, max_rolls)
 
     def premium_physique_reroll(self, user_id: int, name: str, target_tier: str, max_rolls: int = None):
-        return self._premium_reroll(self.buy_physique_reroll, user_id, name, target_tier, max_rolls)
+        return self._premium_reroll(self.buy_physique_reroll, PHYSIQUE_TIER_ORDER, user_id, name, target_tier, max_rolls)
 
     # /premium — change race. Unlike root/physique above, race is a direct, deterministic
     # pick from a short named list rather than a random roll, so there's no keep/take step —
@@ -500,6 +500,21 @@ class GameManager:
             )
             epic_vigor_granted = True
 
+        # Godly Physique's own signature mechanic — every successful breakthrough (not just
+        # Great Realm crossings, unlike Boundless Foundation Root's %-of-current mechanic
+        # right below) permanently grows one random foundation stat by 2% of its CURRENT
+        # value — "current" meaning the fresh post-breakthrough `player` row above, so it
+        # scales off the stat AFTER this breakthrough's own power_multiplier already applied,
+        # same ordering Boundless Foundation uses. Uncapped, same as Primordial Origin Body's
+        # own flat-growth mechanic further below.
+        godly_stat_grown = None
+        godly_stat_bonus = 0
+        if success and physique_tier and physique_tier.name == "Godly":
+            godly_stat_grown = random.choice(chargen.STAT_GROWTH_KEYS)
+            godly_stat_bonus = max(1, round(player[godly_stat_grown] * 0.02))
+            self.db.add_permanent_stat_bonus(user_id, godly_stat_grown, godly_stat_bonus)
+            player = self.db.get_or_create_player(user_id, name)
+
         # Limitless Inheritor Root's Boundless Foundation — every Great Realm crossing (up
         # to 5 times total, tracked via unique_permanent_counter) permanently grants +1% of
         # the player's CURRENT value in a rotating foundation-stat family. Rotates through
@@ -559,6 +574,8 @@ class GameManager:
             "bonus_qi": bonus_qi,
             "comprehension_proc": comprehension_proc,
             "stat_grown": stat_grown,
+            "godly_stat_grown": godly_stat_grown,
+            "godly_stat_bonus": godly_stat_bonus,
             "epic_vigor_granted": epic_vigor_granted,
             "red_lotus_retried": red_lotus_retried,
             "boundless_foundation_stat": boundless_foundation_stat,

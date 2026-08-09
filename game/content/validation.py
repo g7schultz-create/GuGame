@@ -456,7 +456,7 @@ def validate_physique_specs() -> List[str]:
     # in GameManager.attempt_breakthrough. Mirrors the same class of exception the root
     # ladder gets for free via its dedicated fire_battle_qi_trigger_fraction/daily_nothing_
     # upgrade fields — physiques have no such fields, so this explicit allowlist stands in.
-    BESPOKE_MECHANIC_PHYSIQUE_NAMES = {"Primordial Origin Body"}
+    BESPOKE_MECHANIC_PHYSIQUE_NAMES = {"Primordial Origin Body", "Godly Physique"}
 
     for name, spec in character_data.PHYSIQUE_SPECS_BY_NAME.items():
         if not spec.description:

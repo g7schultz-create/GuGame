@@ -19,19 +19,21 @@ def _format_current(tier_name, item_name, tiers_catalog) -> str:
     return value
 
 
-def _format_batch_result(label: str, rolls: list, hit_target: bool, target_tier: str) -> str:
+def _format_batch_result(label: str, rolls: list, hit_target: bool, target_tier: str, tier_order: list) -> str:
     tier_counts = ", ".join(f"{tier}" for tier, _ in rolls)
     if hit_target:
         return f"🎯 {label}: rolled {len(rolls)}x, hit **{target_tier}+** on roll {len(rolls)} — {tier_counts}."
-    return f"{label}: rolled {len(rolls)}x without reaching **{target_tier}** — best was **{_best_roll(rolls)[0]}**. All rolls: {tier_counts}."
+    return f"{label}: rolled {len(rolls)}x without reaching **{target_tier}** — best was **{_best_roll(rolls, tier_order)[0]}**. All rolls: {tier_counts}."
 
 
-def _best_roll(rolls: list):
+def _best_roll(rolls: list, tier_order: list):
     """The single highest-rarity roll in the batch — the pending candidate offered whether
     the target was hit (in which case it's always the roll that stopped the batch — nothing
     earlier could have out-ranked it without stopping the batch itself) or not (in which case
-    it's whatever's best of the 10, not just whatever happened to come up last)."""
-    return max(rolls, key=lambda roll: ROOT_TIER_ORDER.index(roll[0]))
+    it's whatever's best of the 10, not just whatever happened to come up last). tier_order
+    must be ROOT_TIER_ORDER for root rolls, PHYSIQUE_TIER_ORDER for physique rolls -- they're
+    genuinely separate lists (physique has the extra "Godly" tier), not interchangeable."""
+    return max(rolls, key=lambda roll: tier_order.index(roll[0]))
 
 
 class ShopView(GameView):
@@ -169,8 +171,8 @@ class ShopView(GameView):
         if not rolls:
             self.last_result = "Not enough spirit stones."
         else:
-            self.pending_root = _best_roll(rolls)
-            self.last_result = _format_batch_result("🌱 Root", rolls, hit_target, self.root_target_tier)
+            self.pending_root = _best_roll(rolls, ROOT_TIER_ORDER)
+            self.last_result = _format_batch_result("🌱 Root", rolls, hit_target, self.root_target_tier, ROOT_TIER_ORDER)
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -209,8 +211,8 @@ class ShopView(GameView):
         if not rolls:
             self.last_result = "Not enough spirit stones."
         else:
-            self.pending_physique = _best_roll(rolls)
-            self.last_result = _format_batch_result("💪 Physique", rolls, hit_target, self.physique_target_tier)
+            self.pending_physique = _best_roll(rolls, PHYSIQUE_TIER_ORDER)
+            self.last_result = _format_batch_result("💪 Physique", rolls, hit_target, self.physique_target_tier, PHYSIQUE_TIER_ORDER)
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)

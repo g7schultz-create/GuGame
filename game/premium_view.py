@@ -5,22 +5,22 @@ import discord
 
 from . import chargen
 from .base_view import GameView
-from .character_data import PHYSIQUE_TIERS, RACES, ROOT_TIER_ORDER, ROOT_TIERS
+from .character_data import PHYSIQUE_TIER_ORDER, PHYSIQUE_TIERS, RACES, ROOT_TIER_ORDER, ROOT_TIERS
 from .shop import _best_roll, _format_current
 
 KIND_LABELS = {"root": ("🌱", "Root"), "physique": ("💪", "Physique"), "race": ("🧬", "Race")}
 
 
-def _tier_histogram(rolls: list) -> str:
+def _tier_histogram(rolls: list, tier_order: list) -> str:
     counts = Counter(tier for tier, _ in rolls)
-    return ", ".join(f"{tier} x{counts[tier]}" for tier in ROOT_TIER_ORDER if tier in counts)
+    return ", ".join(f"{tier} x{counts[tier]}" for tier in tier_order if tier in counts)
 
 
-def _format_result(label: str, rolls: list, hit_target: bool, ran_out_of_money: bool, target_tier: str) -> str:
-    histogram = _tier_histogram(rolls)
+def _format_result(label: str, rolls: list, hit_target: bool, ran_out_of_money: bool, target_tier: str, tier_order: list) -> str:
+    histogram = _tier_histogram(rolls, tier_order)
     if hit_target:
         return f"🎯 {label}: rolled {len(rolls)}x and hit **{target_tier}+**! {histogram}"
-    best = _best_roll(rolls)[0]
+    best = _best_roll(rolls, tier_order)[0]
     if ran_out_of_money:
         return f"💸 {label}: rolled {len(rolls)}x and ran out of spirit stones without reaching **{target_tier}** — best was **{best}**. {histogram}"
     return (
@@ -69,6 +69,11 @@ class PremiumView(GameView):
             return self.game.SHOP_PHYSIQUE_REROLL_COST
         return self.game.PREMIUM_RACE_CHANGE_COST
 
+    def _tier_order(self) -> list:
+        # Genuinely different lists now (physique has the extra "Godly" tier) -- never called
+        # while selected_kind == "race", which returns early in _build_components below.
+        return ROOT_TIER_ORDER if self.selected_kind == "root" else PHYSIQUE_TIER_ORDER
+
     def _build_components(self):
         self.clear_items()
         player = self.game.get_player_stats(self.user_id, self.display_name)
@@ -111,7 +116,7 @@ class PremiumView(GameView):
             placeholder=f"Stop rolling at {self.target_tier}+...",
             options=[
                 discord.SelectOption(label=tier, value=tier, default=(tier == self.target_tier))
-                for tier in ROOT_TIER_ORDER
+                for tier in self._tier_order()
             ],
             row=1,
         )
@@ -177,8 +182,9 @@ class PremiumView(GameView):
         if not rolls:
             self.last_result = "Not enough spirit stones to roll even once."
         else:
-            self.pending = _best_roll(rolls)
-            self.last_result = _format_result(f"{emoji} {label}", rolls, hit_target, ran_out_of_money, self.target_tier)
+            tier_order = self._tier_order()
+            self.pending = _best_roll(rolls, tier_order)
+            self.last_result = _format_result(f"{emoji} {label}", rolls, hit_target, ran_out_of_money, self.target_tier, tier_order)
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.edit_original_response(embed=embed, view=self)
