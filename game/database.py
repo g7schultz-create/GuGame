@@ -202,6 +202,13 @@ class GameDatabase:
         # restart mid-hunt, before HuntView.on_timeout ever got to fire and clear it) self-heal
         # after ACTIVE_HUNT_STALE_SECONDS instead of blocking that player forever.
         "active_hunt_started_ts": "INTEGER DEFAULT 0",
+        # /raid's own "one at a time" gate -- same shape and reasoning as active_hunt_started_ts
+        # above (see GameManager.has_active_raid/start_active_raid/clear_active_raid), just
+        # per-PARTICIPANT rather than per-creator since a raid is a shared multi-player
+        # encounter -- every joiner gets their own timestamp set at _on_join, and every
+        # participant's flag gets cleared together at whichever terminal state the raid ends on
+        # (victory/wiped/abandoned), not just the player who ran /raid.
+        "active_raid_started_ts": "INTEGER DEFAULT 0",
 
         # World region (see world_regions.py / /region) -- a mortal-realm (Nascent Soul and
         # below) character's chosen geographic zone, separate from search_data.REGIONS'
@@ -4250,6 +4257,24 @@ class GameDatabase:
     def clear_active_hunt(self, user_id: int):
         con = self.connect()
         con.execute("UPDATE players SET active_hunt_started_ts = 0 WHERE user_id = ?", (user_id,))
+        con.commit()
+        con.close()
+
+    def start_active_raid(self, user_id: int, ts: int):
+        con = self.connect()
+        con.execute("UPDATE players SET active_raid_started_ts = ? WHERE user_id = ?", (ts, user_id))
+        con.commit()
+        con.close()
+
+    def clear_active_raid_bulk(self, user_ids: list):
+        """Clears active_raid_started_ts for every participant at once -- a raid is a shared
+        multi-player encounter, unlike /hunt's single-player clear_active_hunt, so every
+        terminal-state hook needs to release every joiner's flag together, not just one."""
+        if not user_ids:
+            return
+        con = self.connect()
+        placeholders = ",".join("?" for _ in user_ids)
+        con.execute(f"UPDATE players SET active_raid_started_ts = 0 WHERE user_id IN ({placeholders})", user_ids)
         con.commit()
         con.close()
 

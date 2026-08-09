@@ -850,6 +850,20 @@ class GameManager:
     def start_active_hunt(self, user_id: int):
         self.db.start_active_hunt(user_id, int(time.time()))
 
+    # -- /raid's own "finish the one you've got before starting/joining another" gate ----------
+    # Same reasoning as ACTIVE_HUNT_STALE_SECONDS above, but per-PARTICIPANT rather than
+    # per-creator -- a raid is a shared multi-player encounter, so both starting a NEW raid and
+    # JOINING an existing one need this check, and every terminal state needs to release EVERY
+    # joiner's flag at once (see RaidView's own _clear_active_raid_for_all).
+    ACTIVE_RAID_STALE_SECONDS = 2 * 3600
+
+    def has_active_raid(self, player: dict) -> bool:
+        started = player["active_raid_started_ts"]
+        return bool(started) and (time.time() - started) < self.ACTIVE_RAID_STALE_SECONDS
+
+    def start_active_raid(self, user_id: int):
+        self.db.start_active_raid(user_id, int(time.time()))
+
     # -- /search_forgotten_blessed_land treasure-hunt board (see game/treasure_hunt.py) --------
     TREASURE_HUNT_REALM_GATE = 2  # Core Formation's great_realm_index
     TREASURE_HUNT_COOLDOWN_SECONDS = 1 * 3600  # 1 hour between boards, no stone/item cost

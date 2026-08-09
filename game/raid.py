@@ -232,6 +232,13 @@ class RaidView(GameView):
         self.log.append(text)
         self.log = self.log[-MAX_LOG_LINES:]
 
+    def _clear_active_raid_for_all(self):
+        """Called from every terminal-status transition (victory/wiped/abandoned/timeout) so
+        GameManager.has_active_raid lets every joined participant start or join a new raid
+        again -- see cog.py's raid command / _on_join's own gate. Bulk, not per-user, since a
+        raid is a shared encounter and everyone's flag needs releasing together."""
+        self.game.db.clear_active_raid_bulk(list(self.participants.keys()))
+
     def _equipped_gu(self, user_id: int):
         gu_name = self.game.get_equipped(user_id).get("gu_ability")
         return EQUIPMENT.get(gu_name) if gu_name else None
@@ -825,6 +832,7 @@ class RaidView(GameView):
 
     def _on_victory(self):
         self.status = "victory"
+        self._clear_active_raid_for_all()
         boss_gu_rank = self.enemies[0].monster.gu_rank
         # Paradise Earth Inheritor Root's Merit needs to know who DIDN'T deal the most damage
         # — computed once, before the per-participant loop below, off the running totals Phase
@@ -923,6 +931,7 @@ class RaidView(GameView):
 
     def _on_wipe(self):
         self.status = "wiped"
+        self._clear_active_raid_for_all()
         self._log(f"💀 The entire party is knocked out. {self.raid_name}'s warband stands triumphant...")
 
     # -- action handlers -----------------------------------------------------
@@ -938,6 +947,9 @@ class RaidView(GameView):
         player = await asyncio.to_thread(self.game.get_player_stats, user.id, user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message("You need to `/join` and confirm a character first.", ephemeral=True)
+            return
+        if self.game.has_active_raid(player):
+            await interaction.response.send_message("🐉 Finish your current raid first!", ephemeral=True)
             return
 
         def _resolve():
@@ -1001,6 +1013,7 @@ class RaidView(GameView):
                 }
                 self.participants[user.id]["adaptive_stat_key"] = min(ratios, key=ratios.get)
             self.game.apply_encounter_start_bonuses(user.id, user.display_name)
+            self.game.start_active_raid(user.id)
             self._log(f"🙋 **{user.display_name}** joins the raid!")
 
         await asyncio.to_thread(_resolve)
@@ -1318,6 +1331,7 @@ class RaidView(GameView):
     async def on_timeout(self):
         if self.status in ("starting", "fighting"):
             self.status = "abandoned"
+            await asyncio.to_thread(self._clear_active_raid_for_all)
         for child in self.children:
             child.disabled = True
         if self.message is not None:

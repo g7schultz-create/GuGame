@@ -163,40 +163,50 @@ def _build_trade_subcategory_buttons(active_category: str, active_subcategory: s
     return buttons, rows_used
 
 
+def _format_trade_offer_lines(game, offer: dict) -> list:
+    """One side's offer -> display lines -- shared by the live trade window embed and the
+    post-completion "here's what was traded" summary (see TradeWindowView._make_confirm_
+    callback, which must capture each side's offer via get_trade_offer BEFORE calling
+    confirm_trade -- execute_trade deletes the trade_offers rows the moment both sides have
+    confirmed, so there's nothing left to read afterward)."""
+    lines = []
+    for currency, (emoji, label) in CURRENCY_LABELS.items():
+        if offer[currency]:
+            lines.append(f"{emoji} {offer[currency]:,} {label}")
+    for item_name, qty in offer["items"].items():
+        lines.append(f"{_item_emoji(item_name)} {item_name} x{qty}")
+    for page_id, qty in offer["pages"].items():
+        page = manual_data.PAGES.get(page_id)
+        lines.append(f"📄 {page.name if page else page_id} x{qty}")
+    for gear_id in offer["crafted_gear"]:
+        gear = game.db.get_crafted_gear(gear_id)
+        if gear is None:
+            continue
+        display_name = blacksmith.crafted_gear_display_name(gear["base_type"], gear["tier"], gear["gear_id"])
+        emoji = equipment_module.SLOT_TYPE_EMOJI.get(gear["slot_type"], "🎒")
+        lines.append(f"{emoji} {display_name} — {describe_stat_bonuses(gear['stat_bonuses'])}")
+    for manual_id in offer["manuals"]:
+        manual = game.db.get_manual(manual_id)
+        if manual is None:
+            continue
+        lines.append(f"📖 {manual['name']} (R{manual['rank']} {manual['rarity']})")
+    for instance_id in offer["accessories"]:
+        instance = game.db.get_accessory_instance(instance_id)
+        affix = accessories_data.ITEMS.get(instance["item_id"]) if instance else None
+        if affix is None:
+            continue
+        emoji = equipment_module.SLOT_TYPE_EMOJI.get(affix.slot_type, "🎒")
+        lines.append(f"{emoji} {affix.name} #{instance_id} (Rank {affix.rank} {affix.rarity})")
+    return lines
+
+
 def _build_trade_window_embed(game, trade_id, initiator, target) -> discord.Embed:
     trade = game.get_trade(trade_id)
     is_gamble = trade["mode"] == "gamble"
     embed = discord.Embed(title="🎲 Gamble Window" if is_gamble else "🤝 Trade Window", color=discord.Color.gold())
     for index, (member, confirmed) in enumerate(((initiator, trade["initiator_confirmed"]), (target, trade["target_confirmed"]))):
         offer = game.get_trade_offer(trade_id, member.id)
-        lines = []
-        for currency, (emoji, label) in CURRENCY_LABELS.items():
-            if offer[currency]:
-                lines.append(f"{emoji} {offer[currency]:,} {label}")
-        for item_name, qty in offer["items"].items():
-            lines.append(f"{_item_emoji(item_name)} {item_name} x{qty}")
-        for page_id, qty in offer["pages"].items():
-            page = manual_data.PAGES.get(page_id)
-            lines.append(f"📄 {page.name if page else page_id} x{qty}")
-        for gear_id in offer["crafted_gear"]:
-            gear = game.db.get_crafted_gear(gear_id)
-            if gear is None:
-                continue
-            display_name = blacksmith.crafted_gear_display_name(gear["base_type"], gear["tier"], gear["gear_id"])
-            emoji = equipment_module.SLOT_TYPE_EMOJI.get(gear["slot_type"], "🎒")
-            lines.append(f"{emoji} {display_name} — {describe_stat_bonuses(gear['stat_bonuses'])}")
-        for manual_id in offer["manuals"]:
-            manual = game.db.get_manual(manual_id)
-            if manual is None:
-                continue
-            lines.append(f"📖 {manual['name']} (R{manual['rank']} {manual['rarity']})")
-        for instance_id in offer["accessories"]:
-            instance = game.db.get_accessory_instance(instance_id)
-            affix = accessories_data.ITEMS.get(instance["item_id"]) if instance else None
-            if affix is None:
-                continue
-            emoji = equipment_module.SLOT_TYPE_EMOJI.get(affix.slot_type, "🎒")
-            lines.append(f"{emoji} {affix.name} #{instance_id} (Rank {affix.rank} {affix.rarity})")
+        lines = _format_trade_offer_lines(game, offer)
         value = "\n".join(lines) if lines else "*No items added yet*"
         embed.add_field(name=f"🧍 {member.display_name} {'✅' if confirmed else '⏳'}", value=value, inline=False)
         if index == 0:
@@ -785,13 +795,29 @@ class TradeWindowView(GameView):
                     )
                 return
 
+            # Captured BEFORE confirm_trade -- execute_trade deletes the trade_offers rows the
+            # moment the trade actually completes, so there's nothing left to read afterward
+            # (see _format_trade_offer_lines' own docstring). Fetched unconditionally even on
+            # the more common "still waiting on the other side" path -- two extra quick reads
+            # is a small, simple price for not needing separate completed/not-completed logic.
+            initiator_offer = await asyncio.to_thread(self.game.get_trade_offer, self.trade_id, self.initiator.id)
+            target_offer = await asyncio.to_thread(self.game.get_trade_offer, self.trade_id, self.target.id)
             result = await asyncio.to_thread(self.game.confirm_trade, self.trade_id, member.id)
             if result == "waiting":
                 await asyncio.to_thread(self._build_components)
                 embed = await asyncio.to_thread(self.build_embed)
                 await interaction.response.edit_message(embed=embed, view=self)
             elif result == "completed":
-                await self._finish(interaction, "✅ Trade Complete", "Both players confirmed — items and spirit stones have been exchanged!", discord.Color.green())
+                initiator_lines = _format_trade_offer_lines(self.game, initiator_offer)
+                target_lines = _format_trade_offer_lines(self.game, target_offer)
+                fields = [
+                    (f"🧍 {self.initiator.display_name} gave", "\n".join(initiator_lines) if initiator_lines else "*Nothing*"),
+                    (f"🧍 {self.target.display_name} gave", "\n".join(target_lines) if target_lines else "*Nothing*"),
+                ]
+                await self._finish(
+                    interaction, "✅ Trade Complete", "Both players confirmed — items and spirit stones have been exchanged!",
+                    discord.Color.green(), extra_fields=fields,
+                )
             else:
                 await self._finish(interaction, "⚠️ Trade Failed", "One of you no longer has what you offered, so the trade was cancelled.", discord.Color.red())
 
@@ -801,11 +827,14 @@ class TradeWindowView(GameView):
         await asyncio.to_thread(self.game.cancel_trade, self.trade_id)
         await self._finish(interaction, "❌ Trade Cancelled", f"{interaction.user.display_name} cancelled the trade.", discord.Color.red())
 
-    async def _finish(self, interaction: discord.Interaction, title: str, description: str, color: discord.Color):
+    async def _finish(self, interaction: discord.Interaction, title: str, description: str, color: discord.Color, extra_fields: list = None):
         self.finished = True
         for child in self.children:
             child.disabled = True
         embed = discord.Embed(title=title, description=description, color=color)
+        if extra_fields:
+            for name, value in extra_fields:
+                embed.add_field(name=name, value=value, inline=False)
         await interaction.response.edit_message(embed=embed, view=self)
         self.stop()
 

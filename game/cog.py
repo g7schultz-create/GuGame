@@ -6,7 +6,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from config import GUILD_ID, TOURNAMENT_ANNOUNCE_CHANNEL_ID, WORLD_BOSS_ANNOUNCE_CHANNEL_ID
+from config import GUILD_ID, TOURNAMENT_ANNOUNCE_CHANNEL_ID, WORLD_BOSS_ANNOUNCE_CHANNEL_ID, WORLD_BOSS_DAMAGE_RANKING_CHANNEL_ID
 from . import chargen, equipment, professions, realms, sects, tournament, world_boss
 from .character_class import CLASSES
 from .character_data import PATHS
@@ -54,6 +54,7 @@ from .mentor_view import MentorRequestView
 from .dao_companion_view import DaoCompanionRequestView
 from .sect_view import SectView
 from .balance_view import BalanceView
+from .breakthrough_view import BreakthroughConfirmView
 from .text_commands import REALM_NAMES, register_text_commands
 from .ui_utils import format_duration, path_footer, render_bar
 
@@ -186,11 +187,6 @@ class GameCog(commands.Cog):
         roster = world_boss.WORLD_BOSSES[end_summary["boss"]["boss_key"]]
         await self._dm_world_boss_loot(end_summary, roster)
 
-        if WORLD_BOSS_ANNOUNCE_CHANNEL_ID is None:
-            return
-        channel = self.bot.get_channel(WORLD_BOSS_ANNOUNCE_CHANNEL_ID)
-        if channel is None:
-            return
         lines = [f"**{end_summary['total_damage']:,}** total damage from **{len(end_summary['contributors'])}** cultivator(s)."]
         for winner in end_summary["lottery_winners"]:
             lines.append(f"🎁 Lottery drop goes to **{winner['name']}**: {winner['reward_text']}!")
@@ -202,10 +198,30 @@ class GameCog(commands.Cog):
             description="\n".join(lines),
             color=discord.Color.gold(),
         )
-        try:
-            await channel.send(embed=embed)
-        except discord.HTTPException:
-            pass
+        # end_summary["contributors"] is already damage-sorted DESC (see
+        # GameDatabase.get_world_boss_contributors) -- top 10 shown, medals for the top 3.
+        contributors = end_summary["contributors"]
+        if contributors:
+            medals = ["🥇", "🥈", "🥉"]
+            ranking_lines = [
+                f"{medals[i] if i < 3 else f'{i + 1}.'} **{c['name']}** — {c['damage_dealt']:,} damage"
+                for i, c in enumerate(contributors[:10])
+            ]
+            if len(contributors) > 10:
+                ranking_lines.append(f"...and {len(contributors) - 10} more cultivator(s).")
+            embed.add_field(name="🏆 Damage Ranking", value="\n".join(ranking_lines), inline=False)
+
+        # Sent to every configured channel that isn't None, deduplicated so a shared channel
+        # ID (WORLD_BOSS_ANNOUNCE_CHANNEL_ID happening to equal WORLD_BOSS_DAMAGE_RANKING_
+        # CHANNEL_ID) only gets the announcement once.
+        for channel_id in {WORLD_BOSS_ANNOUNCE_CHANNEL_ID, WORLD_BOSS_DAMAGE_RANKING_CHANNEL_ID} - {None}:
+            channel = self.bot.get_channel(channel_id)
+            if channel is None:
+                continue
+            try:
+                await channel.send(embed=embed)
+            except discord.HTTPException:
+                pass
 
     async def _dm_world_boss_loot(self, end_summary: dict, roster: dict):
         """Privately tells every contributor exactly what THEY personally got — the channel
@@ -676,73 +692,22 @@ class GameCog(commands.Cog):
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
 
-        result = await asyncio.to_thread(self.game.attempt_breakthrough, interaction.user.id, interaction.user.display_name)
+        status = await asyncio.to_thread(self.game.breakthrough_status, interaction.user.id, interaction.user.display_name)
 
-        if result["outcome"] == "max_realm":
+        if status["at_max_realm"]:
             await interaction.response.send_message("You've reached the peak of known cultivation... for now.", ephemeral=True)
             return
-        if result["outcome"] == "insufficient_qi":
-            p = result["player"]
+        if status["player"]["qi"] < status["qi_required"]:
             await interaction.response.send_message(
-                f"Not enough Qi to attempt this breakthrough. Need **{result['qi_required']:,.2f}**, have **{p['qi']:,.2f}**.",
+                f"Not enough Qi to attempt this breakthrough. Need **{status['qi_required']:,.2f}**, have **{status['player']['qi']:,.2f}**.",
                 ephemeral=True,
             )
             return
 
-        success = result["outcome"] == "success"
-        great_realm_crossing = result.get("great_realm_crossing", False)
-
-        if success and great_realm_crossing:
-            title = "🌌 GREAT REALM BREAKTHROUGH!"
-        elif success:
-            title = "⚡ Breakthrough!"
-        else:
-            title = "💥 Breakthrough Failed"
-
-        description = (
-            f"{interaction.user.display_name} broke through from **{result['old_realm_name']}** to **{result['new_realm_name']}**!"
-            if success
-            else f"{interaction.user.display_name} failed to break through from **{result['old_realm_name']}**."
-        )
-        if success and result.get("new_realm_description"):
-            description += f"\n_{result['new_realm_description']}_"
-
-        embed = discord.Embed(
-            title=title,
-            description=description,
-            color=discord.Color.gold() if success else discord.Color.dark_red(),
-        )
-        embed.add_field(name="🎲 Chance", value=f"{result['chance'] * 100:.1f}%", inline=True)
-        embed.add_field(name="💠 Qi Spent", value=f"{result['qi_cost']:,.2f}", inline=True)
-        if success:
-            growth_text = " • ".join(
-                f"{chargen.STAT_LABELS[key]} +{amount:,}" for key, amount in result["power_growth"].items()
-            )
-            embed.add_field(name="💪 Power Growth", value=growth_text, inline=False)
-        if success and result["comprehension_proc"]:
-            embed.add_field(name="📚 Dao Comprehension", value=f"Bonus insight refunded +{result['bonus_qi']:,.2f} qi!", inline=False)
-        if success and result["stat_grown"]:
-            embed.add_field(name="✨ Bonus Stat Growth", value=f"+1 {chargen.STAT_LABELS[result['stat_grown']]}!", inline=False)
-        if success and result.get("godly_stat_grown"):
-            embed.add_field(
-                name="👑 Godly Growth",
-                value=f"+{result['godly_stat_bonus']:,} {chargen.STAT_LABELS[result['godly_stat_grown']]} (2% of current)!",
-                inline=False,
-            )
-        if success and result.get("epic_vigor_granted"):
-            minutes = self.game.EPIC_PHYSIQUE_BREAKTHROUGH_BUFF_DURATION_SECONDS // 60
-            embed.add_field(
-                name="💪 Breakthrough Vigor",
-                value=f"Your Epic Physique surges with power — +{self.game.EPIC_PHYSIQUE_BREAKTHROUGH_BUFF_PCT * 100:.0f}% STR/ATK/DEF/SPD for {minutes} minutes!",
-                inline=False,
-            )
-        if success and result.get("dao_marks_granted"):
-            embed.add_field(
-                name="🌀 Dao Marks",
-                value=f"Sundering deeper into Spirit Severing grants **{result['dao_marks_granted']:,}** Dao Marks! Allocate them with `/dao_path`.",
-                inline=False,
-            )
-        await interaction.response.send_message(embed=embed, ephemeral=False)
+        view = BreakthroughConfirmView(interaction.user.id, self.game, interaction.user.display_name, status)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
+        view.message = await interaction.original_response()
 
     @app_commands.command(name="inventory", description="View and use your items")
     @app_commands.guilds(GUILD)
@@ -1021,6 +986,9 @@ class GameCog(commands.Cog):
         player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
+            return
+        if self.game.has_active_raid(player):
+            await interaction.response.send_message("🐉 Finish your current raid first!", ephemeral=True)
             return
         great_realm_index = int(realm.value) if realm else _default_great_realm_index(player)
         boss_name = raid_boss_name_for_realm(great_realm_index)
