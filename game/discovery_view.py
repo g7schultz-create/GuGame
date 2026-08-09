@@ -113,9 +113,15 @@ class DiscoveryView(GameView):
         """Returns to the Search hub on this same message without abandoning or finishing
         anything already in progress — if this discovery is still active, its own Enter
         Discovery button on the Search screen will resume it. self.stop() disarms this
-        view's on_timeout so it can't later clobber whatever message content replaces it."""
+        view's on_timeout so it can't later clobber whatever message content replaces it.
+        reopen_discovery resets status back to re-enterable -- enter_discovery refuses a
+        SECOND entry while status is "entered" (closes the exploit where several /search
+        messages all show the same pending discovery and each independently spawn a fresh,
+        parallel play-through), so without this, backing out here would permanently lock the
+        player out of their own still-open discovery."""
         from .search_view import SearchView  # local import: search_view imports this module
         self.stop()
+        await asyncio.to_thread(self.game.reopen_discovery, self.discovery["discovery_id"])
         new_view = SearchView( self.user_id, self.game, self.display_name)
         embed = await asyncio.to_thread(new_view.build_embed)
         await interaction.response.edit_message(embed=embed, view=new_view)

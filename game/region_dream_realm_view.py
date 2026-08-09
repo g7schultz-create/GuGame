@@ -65,9 +65,12 @@ class RegionDreamRealmView(GameView):
 
     async def _on_back_to_search(self, interaction: discord.Interaction):
         """Returns to the Search hub on this same message — see DiscoveryView's identical
-        handler for why self.stop() matters here."""
+        handler for why self.stop() and reopen_discovery both matter here. Only reachable
+        before attempting the trial (the button's disabled once self.finished), so this never
+        lets a completed trial be re-attempted."""
         from .search_view import SearchView  # local import: search_view imports this module
         self.stop()
+        await asyncio.to_thread(self.game.reopen_discovery, self.discovery["discovery_id"])
         new_view = SearchView( self.user_id, self.game, self.display_name)
         embed = await asyncio.to_thread(new_view.build_embed)
         await interaction.response.edit_message(embed=embed, view=new_view)

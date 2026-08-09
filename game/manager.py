@@ -3274,7 +3274,18 @@ class GameManager:
         if discovery is None or (discovery["expires_at"] and discovery["expires_at"] < int(time.time())):
             self.db.clear_active_discovery(user_id, discovery_id)
             return {"ok": False, "reason": "expired"}
-        self.db.set_discovery_status(discovery_id, "entered")
+        # active_discovery_id stays set for the discovery's WHOLE lifetime (only
+        # finish_discovery/abandon_discovery ever clear it), so without this a player with
+        # several /search messages open (all showing the same pending discovery, since it's a
+        # single per-player slot) could click "Enter Discovery" on each one -- every click
+        # would succeed and hand back a fresh, independently-playable DiscoveryView/
+        # BattlefieldView/RegionDreamRealmView for the SAME discovery, each capable of
+        # granting its own full rewards. try_enter_discovery is a single atomic
+        # UPDATE...WHERE status='open' rather than a separate read-then-write, so two
+        # near-simultaneous clicks can't both slip through the gap between checking and
+        # setting status -- only one caller ever actually wins the transition to "entered".
+        if not self.db.try_enter_discovery(discovery_id):
+            return {"ok": False, "reason": "already_entered"}
         kind = self.DISCOVERY_ENTRY_KIND[discovery["type"]]
         result = {"ok": True, "discovery": discovery, "kind": kind}
         if kind == "steps":
@@ -3340,6 +3351,16 @@ class GameManager:
             "name": step["name"], "category": step["category"], "reward": step["reward"],
             "reward_text": reward_text, "is_final": is_final, "bonus_reward_text": bonus_text,
         }
+
+    def reopen_discovery(self, discovery_id: int):
+        """Called when a player backs out of a discovery via "Back to Search" without
+        finishing or abandoning it (DiscoveryView/RegionDreamRealmView's own _on_back_to_search
+        -- BattlefieldView has no such button, it has no legitimate "leave and resume" path at
+        all) -- resets status back to "open" so a later Enter Discovery click can resume it,
+        without reopening the hole enter_discovery's own already-entered refusal exists to
+        close: the OLD view already called self.stop() before this runs, so it can never grant
+        a second, parallel set of rewards after this."""
+        self.db.set_discovery_status(discovery_id, "open")
 
     def finish_discovery(self, user_id: int, discovery_id: int):
         self.db.set_discovery_status(discovery_id, "completed")

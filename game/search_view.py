@@ -137,10 +137,12 @@ class SearchView(GameView):
         message — the whole point of merging the two."""
         result = await asyncio.to_thread(self.game.enter_discovery, self.user_id, self.display_name)
         if not result["ok"]:
-            self.last_result = (
-                "That discovery expired before you got to it — Search again to find another."
-                if result["reason"] == "expired" else "You don't have an active discovery."
-            )
+            if result["reason"] == "expired":
+                self.last_result = "That discovery expired before you got to it — Search again to find another."
+            elif result["reason"] == "already_entered":
+                self.last_result = "You're already inside that discovery somewhere else — finish or abandon it there first."
+            else:
+                self.last_result = "You don't have an active discovery."
             self.last_result_is_discovery = False
             await asyncio.to_thread(self._build_components)
             embed = await asyncio.to_thread(self.build_embed)

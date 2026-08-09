@@ -1397,6 +1397,17 @@ class GameCog(commands.Cog):
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
+        # Same "one at a time" gate /battlefield already uses -- without this, a player could
+        # spawn several /search messages that all show the same single pending discovery (it's
+        # a one-slot-per-player flag, not per-message) and click "Enter Discovery" on each one.
+        # enter_discovery itself now also refuses a second entry (see its own docstring), so
+        # this is belt-and-suspenders UX rather than the only thing preventing duplicate
+        # rewards -- but it also stops the redundant-message spam at the source.
+        if player["active_discovery_id"]:
+            await interaction.response.send_message(
+                "You already have an active discovery waiting — resolve it with `/discovery` first.", ephemeral=True,
+            )
+            return
         view = SearchView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
@@ -1432,6 +1443,8 @@ class GameCog(commands.Cog):
         if not result["ok"]:
             if result["reason"] == "expired":
                 await interaction.response.send_message("That discovery expired before you got to it. Run `/search` to find another.", ephemeral=True)
+            elif result["reason"] == "already_entered":
+                await interaction.response.send_message("You're already inside that discovery somewhere else — finish or abandon it there first.", ephemeral=True)
             else:
                 await interaction.response.send_message("You don't have an active discovery — run `/search` to find one first.", ephemeral=True)
             return

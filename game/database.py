@@ -4295,6 +4295,19 @@ class GameDatabase:
         con.commit()
         con.close()
 
+    def try_enter_discovery(self, discovery_id: int) -> bool:
+        """Atomically transitions status 'open' -> 'entered', returning True only for whichever
+        caller actually wins the race -- see GameManager.enter_discovery's own comment. A
+        single UPDATE...WHERE is atomic with respect to other writers regardless of journal
+        mode, unlike a separate SELECT-then-UPDATE, which leaves a real (if small) window for
+        two near-simultaneous callers to both read 'open' before either writes 'entered'."""
+        con = self.connect()
+        cur = con.execute("UPDATE discoveries SET status = 'entered' WHERE discovery_id = ? AND status = 'open'", (discovery_id,))
+        con.commit()
+        won = cur.rowcount > 0
+        con.close()
+        return won
+
     def increment_discovery_steps_completed(self, discovery_id: int):
         """Called once per real resolve_discovery_step grant — see the steps_completed
         column comment above setup()'s discoveries table for why this exists."""
