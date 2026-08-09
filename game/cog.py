@@ -1006,7 +1006,7 @@ class GameCog(commands.Cog):
         if notice:
             await interaction.followup.send(notice, ephemeral=True)
 
-    @app_commands.command(name="inheritance_ground", description="Invite 2-3 others to explore an ancient inheritance ground together (3-4 player team)")
+    @app_commands.command(name="inheritance_ground", description="[Admin] Invite 2-3 others to explore an ancient inheritance ground together (3-4 player team)")
     @app_commands.describe(
         member1="First required teammate", member2="Second required teammate",
         member3="Optional 4th teammate",
@@ -1016,6 +1016,9 @@ class GameCog(commands.Cog):
         self, interaction: discord.Interaction, member1: discord.Member, member2: discord.Member,
         member3: Optional[discord.Member] = None,
     ):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+            return
         leader = interaction.user
         invitees = [member1, member2] + ([member3] if member3 else [])
         if any(m.bot for m in invitees):
