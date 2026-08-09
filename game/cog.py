@@ -34,7 +34,7 @@ from .tournament_view import TournamentView, _placement_label, cooldown_remainin
 from .dao_path_view import DaoPathView
 from .transmute_view import TransmuteView
 from .killer_move_view import KillerMoveView
-from .raid import RaidView
+from .raid import AbandonRaidView, RaidView
 from .farm_view import FarmView
 from .alchemy_view import AlchemyView
 from .blacksmith_view import BlacksmithView
@@ -45,7 +45,7 @@ from .tutorial_view import TutorialView
 from .study_view import StudyView
 from .search_view import SearchView
 from .treasure_hunt_view import TreasureHuntView
-from .discovery_view import build_discovery_entry_view
+from .discovery_view import AbandonDiscoveryView, build_discovery_entry_view
 from .region_view import RegionView
 from .battlefield_view import BattlefieldView
 from .world_boss_view import WorldBossView
@@ -988,7 +988,8 @@ class GameCog(commands.Cog):
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
         if self.game.has_active_raid(player):
-            await interaction.response.send_message("🐉 Finish your current raid first!", ephemeral=True)
+            abandon_view = AbandonRaidView(interaction.user.id, self.game)
+            await interaction.response.send_message("🐉 Finish your current raid first!", view=abandon_view, ephemeral=True)
             return
         great_realm_index = int(realm.value) if realm else _default_great_realm_index(player)
         boss_name = raid_boss_name_for_realm(great_realm_index)
@@ -1372,8 +1373,9 @@ class GameCog(commands.Cog):
         # this is belt-and-suspenders UX rather than the only thing preventing duplicate
         # rewards -- but it also stops the redundant-message spam at the source.
         if player["active_discovery_id"]:
+            abandon_view = AbandonDiscoveryView(interaction.user.id, self.game, player["active_discovery_id"])
             await interaction.response.send_message(
-                "You already have an active discovery waiting — resolve it with `/discovery` first.", ephemeral=True,
+                "You already have an active discovery waiting — resolve it with `/discovery` first.", view=abandon_view, ephemeral=True,
             )
             return
         view = SearchView( interaction.user.id, self.game, interaction.user.display_name)
@@ -1412,7 +1414,11 @@ class GameCog(commands.Cog):
             if result["reason"] == "expired":
                 await interaction.response.send_message("That discovery expired before you got to it. Run `/search` to find another.", ephemeral=True)
             elif result["reason"] == "already_entered":
-                await interaction.response.send_message("You're already inside that discovery somewhere else — finish or abandon it there first.", ephemeral=True)
+                abandon_view = AbandonDiscoveryView(interaction.user.id, self.game, player["active_discovery_id"])
+                await interaction.response.send_message(
+                    "You're already inside that discovery somewhere else — finish or abandon it there first.",
+                    view=abandon_view, ephemeral=True,
+                )
             else:
                 await interaction.response.send_message("You don't have an active discovery — run `/search` to find one first.", ephemeral=True)
             return

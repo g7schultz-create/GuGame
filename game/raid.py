@@ -634,6 +634,13 @@ class RaidView(GameView):
         for user_id in left_ids:
             del self.participants[user_id]
             self.actions.pop(user_id, None)
+        if left_ids:
+            # A fleeing participant leaves the raid's own participants dict here, but the
+            # whole-raid terminal states (_on_victory/_on_wipe/on_timeout) never fire for
+            # them specifically -- without this, their active_raid_started_ts flag stayed set
+            # until GameManager.ACTIVE_RAID_STALE_SECONDS self-healed it (up to 2h), even
+            # though they'd successfully left and had nothing left to finish.
+            self.game.db.clear_active_raid_bulk(left_ids)
 
         if not self._alive_enemies():
             self._on_victory()
@@ -949,7 +956,8 @@ class RaidView(GameView):
             await interaction.response.send_message("You need to `/join` and confirm a character first.", ephemeral=True)
             return
         if self.game.has_active_raid(player):
-            await interaction.response.send_message("🐉 Finish your current raid first!", ephemeral=True)
+            abandon_view = AbandonRaidView(user.id, self.game)
+            await interaction.response.send_message("🐉 Finish your current raid first!", view=abandon_view, ephemeral=True)
             return
 
         def _resolve():
@@ -1559,3 +1567,32 @@ class _AllyPickerView(GameView):
 
         select.callback = on_pick
         self.add_item(select)
+
+
+class AbandonRaidView(GameView):
+    """Self-service escape hatch attached to the "finish your current raid first" refusal
+    (see cog.py's /raid command and RaidView._on_join) -- a player's active_raid_started_ts
+    flag has no dependency on any specific RaidView instance still existing, so if their
+    original raid message scrolled away, got deleted, or the bot restarted before a terminal
+    state could clear it for them, they'd otherwise be stuck until
+    GameManager.ACTIVE_RAID_STALE_SECONDS (2h) self-heals it with no way to act sooner."""
+
+    def __init__(self, user_id: int, game):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.game = game
+        button = discord.ui.Button(label="Abandon Stuck Raid", emoji="🗑️", style=discord.ButtonStyle.danger)
+        button.callback = self._on_abandon
+        self.add_item(button)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This isn't your raid slot to clear.", ephemeral=True)
+            return False
+        return True
+
+    async def _on_abandon(self, interaction: discord.Interaction):
+        await asyncio.to_thread(self.game.abandon_active_raid, self.user_id)
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(content="🗑️ Cleared — you can `/raid` or join a new one now.", view=self)

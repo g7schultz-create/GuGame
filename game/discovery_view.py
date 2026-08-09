@@ -23,6 +23,38 @@ def build_discovery_entry_view(user_id: int, game, display_name: str, avatar_url
     return DiscoveryView(user_id, game, display_name, result["discovery"], result["total_steps"])
 
 
+class AbandonDiscoveryView(GameView):
+    """Self-service escape hatch attached to /search's "you already have an active discovery"
+    and /discovery's "already inside it somewhere else" refusals -- both exist because
+    active_discovery_id/enter_discovery's own already-entered check has no dependency on any
+    specific message still being reachable, so a player whose original discovery message
+    scrolled away, got deleted, or the bot restarted before Back to Search/finishing/timing
+    out could clear it would otherwise be stuck with no way to act (discovery has no stale-
+    flag self-heal the way /hunt and /raid's flags do -- see reopen_discovery's own docstring
+    for why a bare expiry check isn't safe here once a discovery is "entered")."""
+
+    def __init__(self, user_id: int, game, discovery_id: int):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.game = game
+        self.discovery_id = discovery_id
+        button = discord.ui.Button(label="Abandon Stuck Discovery", emoji="🗑️", style=discord.ButtonStyle.danger)
+        button.callback = self._on_abandon
+        self.add_item(button)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This isn't your discovery to clear.", ephemeral=True)
+            return False
+        return True
+
+    async def _on_abandon(self, interaction: discord.Interaction):
+        await asyncio.to_thread(self.game.abandon_discovery, self.user_id, self.discovery_id)
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(content="🗑️ Cleared — you can `/search` for a new one now.", view=self)
+
+
 class DiscoveryView(GameView):
     def __init__(self, user_id: int, game, display_name: str, discovery: dict, total_steps: int):
         super().__init__(timeout=600)

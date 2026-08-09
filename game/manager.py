@@ -864,6 +864,15 @@ class GameManager:
     def start_active_raid(self, user_id: int):
         self.db.start_active_raid(user_id, int(time.time()))
 
+    def abandon_active_raid(self, user_id: int):
+        """Self-service escape hatch for a player whose active_raid_started_ts flag is stuck
+        (e.g. their original RaidView message scrolled away, or the raid ended in a way that
+        didn't clear their flag specifically -- see the flee-mid-raid fix in raid.py's own
+        _resolve_round) -- clears just their own flag, with no dependency on any specific
+        RaidView instance still existing or being reachable. Safe to call even if they were
+        never really stuck (a no-op UPDATE against a user_id not currently flagged)."""
+        self.db.clear_active_raid_bulk([user_id])
+
     # -- /search_forgotten_blessed_land treasure-hunt board (see game/treasure_hunt.py) --------
     TREASURE_HUNT_REALM_GATE = 2  # Core Formation's great_realm_index
     TREASURE_HUNT_COOLDOWN_SECONDS = 1 * 3600  # 1 hour between boards, no stone/item cost

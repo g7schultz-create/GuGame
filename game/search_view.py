@@ -3,7 +3,7 @@ import discord
 
 from . import search_data
 from .base_view import GameView
-from .discovery_view import build_discovery_entry_view
+from .discovery_view import AbandonDiscoveryView, build_discovery_entry_view
 from .ui_utils import format_duration
 
 RESULT_EMOJI = {
@@ -147,6 +147,15 @@ class SearchView(GameView):
             await asyncio.to_thread(self._build_components)
             embed = await asyncio.to_thread(self.build_embed)
             await interaction.response.edit_message(embed=embed, view=self)
+            if result["reason"] == "already_entered":
+                # A separate ephemeral followup (this message just got edited in place as the
+                # response above, and an interaction only gets one initial response) offering
+                # the same self-service escape hatch cog.py's own /search and /discovery
+                # refusals show -- see AbandonDiscoveryView's own docstring for why this
+                # matters (a stuck flag has no dependency on any specific message existing).
+                player = await asyncio.to_thread(self.game.get_player_stats, self.user_id, self.display_name)
+                abandon_view = AbandonDiscoveryView(self.user_id, self.game, player["active_discovery_id"])
+                await interaction.followup.send("Stuck? You can abandon it instead:", view=abandon_view, ephemeral=True)
             return
         # Constructed directly, NOT via asyncio.to_thread -- can return a BattlefieldView,
         # whose __init__ calls asyncio.create_task (see cog.py's /discovery command for the
