@@ -277,6 +277,23 @@ class ProfileView(GameView):
 
     def _combat_embed(self) -> discord.Embed:
         p = self.player
+        # self.player is the raw base-stat row (see GameManager.get_player_stats) -- equipped
+        # gear/Gu bonuses (including Twin Gu Sovereign Physique's second Gu slot, which has NO
+        # baseline of its own, only ever shows up as a bonus here) live entirely in
+        # compute_equipment_bonuses and must be folded in explicitly, same pattern
+        # equipment_view.py's own build_embed already uses for its Total Stats line.
+        bonus = self.game.compute_equipment_bonuses(self.user_id)["stats"]
+        atk = p["atk_stat"] + bonus["atk_stat"]
+        str_ = p["str_stat"] + bonus["str_stat"]
+        spd = p["spd_stat"] + bonus["spd_stat"]
+        def_ = p["def_stat"] + bonus["def_stat"]
+        luck = p["luck_stat"] + bonus["luck_stat"]
+        qi = p["qi_stat"] + bonus["qi_stat"]
+        # hp is an overlay on both current and max equally (same convention hunt.py/pvp_view.py/
+        # raid.py already use for this exact bonus key) rather than a flat add to current HP alone.
+        hp = p["hp"] + bonus["hp"]
+        max_hp = p["max_hp"] + bonus["hp"]
+
         embed = discord.Embed(title=f"{self.display_name} — ⚔️ Combat", color=discord.Color.dark_purple())
         embed.set_thumbnail(url=self.avatar_url)
 
@@ -295,27 +312,27 @@ class ProfileView(GameView):
             embed.add_field(name="🎭 Class", value="No class chosen yet — run `/choose_class` to unlock a raid ability.", inline=False)
 
         embed.add_field(
-            name="Stats",
+            name="Stats (base + gear/Gu)",
             value=(
-                f"❤️ **HP** {p['hp']:.0f}/{p['max_hp']:.0f}\n"
-                f"🎯 **ATK** {p['atk_stat']} ⚔️ **STR** {p['str_stat']}\n"
-                f"🏃 **SPD** {p['spd_stat']} 🛡️ **DEF** {p['def_stat']}\n"
-                f"🍀 **LCK** {p['luck_stat']} 💧 **QI** {p['qi_stat']}"
+                f"❤️ **HP** {hp:.0f}/{max_hp:.0f}\n"
+                f"🎯 **ATK** {atk:.0f} ⚔️ **STR** {str_:.0f}\n"
+                f"🏃 **SPD** {spd:.0f} 🛡️ **DEF** {def_:.0f}\n"
+                f"🍀 **LCK** {luck:.0f} 💧 **QI** {qi:.0f}"
             ),
             inline=False,
         )
         embed.add_field(
             name="What they do",
             value=(
-                f"🎯 Hit Chance: **{combat.hit_chance(p['atk_stat']) * 100:.0f}%**\n"
-                f"🏃 Dodge Chance: **{combat.dodge_chance(p['spd_stat']) * 100:.0f}%**\n"
-                f"🍀 Crit Chance: **{combat.crit_chance(p['luck_stat']) * 100:.0f}%** (x{combat.CRIT_DAMAGE_MULTIPLIER:.1f} damage)\n"
-                f"⚔️ Damage: **~{p['str_stat'] * combat.DAMAGE_PER_STR:.0f}** before enemy DEF\n"
-                f"🛡️ Damage Reduction: **{combat.damage_reduction(p['def_stat']):.1f}** flat, off incoming hits"
+                f"🎯 Hit Chance: **{combat.hit_chance(atk) * 100:.0f}%**\n"
+                f"🏃 Dodge Chance: **{combat.dodge_chance(spd) * 100:.0f}%**\n"
+                f"🍀 Crit Chance: **{combat.crit_chance(luck) * 100:.0f}%** (x{combat.CRIT_DAMAGE_MULTIPLIER:.1f} damage)\n"
+                f"⚔️ Damage: **~{str_ * combat.DAMAGE_PER_STR:.0f}** before enemy DEF\n"
+                f"🛡️ Damage Reduction: **{combat.damage_reduction(def_):.1f}** flat, off incoming hits"
             ),
             inline=False,
         )
-        embed.set_footer(text="No combat/encounter system exists yet — these are the formulas a future one will use.")
+        embed.set_footer(text="Includes equipped gear/Gu bonuses (and a 2nd Gu slot's, if Twin Gu Sovereign Physique is active) — these are the formulas combat actually uses.")
         return embed
 
     def _breakthrough_embed(self) -> discord.Embed:

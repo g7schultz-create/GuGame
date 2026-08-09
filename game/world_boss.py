@@ -69,14 +69,12 @@ WORLD_BOSS_ATTACKS_PER_COOLDOWN = 5
 # flurry (WORLD_BOSS_ATTACKS_PER_COOLDOWN) from either of them alone already dealt
 # ~940,000-1,260,000 damage, meaning the old 1,000,000 HP could be one-shot in a single
 # button click by one player, completely defeating the "server-wide, many-contributors" shared
-# pool this system is built around. 10,000,000 needs roughly 8-10 flurries from the current
-# strongest players combined (not an unreasonable ask across the boss's 36h lifetime with
-# real community participation), without ballooning back toward the earlier over-tuned values
-# (20,000,000 -> 2,500,000 -> 1,500,000) this constant was deliberately walked back from
-# before. This will keep needing to climb again as the top of the playerbase pushes further
-# into Spirit Severing and beyond, AND as more players are actively contributing -- expected,
-# ongoing live-ops tuning either way, not a one-time number.
-WORLD_BOSS_MAX_HP = 10_000_000
+# pool this system is built around. Raised again to 20,000,000 (2026-08-08, user's explicit
+# request) as the playerbase's top end has grown since the 10,000,000 calibration above --
+# back to the original first-tried value this constant was once walked back from (20,000,000
+# -> 2,500,000 -> 1,500,000 -> 10,000,000), now re-justified by real growth rather than
+# over-tuning. Ongoing live-ops tuning either way, not a one-time number.
+WORLD_BOSS_MAX_HP = 20_000_000
 # Low on purpose -- a real fight's monster would scale DEF/SPD to be dangerous, but "every
 # cultivation realm" being able to meaningfully participate (the doc's own stated goal) means
 # even a fresh character's attack needs to land and deal more than the MIN_DAMAGE=1 floor.

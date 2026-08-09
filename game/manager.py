@@ -836,7 +836,7 @@ class GameManager:
 
     # -- /search_forgotten_blessed_land treasure-hunt board (see game/treasure_hunt.py) --------
     TREASURE_HUNT_REALM_GATE = 2  # Core Formation's great_realm_index
-    TREASURE_HUNT_COOLDOWN_SECONDS = 2 * 3600  # 2 hours between boards, no stone/item cost
+    TREASURE_HUNT_COOLDOWN_SECONDS = 1 * 3600  # 1 hour between boards, no stone/item cost
 
     def start_treasure_hunt(self, user_id: int, name: str):
         """Realm + cooldown gate, then rolls a fresh 25-tile board (see treasure_hunt.
