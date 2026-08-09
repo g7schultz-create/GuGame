@@ -153,6 +153,12 @@ class HuntView(GameView):
         # shape as Iron Skin's own _guard_stacks above.
         self._solar_stacks = 0
         self._lunar_stacks = 0
+        # Blazing Glory Sunfire Physique (Unique) -- a second, independent burn source from
+        # Fire Dao Path's own _burn_damage_per_tick/_burn_ticks_remaining above (a player
+        # could have both a Fire Dao Path AND this physique at once), same "refreshes, doesn't
+        # stack, on every landed hit" shape, ticked alongside it in _apply_pending_burn_tick.
+        self._sunfire_burn_damage_per_tick = 0
+        self._sunfire_burn_ticks_remaining = 0
         # Uncommon/Rare-tier physique combat state (see character_data.py for the families).
         self._first_empower_discounted = False  # Thunder Muscle family
         self._flee_reroll_used = False  # Void family
@@ -303,9 +309,23 @@ class HuntView(GameView):
         if self.monster_hp <= 0:
             self._handle_victory()
 
+    def _apply_pending_sunfire_tick(self):
+        """Blazing Glory Sunfire Physique: an independent burn source from Fire Dao Path's own
+        above -- seeded on a landed hit (see _do_attack), ticks once per round the same way."""
+        if self._sunfire_burn_ticks_remaining <= 0 or self.monster_hp <= 0:
+            return
+        damage = min(self.monster_hp, self._sunfire_burn_damage_per_tick)
+        self.monster_hp -= damage
+        self._sunfire_burn_ticks_remaining -= 1
+        self._log_line(f"☀️ {self.monster.name} burns in sunfire for {damage} damage!")
+        if self.monster_hp <= 0:
+            self._handle_victory()
+
     def _finish_round(self):
         if self.status == "fighting":
             self._apply_pending_burn_tick()
+        if self.status == "fighting":
+            self._apply_pending_sunfire_tick()
         if self.status == "fighting":
             self.round += 1
             if self.inspire_rounds_remaining > 0:
@@ -410,6 +430,17 @@ class HuntView(GameView):
                 self.monster_hp = min(self.monster_max_hp, self.monster_hp + result.heal)
                 heal_text = f" It recovers {result.heal} HP."
             self._log_line(f"🩸 {self.monster.name} uses {self.monster.ability.name} for {result.damage} damage{crit}.{heal_text}")
+            # Immovable Mountain Physique: surviving a landed hit reflects a portion of the
+            # damage taken straight back at the attacker -- guaranteed (no separate hit/dodge/
+            # crit roll of its own), same simplicity as the burn-tick mechanics above.
+            if self.player_hp > 0 and self.monster_hp > 0:
+                retaliation_pct = self._trait_bonus("retaliation_damage_pct")
+                if retaliation_pct > 0:
+                    retaliation_damage = max(1, round(result.damage * retaliation_pct))
+                    self.monster_hp = max(0, self.monster_hp - retaliation_damage)
+                    self._log_line(f"🪨 You retaliate for {retaliation_damage} damage!")
+                    if self.monster_hp <= 0:
+                        self._handle_victory()
         if self.player_hp <= 0:
             self.status = "defeat"
             self._clear_active_hunt()
@@ -507,6 +538,17 @@ class HuntView(GameView):
                     self._burn_damage_per_tick = tick_damage
                     self._burn_ticks_remaining = dao_paths.FIRE_BURN_TICKS
                     self._log_line(f"🔥 Your flames catch hold of {self.monster.name}!")
+            # Blazing Glory Sunfire Physique: same "refreshes, doesn't stack, on every landed
+            # hit" shape as Fire Dao Path's burn above, but sized off the target's max HP
+            # rather than this hit's damage -- a separate, independently-ticking burn source
+            # (see _sunfire_burn_damage_per_tick/_apply_pending_sunfire_tick).
+            sunfire_pct = self._trait_bonus("sunfire_burn_max_hp_pct")
+            if sunfire_pct > 0 and self.monster_hp > 0:
+                total_burn = round(self.monster_max_hp * sunfire_pct)
+                tick_damage = max(1, round(total_burn / dao_paths.FIRE_BURN_TICKS))
+                self._sunfire_burn_damage_per_tick = tick_damage
+                self._sunfire_burn_ticks_remaining = dao_paths.FIRE_BURN_TICKS
+                self._log_line(f"☀️ Sunfire catches hold of {self.monster.name}!")
             if freeze_chance and self.monster_hp > 0 and random.random() < freeze_chance:
                 self.monster_frozen_rounds = max(self.monster_frozen_rounds, 1)
                 self._log_line(f"❄️ {self.monster.name} is frozen solid and will miss its next attack!")

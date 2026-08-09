@@ -421,6 +421,11 @@ KNOWN_PHYSIQUE_ONLY_STAT_KEYS = {
     # Heavenly Solar/Lunar Physique (Unique) — see hunt.py/raid.py's per-encounter stack
     # counters, feeding combat.resolve_attack's damage_pct_bonus/armor_penetration_pct.
     "solar_stack_damage_pct", "lunar_stack_armor_pen_pct",
+    # Blazing Glory Sunfire / Immovable Mountain Physique (Unique) — see hunt.py/raid.py's
+    # new burn-tick state (mirrors Fire Dao Path's own) and retaliation handling (mirrors
+    # Iron Skin's own guard-stack shape). Blood Sea Demon Physique's lifesteal_percent/
+    # low_hp_str_pct_bonus need no new key here — both already exist above.
+    "sunfire_burn_max_hp_pct", "retaliation_damage_pct",
 }
 
 

@@ -123,6 +123,10 @@ class RaidEnemy:
         # whose turn queued the round.
         self.burn_damage_per_tick = 0
         self.burn_ticks_remaining = 0
+        # Blazing Glory Sunfire Physique -- an independent second burn source, same "refreshes,
+        # doesn't stack" shape as Fire Dao Path's above, ticked alongside it in Phase 1.5.
+        self.sunfire_burn_damage_per_tick = 0
+        self.sunfire_burn_ticks_remaining = 0
 
     @property
     def alive(self) -> bool:
@@ -569,6 +573,16 @@ class RaidView(GameView):
                         target.burn_damage_per_tick = tick_damage
                         target.burn_ticks_remaining = dao_paths.FIRE_BURN_TICKS
                         self._log(f"🔥 **{p['name']}**'s flames catch hold of {target.monster.name}!")
+                # Blazing Glory Sunfire Physique: same "refreshes, doesn't stack" shape as Fire
+                # Dao Path's burn above, but sized off the target's max HP rather than this
+                # hit's damage -- a separate, independently-ticking burn source (Phase 1.5).
+                sunfire_pct = self._trait_bonus(p, "sunfire_burn_max_hp_pct")
+                if sunfire_pct > 0 and target.hp > 0:
+                    total_burn = round(target.max_hp * sunfire_pct)
+                    tick_damage = max(1, round(total_burn / dao_paths.FIRE_BURN_TICKS))
+                    target.sunfire_burn_damage_per_tick = tick_damage
+                    target.sunfire_burn_ticks_remaining = dao_paths.FIRE_BURN_TICKS
+                    self._log(f"☀️ **{p['name']}**'s sunfire catches hold of {target.monster.name}!")
                 if target.hp <= 0:
                     self._log(f"💥 {target.monster.name} is defeated!")
                     if target is self.enemies[0] and self.charge_target_id is not None:
@@ -597,6 +611,21 @@ class RaidView(GameView):
             enemy.hp -= burn_damage
             enemy.burn_ticks_remaining -= 1
             self._log(f"🔥 {enemy.monster.name} burns for {burn_damage} damage!")
+            if enemy.hp <= 0:
+                self._log(f"💥 {enemy.monster.name} is defeated!")
+                if enemy is self.enemies[0] and self.charge_target_id is not None:
+                    self.charge_target_id = None
+                    self._log(f"⚡ {enemy.monster.name}'s charging attack collapses along with it!")
+
+        # Phase 1.6: Blazing Glory Sunfire Physique burn ticks -- same shape as Phase 1.5
+        # above, just a separate, independently-ticking damage pool.
+        for enemy in self.enemies:
+            if enemy.sunfire_burn_ticks_remaining <= 0 or not enemy.alive:
+                continue
+            burn_damage = min(enemy.hp, enemy.sunfire_burn_damage_per_tick)
+            enemy.hp -= burn_damage
+            enemy.sunfire_burn_ticks_remaining -= 1
+            self._log(f"☀️ {enemy.monster.name} burns in sunfire for {burn_damage} damage!")
             if enemy.hp <= 0:
                 self._log(f"💥 {enemy.monster.name} is defeated!")
                 if enemy is self.enemies[0] and self.charge_target_id is not None:
@@ -773,6 +802,22 @@ class RaidView(GameView):
                     reduction = bonuses.get("death_qi_loss_reduction_pct", 0)
                     qi_lost, _ = self.game.db.apply_death_penalty(target_id, reduction_pct=reduction)
                     self._log(f"💀 **{p['name']}** is knocked out, losing {qi_lost:,.2f} qi!")
+            # Immovable Mountain Physique: surviving a landed hit reflects a portion of the
+            # damage taken straight back at the attacker -- guaranteed (no separate hit/dodge/
+            # crit roll of its own), mirrors hunt.py's identical _monster_turn handling. A
+            # retaliation kill here is left for the next round's own Phase 2 alive-enemies
+            # check to notice, same precedent Phase 1.5's own burn-tick kills already set.
+            if p["hp"] > 0 and enemy.hp > 0:
+                retaliation_pct = self._trait_bonus(p, "retaliation_damage_pct")
+                if retaliation_pct > 0:
+                    retaliation_damage = max(1, round(result.damage * retaliation_pct))
+                    enemy.hp = max(0, enemy.hp - retaliation_damage)
+                    self._log(f"🪨 **{p['name']}** retaliates for {retaliation_damage} damage!")
+                    if enemy.hp <= 0:
+                        self._log(f"💥 {enemy.monster.name} is defeated!")
+                        if enemy is self.enemies[0] and self.charge_target_id is not None:
+                            self.charge_target_id = None
+                            self._log(f"⚡ {enemy.monster.name}'s charging attack collapses along with it!")
 
     def _handle_boss_charge(self, boss: "RaidEnemy", alive_ids: list, defend_map: dict) -> bool:
         """Main-boss-only telegraphed special (see CHARGE_DURATION_ROUNDS above). Returns

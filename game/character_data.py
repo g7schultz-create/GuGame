@@ -1376,6 +1376,7 @@ PHYSIQUE_TIERS: Dict[str, Tier] = {
             "Desolate Ancient Moon Physique", "Universe Great Derivation Physique",
             "Verdant Great Sun Physique", "Dream Reality Seeker Physique", "Sovereign Immortal Fetus Physique",
             "Heavenly Solar Physique", "Heavenly Lunar Physique", "Twin Gu Sovereign Physique",
+            "Blazing Glory Sunfire Physique", "Blood Sea Demon Physique", "Immovable Mountain Physique",
             # Same carve-out as the root ladder's own "Nameless Immortal Root" -- no
             # _physique_spec entry, no unique_passives line, no one-off mechanic; still gets
             # this shared tier's own big stat_bonuses package, and is exempt from the
@@ -1399,6 +1400,9 @@ PHYSIQUE_TIERS: Dict[str, Tier] = {
             "Heavenly Solar Physique": "Each attack this encounter stacks a growing damage bonus, up to +20% at full stacks.",
             "Heavenly Lunar Physique": "Each attack this encounter further weakens the target's defense against you, up to +25% armor penetration at full stacks.",
             "Twin Gu Sovereign Physique": "Can bind and equip a second Gu — its passive stat bonuses apply, but only the first Gu's combat ability and any named special effects (Fixed Immortal Travel, Worldly Escape, Battle Intent, etc.) remain active.",
+            "Blazing Glory Sunfire Physique": "Every landed attack sears the target with a burn totaling 5% of their max HP over the next few rounds.",
+            "Blood Sea Demon Physique": "Heals 12% of damage dealt on every landed attack; below 50% HP, gains +18% STR.",
+            "Immovable Mountain Physique": "+30% DEF, +15% HP; surviving a landed hit reflects 30% of the damage taken straight back at the attacker.",
         },
     ),
     "Godly": Tier(
@@ -2089,6 +2093,31 @@ _physique_spec(
     "Lunar Sunder: each successful basic Attack this encounter further weakens the target's "
     "defense against you, +5% armor penetration per stack, up to +25% at 5 stacks.",
     {"lunar_stack_armor_pen_pct": 0.05},
+)
+# Three more genuinely new one-off Unique mechanics, same allowance as Heavenly Solar/Lunar
+# just above. sunfire_burn_max_hp_pct and retaliation_damage_pct are each consumed by a new
+# bit of state in hunt.py/raid.py (mirroring the Fire Dao Path burn / Iron Skin guard-stack
+# shapes already there); lifesteal_percent and low_hp_str_pct_bonus need no new plumbing at
+# all -- both already ride the existing generic bonus pool (see manager.SPECIAL_BONUS_KEYS
+# and hunt.py/raid.py's own _player_combat_stats, same key Phoenix Feather Body already uses).
+_physique_spec(
+    "Blazing Glory Sunfire Physique", "Unique", ("fire", "sun"),
+    "Sunfire Brand: every landed attack this encounter sears the target with a burn totaling "
+    "5% of their max HP, dealt over the next few rounds -- refreshes (doesn't stack) on each "
+    "new landed hit.",
+    {"sunfire_burn_max_hp_pct": 0.05},
+)
+_physique_spec(
+    "Blood Sea Demon Physique", "Unique", ("blood", "strength"),
+    "Blood Sea Hunger: heals 12% of damage dealt back to you on every landed attack; below "
+    "50% HP, gain +18% STR as the hunger takes over.",
+    {"lifesteal_percent": 0.12, "low_hp_str_pct_bonus": 0.18},
+)
+_physique_spec(
+    "Immovable Mountain Physique", "Unique", ("earth", "strength"),
+    "Mountain's Resolve: +30% DEF, +15% HP; surviving a landed hit reflects 30% of the "
+    "damage taken straight back at the attacker.",
+    {"def_pct": 0.30, "hp_pct": 0.15, "retaliation_damage_pct": 0.30},
 )
 
 # Godly tier's sole physique -- its whole mechanic (permanently grow a random stat by 2% of
