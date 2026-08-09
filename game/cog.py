@@ -1681,9 +1681,14 @@ class GameCog(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
     async def _item_name_autocomplete(self, interaction: discord.Interaction, current: str):
+        # ITEMS covers materials/pills/gear catalog entries; tiered Gu (crafted-family AND
+        # canon_gu.py's own 26) live in equipment.EQUIPMENT instead, keyed as
+        # "{family} ({quality})" (see equipment.gu_item_name) -- offered here too so admins
+        # can actually grant one, not just plain catalog items.
+        names = list(ITEMS) + [name for name in equipment.EQUIPMENT if equipment.parse_gu_name(name)[0] is not None]
         return [
             app_commands.Choice(name=name, value=name)
-            for name in ITEMS
+            for name in names
             if current.lower() in name.lower()
         ][:25]
 
@@ -1695,9 +1700,9 @@ class GameCog(commands.Cog):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
             return
-        if item_name not in ITEMS:
-            valid = ", ".join(ITEMS)
-            await interaction.response.send_message(f"Unknown item `{item_name}`. Valid items: {valid}", ephemeral=True)
+        is_gu = equipment.parse_gu_name(item_name)[0] is not None
+        if item_name not in ITEMS and not is_gu:
+            await interaction.response.send_message(f"Unknown item `{item_name}`. Start typing to see valid items/Gu.", ephemeral=True)
             return
         if quantity < 1:
             await interaction.response.send_message("Quantity must be at least 1.", ephemeral=True)
