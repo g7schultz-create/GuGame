@@ -1,28 +1,32 @@
 """
-/inheritance_ground -- a 3-4 player INVITED team explores a named inheritance site through a
-few branching-choice stages, a Final Trial, and a betrayal twist. See
-game/inheritance_ground_data.py for content and GameManager's own inheritance-ground methods
-(manager.py, right after the /raid gate section) for the business logic this view only ever
-calls into, never duplicates.
+/inheritance_ground -- a 3-4 player INVITED team explores a named inheritance site: a shared
+bubble board (treasure or battle bubbles, popped in turn order), a Final Trial, and a betrayal
+twist. See game/inheritance_ground_data.py for content and GameManager's own inheritance-ground
+methods (manager.py, right after the /raid gate section) for the business logic this view only
+ever calls into, never duplicates.
 
 Three views:
   InheritanceGroundLobbyView   -- invite/accept flow (leader + up to 3 invitees).
-  InheritanceGroundView        -- the run itself: intro -> 2 stages -> trial -> betrayal -> resolution.
+  InheritanceGroundView        -- the run itself: intro -> bubble board -> trial -> betrayal ->
+                                   resolution, with a real multi-round team fight embedded as its
+                                   own "battle" phase whenever a battle bubble is popped.
   AbandonInheritanceGroundView -- self-service escape hatch, same shape as AbandonRaidView/
                                    AbandonDiscoveryView, shipped from day one rather than added
                                    reactively (see the raid flee bug fixed in commit 0b6b712).
 """
 
 import asyncio
+import os
 import random
 
 import discord
 
-from . import inheritance_ground_data
+from . import combat, inheritance_ground_data
 from .base_view import GameView
-from .ui_utils import format_duration
 
 BETRAYAL_DECISION_SECONDS = 60
+BATTLE_ROUND_TIMEOUT_SECONDS = 30  # matches raid.ROUND_TIMEOUT_SECONDS's own pacing
+GUARD_DAMAGE_REDUCTION = 0.5  # matches hunt.py/raid.py/battlefield_view.py's own constant
 
 
 class AbandonInheritanceGroundView(GameView):
@@ -104,15 +108,16 @@ class InheritanceGroundLobbyView(GameView):
 
     async def _on_accept(self, interaction: discord.Interaction):
         # Re-checked fresh here (not trusted from invite time) -- up to 5 minutes can pass
-        # before someone clicks Accept, long enough to start another run or fall on cooldown
-        # in the meantime. "You" phrasing since this is the clicking player's own eligibility,
-        # unlike cog.py's invite-time check which is third-person about an invitee.
-        ok, reason_code, remaining = await asyncio.to_thread(self.game.check_inheritance_ground_eligibility, interaction.user.id, interaction.user.display_name)
+        # before someone clicks Accept, long enough to start another run in the meantime (an
+        # invitee's OWN cooldown is deliberately not gated -- see
+        # GameManager.check_inheritance_ground_eligibility). "You" phrasing since this is the
+        # clicking player's own eligibility, unlike cog.py's invite-time check which is
+        # third-person about an invitee.
+        ok, reason_code, _remaining = await asyncio.to_thread(self.game.check_inheritance_ground_eligibility, interaction.user.id, interaction.user.display_name)
         if not ok:
             messages = {
                 "not_confirmed": "You need to `/join` and confirm a character first.",
                 "already_active": "You're already in another inheritance ground run — finish or abandon it first.",
-                "on_cooldown": f"You're still recovering from your last run — try again in **{format_duration(remaining)}**.",
             }
             await interaction.response.send_message(messages[reason_code], ephemeral=True)
             return
@@ -146,7 +151,16 @@ class InheritanceGroundLobbyView(GameView):
         run_view = InheritanceGroundView(self.game, self.ground_key, team)
         await asyncio.to_thread(self.game.start_active_inheritance_ground, [uid for uid, _ in team])
         embed = await asyncio.to_thread(run_view.build_embed)
-        await interaction.response.edit_message(embed=embed, view=run_view)
+        # The intro's image (see inheritance_ground_data.GROUNDS[...]["intro_image"]) has to be
+        # attached as a real discord.File on THIS send -- embed.set_image's "attachment://..."
+        # URL only resolves against a file attached to that same message. Degrades gracefully
+        # (no image) if the file isn't present -- see build_embed's identical os.path.exists guard.
+        image_path = inheritance_ground_data.GROUNDS[self.ground_key].get("intro_image")
+        if image_path and os.path.exists(image_path):
+            file = discord.File(image_path, filename=os.path.basename(image_path))
+            await interaction.response.edit_message(embed=embed, view=run_view, attachments=[file])
+        else:
+            await interaction.response.edit_message(embed=embed, view=run_view)
         run_view.message = await interaction.original_response()
 
     async def on_timeout(self):
@@ -188,10 +202,32 @@ class InheritanceGroundView(GameView):
         self.ground_key = ground_key
         self.team = team  # [(user_id, name), ...]
         self.phase = "intro"
-        self.stage_index = 0
-        self.power_modifier = 0.0
-        self.stage_log: list = []
-        self.stage_resolving = False
+        # Bubble board (replaces the old branching-choice stages) -- see manager.
+        # generate_inheritance_ground_board for how it's built. turn_index cycles through
+        # self.team -- only that member may pop the next bubble (enforced in the bubble
+        # callback itself, not interaction_check, since a disabled discord.ui.Button can't be
+        # "disabled for one viewer but not another" -- everyone sees the same button state).
+        self.board: list = []
+        self.revealed: list = []
+        self.turn_index = 0
+        self.board_log: list = []  # (name_or_None, "treasure"/"battle", text)
+        self.bubble_resolving = False  # re-entrancy guard, mirrors raid.py's own click guards
+        self.battles_fought = 0  # feeds roll_inheritance_ground_battle_monster's own scaling
+
+        # "battle" phase state -- populated by _start_battle when a battle bubble is popped,
+        # left in place afterward (harmless, just stale) until the next battle overwrites it.
+        self.battle_monster = None
+        self.battle_monster_hp = 0
+        self.battle_monster_max_hp = 0
+        self.battle_hp: dict = {}       # user_id -> current HP this fight
+        self.battle_max_hp: dict = {}   # user_id -> max HP this fight
+        self.battle_hp_bonus: dict = {}  # user_id -> equipped gear's flat HP overlay, for persisting back
+        self.battle_actions: dict = {}  # user_id -> "attack"/"guard", this round only
+        self.battle_round = 1
+        self.battle_log: list = []
+        self.battle_wipe = False  # True once a battle ends the run early (team wiped)
+        self._battle_round_epoch = 0
+
         self.trial_result: dict = None
         self.betrayal_choices: dict = {}
         self.betrayal_epoch = 0
@@ -212,6 +248,9 @@ class InheritanceGroundView(GameView):
     def _ground(self):
         return inheritance_ground_data.GROUNDS[self.ground_key]
 
+    def _advance_turn(self):
+        self.turn_index = (self.turn_index + 1) % len(self.team)
+
     # -- components ----------------------------------------------------------------------
 
     def _build_components(self):
@@ -220,12 +259,23 @@ class InheritanceGroundView(GameView):
             button = discord.ui.Button(label="Continue", emoji="➡️", style=discord.ButtonStyle.primary)
             button.callback = self._on_intro_continue
             self.add_item(button)
-        elif self.phase == "stage":
-            stage = self._ground()["stages"][self.stage_index]
-            for option in stage["options"]:
-                button = discord.ui.Button(label=option["label"], emoji=option["emoji"], style=discord.ButtonStyle.primary)
-                button.callback = self._make_stage_option_callback(option["id"])
+        elif self.phase == "bubble_board":
+            for index, category in enumerate(self.board):
+                row = index // 5
+                if self.revealed[index]:
+                    icon = "💰" if category == "treasure" else "⚔️"
+                    button = discord.ui.Button(label="", emoji=icon, style=discord.ButtonStyle.secondary, row=row, disabled=True)
+                else:
+                    button = discord.ui.Button(label="?", emoji="🫧", style=discord.ButtonStyle.primary, row=row)
+                    button.callback = self._make_bubble_callback(index)
                 self.add_item(button)
+        elif self.phase == "battle":
+            attack_button = discord.ui.Button(label="Attack", emoji="⚔️", style=discord.ButtonStyle.danger)
+            attack_button.callback = self._make_battle_action_callback("attack")
+            self.add_item(attack_button)
+            guard_button = discord.ui.Button(label="Guard", emoji="🛡️", style=discord.ButtonStyle.secondary)
+            guard_button.callback = self._make_battle_action_callback("guard")
+            self.add_item(guard_button)
         elif self.phase == "pre_trial":
             button = discord.ui.Button(label="Face the Trial", emoji="⚔️", style=discord.ButtonStyle.danger)
             button.callback = self._on_face_trial
@@ -242,46 +292,228 @@ class InheritanceGroundView(GameView):
     # -- intro -----------------------------------------------------------------------------
 
     async def _on_intro_continue(self, interaction: discord.Interaction):
-        self.phase = "stage"
-        self.stage_index = 0
+        self.phase = "bubble_board"
+        self.board = await asyncio.to_thread(self.game.generate_inheritance_ground_board, len(self.team))
+        self.revealed = [False] * len(self.board)
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
 
-    # -- stages (group decision -- first team member to click decides for everyone) --------
+    # -- bubble board (turn-based -- only self.team[self.turn_index] may pop the next bubble) --
 
-    def _make_stage_option_callback(self, option_id: str):
+    def _make_bubble_callback(self, index: int):
         async def callback(interaction: discord.Interaction):
-            if self.stage_resolving:
+            current_uid, current_name = self.team[self.turn_index]
+            if interaction.user.id != current_uid:
+                await interaction.response.send_message(f"It's **{current_name}**'s turn to pop a bubble.", ephemeral=True)
+                return
+            if self.bubble_resolving or self.revealed[index]:
                 await interaction.response.defer()
                 return
-            self.stage_resolving = True
-            # defer() first -- resolve_inheritance_ground_stage does real DB work (spending
-            # every team member's spirit stones) that can run past Discord's 3s ack window
-            # under load, same reasoning as every other bulk-write callback in this codebase.
+            self.bubble_resolving = True
+            # defer() first -- both branches below do real DB work (loot grants, or settling
+            # HP/Qi to start a battle) that can run past Discord's 3s ack window under load,
+            # same reasoning as every other bulk-write callback in this codebase.
             await interaction.response.defer()
-            result = await asyncio.to_thread(
-                self.game.resolve_inheritance_ground_stage, self.ground_key, self.stage_index, option_id, self.team,
-            )
-            self.power_modifier += result["power_delta"]
-            self.stage_log.append((self._ground()["stages"][self.stage_index]["title"], result["option_label"], result["flavor"]))
-            if self.stage_index + 1 < len(self._ground()["stages"]):
-                self.stage_index += 1
-            else:
-                self.phase = "pre_trial"
-            self.stage_resolving = False
-            await asyncio.to_thread(self._build_components)
-            embed = await asyncio.to_thread(self.build_embed)
-            await interaction.edit_original_response(embed=embed, view=self)
+            category = self.board[index]
+            self.revealed[index] = True
+            if category == "treasure":
+                results = await asyncio.to_thread(self.game.grant_inheritance_ground_treasure_reward, self.ground_key, self.team)
+                summary = "; ".join(f"**{name}**: {reward}" for name, reward in results)
+                self.board_log.append((None, "treasure", summary))
+                self._advance_turn()
+                self.phase = "pre_trial" if all(self.revealed) else "bubble_board"
+                self.bubble_resolving = False
+                await asyncio.to_thread(self._build_components)
+                embed = await asyncio.to_thread(self.build_embed)
+                await interaction.edit_original_response(embed=embed, view=self)
+            else:  # "battle" -- turn rotation PAUSES until the fight is actually won
+                self.battles_fought += 1
+                await asyncio.to_thread(self._start_battle)
+                self.bubble_resolving = False
+                await asyncio.to_thread(self._build_components)
+                embed = await asyncio.to_thread(self.build_embed)
+                await interaction.edit_original_response(embed=embed, view=self)
+                self._start_battle_round_timer()
 
         return callback
+
+    # -- battle (whole team fights together -- every alive member acts each round) ----------
+    # asyncio.create_task (via _start_battle_round_timer) requires a running loop on the
+    # CURRENT thread, so it's always called directly on the main thread, never from inside a
+    # to_thread-dispatched function -- same discipline every other round timer in this
+    # codebase already established (see commit 45e239a).
+
+    def _start_battle(self):
+        """Sync -- dispatched via asyncio.to_thread by its one caller above. Seeds the
+        monster (scaled by battles_fought, see roll_inheritance_ground_battle_monster) and
+        every team member's live HP for the fight, same equipment-bonus overlay pattern
+        hunt.py's own HuntView.__init__ uses for player_hp/player_max_hp."""
+        self.phase = "battle"
+        self.battle_monster = self.game.roll_inheritance_ground_battle_monster(self.ground_key, self.battles_fought)
+        self.battle_monster_hp = self.battle_monster.hp
+        self.battle_monster_max_hp = self.battle_monster.hp
+        self.battle_hp = {}
+        self.battle_max_hp = {}
+        self.battle_hp_bonus = {}
+        for uid, _name in self.team:
+            equip_bonuses = self.game.compute_equipment_bonuses(uid)["stats"]
+            hp_bonus = equip_bonuses["hp"]
+            hp_settled = self.game.db.settle_hp_regen(uid)
+            self.battle_hp[uid] = hp_settled["hp"] + hp_bonus
+            self.battle_max_hp[uid] = hp_settled["max_hp"] + hp_bonus
+            self.battle_hp_bonus[uid] = hp_bonus
+        self.battle_actions = {}
+        self.battle_round = 1
+        self.battle_log = [f"⚔️ {self.battle_monster.name} blocks the way!"]
+
+    def _battle_attacker_stats(self, user_id: int) -> dict:
+        """Base + equipped-gear bonuses only -- deliberately NOT the fuller physique/root
+        special-trait stacking (guard-stacks, solar-stacks, low-HP bonuses, etc.) hunt.py/
+        raid.py layer on top, keeping this a small, self-contained addition rather than a
+        second full copy of that machinery."""
+        name = next(n for uid, n in self.team if uid == user_id)
+        player = self.game.get_player_stats(user_id, name)
+        bonuses = self.game.compute_equipment_bonuses(user_id)["stats"]
+        return {
+            "str_stat": player["str_stat"] + bonuses["str_stat"], "atk_stat": player["atk_stat"] + bonuses["atk_stat"],
+            "def_stat": player["def_stat"] + bonuses["def_stat"], "spd_stat": player["spd_stat"] + bonuses["spd_stat"],
+            "luck_stat": player["luck_stat"] + bonuses["luck_stat"],
+        }
+
+    def _persist_battle_hp(self, user_id: int):
+        """Mirrors hunt.py's own _persist_hp -- subtracts the gear-bonus overlay before
+        writing back, since the stored hp/max_hp columns stay gear-independent."""
+        hp_bonus = self.battle_hp_bonus.get(user_id, 0)
+        self.game.db.set_hp(user_id, max(1, self.battle_hp[user_id] - hp_bonus))
+
+    def _start_battle_round_timer(self):
+        self._battle_round_epoch += 1
+        asyncio.create_task(self._battle_round_timeout(self._battle_round_epoch))
+
+    async def _battle_round_timeout(self, epoch: int):
+        await asyncio.sleep(BATTLE_ROUND_TIMEOUT_SECONDS)
+        if self.phase != "battle" or epoch != self._battle_round_epoch:
+            return  # this round already resolved on its own (or the run ended) before this fired
+        await asyncio.to_thread(self._resolve_battle_round)
+        await asyncio.to_thread(self._build_components)
+        if self.message is not None:
+            try:
+                embed = await asyncio.to_thread(self.build_embed)
+                await self.message.edit(embed=embed, view=self)
+            except discord.HTTPException:
+                pass
+
+    def _make_battle_action_callback(self, action: str):
+        def callback(interaction: discord.Interaction):
+            return self._on_battle_action(interaction, action)
+
+        return callback
+
+    async def _on_battle_action(self, interaction: discord.Interaction, action: str):
+        user_id = interaction.user.id
+        if self.battle_hp.get(user_id, 0) <= 0:
+            await interaction.response.send_message("You've been knocked out this fight and can't act.", ephemeral=True)
+            return
+        if user_id in self.battle_actions:
+            await interaction.response.send_message("You've already chosen your action this round.", ephemeral=True)
+            return
+        self.battle_actions[user_id] = action
+        confirm_text = "⚔️ You ready an attack." if action == "attack" else "🛡️ You brace for the next blow."
+        await interaction.response.send_message(confirm_text, ephemeral=True)
+        alive_ids = [uid for uid, _ in self.team if self.battle_hp.get(uid, 0) > 0]
+        if not all(uid in self.battle_actions for uid in alive_ids):
+            return
+        await asyncio.to_thread(self._resolve_battle_round)
+        await asyncio.to_thread(self._build_components)
+        if self.message is not None:
+            try:
+                embed = await asyncio.to_thread(self.build_embed)
+                await self.message.edit(embed=embed, view=self)
+            except discord.HTTPException:
+                pass
+
+    def _resolve_battle_round(self):
+        """Sync -- always dispatched via asyncio.to_thread by its two callers above. Non-
+        responders default to Attack (mirrors raid.py's own _apply_afk_actions). Player phase
+        (every alive member attacks or guards) then a monster phase (one counter-attack at a
+        random alive, non-guarded-reduced member) -- same "player phase, then monster phase"
+        shape hunt.py's _do_attack/_monster_turn already use, just N attackers instead of 1."""
+        if self.phase != "battle":
+            return  # already resolved by the other race path (click-triggered vs timeout)
+        alive_ids = [uid for uid, _ in self.team if self.battle_hp.get(uid, 0) > 0]
+        for uid in alive_ids:
+            self.battle_actions.setdefault(uid, "attack")
+
+        guarding_ids = set()
+        for uid, name in self.team:
+            if uid not in alive_ids:
+                continue
+            if self.battle_actions.get(uid) == "guard":
+                guarding_ids.add(uid)
+                self.battle_log.append(f"🛡️ **{name}** braces for the next blow.")
+                continue
+            if self.battle_monster_hp <= 0:
+                continue
+            result = combat.resolve_attack(
+                self._battle_attacker_stats(uid), self.battle_monster.stats(),
+                max_dodge_chance=combat.MONSTER_MAX_DODGE_CHANCE,
+            )
+            if not result.hit:
+                self.battle_log.append(f"❌ **{name}** attacks {self.battle_monster.name} but misses!")
+            elif result.dodged:
+                self.battle_log.append(f"💨 {self.battle_monster.name} dodges **{name}**'s attack!")
+            else:
+                self.battle_monster_hp = max(0, self.battle_monster_hp - result.damage)
+                self.battle_log.append(f"⚔️ **{name}** hits {self.battle_monster.name} for {result.damage} damage.")
+
+        if self.battle_monster_hp <= 0:
+            self._finish_battle_victory()
+            self.battle_log = self.battle_log[-8:]
+            return
+
+        still_alive_ids = [uid for uid in alive_ids if self.battle_hp.get(uid, 0) > 0]
+        if still_alive_ids:
+            target_uid = random.choice(still_alive_ids)
+            target_name = next(name for uid, name in self.team if uid == target_uid)
+            incoming_reduction = GUARD_DAMAGE_REDUCTION if target_uid in guarding_ids else 0.0
+            result = combat.resolve_attack(
+                self.battle_monster.stats(), self._battle_attacker_stats(target_uid), incoming_reduction=incoming_reduction,
+            )
+            if not result.hit:
+                self.battle_log.append(f"❌ {self.battle_monster.name} attacks **{target_name}** but misses!")
+            elif result.dodged:
+                self.battle_log.append(f"💨 **{target_name}** dodges {self.battle_monster.name}'s attack!")
+            else:
+                self.battle_hp[target_uid] = max(0, self.battle_hp[target_uid] - result.damage)
+                self._persist_battle_hp(target_uid)
+                self.battle_log.append(f"🩸 {self.battle_monster.name} hits **{target_name}** for {result.damage} damage.")
+
+        self.battle_actions = {}
+        if all(self.battle_hp.get(uid, 0) <= 0 for uid, _ in self.team):
+            self._finish_battle_wipe()
+        else:
+            self.battle_round += 1
+        self.battle_log = self.battle_log[-8:]
+
+    def _finish_battle_victory(self):
+        self.battle_log.append(f"💥 {self.battle_monster.name} is defeated!")
+        self.board_log.append((None, "battle", f"The team defeats {self.battle_monster.name}!"))
+        self._advance_turn()
+        self.phase = "pre_trial" if all(self.revealed) else "bubble_board"
+
+    def _finish_battle_wipe(self):
+        self.battle_log.append("💀 The team is overwhelmed and forced to retreat!")
+        self.game.finish_inheritance_ground_run([uid for uid, _ in self.team])
+        self.battle_wipe = True
+        self.phase = "resolved"
 
     # -- final trial -------------------------------------------------------------------------
 
     async def _on_face_trial(self, interaction: discord.Interaction):
         await interaction.response.defer()
         self.trial_result = await asyncio.to_thread(
-            self.game.resolve_inheritance_ground_trial, self.ground_key, self.team, self.power_modifier,
+            self.game.resolve_inheritance_ground_trial, self.ground_key, self.team, 0.0,
         )
         if self.trial_result["success"]:
             self.phase = "betrayal"
@@ -374,7 +606,7 @@ class InheritanceGroundView(GameView):
             return
         # Safety net -- the same "clear everyone's flag" call the betrayal path already makes,
         # covering the case where the view's own 600s idle timeout fires before betrayal ever
-        # started (e.g. the team abandons mid-stage / mid-trial-decision).
+        # started (e.g. the team abandons mid-board / mid-battle / mid-trial-decision).
         await asyncio.to_thread(self.game.finish_inheritance_ground_run, [uid for uid, _ in self.team])
         self.phase = "resolved"
         for child in self.children:
@@ -396,29 +628,60 @@ class InheritanceGroundView(GameView):
                 description=f"_{ground['flavor']}_\n\n**Team:** {team_names}",
                 color=discord.Color.dark_gold(),
             )
+            # The actual file only gets attached at SEND time (see
+            # InheritanceGroundLobbyView._resolve) -- this just points the embed at it.
+            image_path = ground.get("intro_image")
+            if image_path and os.path.exists(image_path):
+                embed.set_image(url=f"attachment://{os.path.basename(image_path)}")
             embed.set_footer(text="Click Continue when the team is ready to head in.")
             return embed
 
-        if self.phase == "stage":
-            stage = ground["stages"][self.stage_index]
+        if self.phase == "bubble_board":
+            current_name = self.team[self.turn_index][1]
+            revealed_count = sum(self.revealed)
             embed = discord.Embed(
-                title=f"🗺️ {ground['name']} — {stage['title']}",
-                description=stage["prompt"],
+                title=f"🗺️ {ground['name']} — Explore the Ruins",
+                description=(
+                    "A field of shimmering bubbles hides the way forward — some hold treasure, "
+                    "others hide a guardian ready to fight. Take turns popping one.\n\n"
+                    f"**It's {current_name}'s turn.**"
+                ),
                 color=discord.Color.dark_gold(),
             )
-            for option in stage["options"]:
-                embed.add_field(name=f"{option['emoji']} {option['label']}", value=option["description"], inline=False)
-            if self.stage_log:
-                log_text = "\n".join(f"**{title}** — {label}: {flavor}" for title, label, flavor in self.stage_log)
-                embed.add_field(name="So far", value=log_text[:1024], inline=False)
-            embed.set_footer(text="Any team member can decide for the group.")
+            if self.board_log:
+                lines = []
+                for _name, kind, text in self.board_log[-6:]:
+                    lines.append(f"{'💰' if kind == 'treasure' else '⚔️'} {text}")
+                embed.add_field(name="So far", value="\n".join(lines)[:1024], inline=False)
+            embed.set_footer(text=f"{revealed_count}/{len(self.board)} bubbles popped.")
+            return embed
+
+        if self.phase == "battle":
+            monster_hp = max(0, self.battle_monster_hp)
+            monster_pct = int(100 * monster_hp / self.battle_monster_max_hp) if self.battle_monster_max_hp else 0
+            hp_lines = []
+            for uid, name in self.team:
+                hp = max(0, self.battle_hp.get(uid, 0))
+                max_hp = max(1, self.battle_max_hp.get(uid, 1))
+                status = "💀 down" if hp <= 0 else f"{hp:,}/{max_hp:,} HP"
+                hp_lines.append(f"**{name}**: {status}")
+            embed = discord.Embed(
+                title=f"⚔️ Battle {self.battles_fought} — {self.battle_monster.name}",
+                description=(
+                    f"{self.battle_monster.name}: {monster_hp:,}/{self.battle_monster_max_hp:,} HP ({monster_pct}%)\n\n"
+                    + "\n".join(hp_lines)
+                ),
+                color=discord.Color.dark_red(),
+            )
+            if self.battle_log:
+                embed.add_field(name=f"Round {self.battle_round}", value="\n".join(self.battle_log)[:1024], inline=False)
+            embed.set_footer(text=f"Attack or Guard — resolves once every standing member has chosen, or in {BATTLE_ROUND_TIMEOUT_SECONDS}s.")
             return embed
 
         if self.phase == "pre_trial":
-            log_text = "\n".join(f"**{title}** — {label}: {flavor}" for title, label, flavor in self.stage_log)
             embed = discord.Embed(
                 title=f"🗺️ {ground['name']} — {ground['guardian_name']} Awaits",
-                description=f"The team stands before the Final Trial.\n\n{log_text}",
+                description="The team has cleared the ruins and stands before the Final Trial.",
                 color=discord.Color.dark_gold(),
             )
             embed.set_footer(text="Face the Trial when ready — there's no turning back.")
@@ -439,6 +702,18 @@ class InheritanceGroundView(GameView):
             return embed
 
         # "resolved"
+        if self.battle_wipe:
+            monster_name = self.battle_monster.name if self.battle_monster else "a guardian"
+            embed = discord.Embed(
+                title=f"🗺️ {ground['name']} — Overwhelmed",
+                description=(
+                    f"{monster_name} proves too much — the team is beaten back and forced to retreat "
+                    "before ever reaching the Trial."
+                ),
+                color=discord.Color.dark_red(),
+            )
+            return embed
+
         if self.trial_result is not None and not self.trial_result["success"]:
             embed = discord.Embed(
                 title=f"🗺️ {ground['name']} — Trial Failed",

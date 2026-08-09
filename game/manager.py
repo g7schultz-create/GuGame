@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import math
 import random
@@ -7,7 +8,7 @@ from typing import Optional
 from . import (
     accessories_data, accessories_gen, alchemy, avatar, avatar_gear, blacksmith, canon_gu, chargen, combat,
     dao_companion, dao_paths, discovery_gen, equipment, exploration, gathering, gu_types,
-    inheritance_ground_data, items, killer_move_gen, manual_data, manual_gen, professions, realms,
+    inheritance_ground_data, items, killer_move_gen, manual_data, manual_gen, monsters, professions, realms,
     search_data, sects, split_body, tournament, treasure_hunt, world_boss, world_regions,
 )
 from .character_data import PATHS, PHYSIQUE_TIER_ORDER, RACES, ROOT_TIER_ORDER
@@ -899,21 +900,22 @@ class GameManager:
 
     def check_inheritance_ground_eligibility(self, user_id: int, name: str) -> tuple:
         """Used both when the leader first invites AND when each invitee is about to accept --
-        conditions (cooldown, another run started elsewhere) can change during the lobby's own
-        up-to-5-minute window, so this is re-checked fresh at both points rather than trusted
-        from invite time. Returns (ok, reason_code, remaining_cooldown_seconds) -- a code
+        conditions (another run started elsewhere) can change during the lobby's own up-to-
+        5-minute window, so this is re-checked fresh at both points rather than trusted from
+        invite time. Deliberately does NOT gate on the invitee's own cooldown -- only the leader
+        who actually runs /inheritance_ground needs to be off cooldown themselves (checked
+        separately, inline, in cog.py); an invitee can join a team even while recovering from
+        their own last run. Returns (ok, reason_code, remaining_cooldown_seconds) -- a code
         rather than a pre-formatted string since the two call sites need different grammar
         (cog.py's invite-time check is third-person about an invitee, InheritanceGroundLobbyView's
-        accept-time check is second-person about the clicking player themselves).
-        reason_code is one of "not_confirmed"/"already_active"/"on_cooldown"/None (ok)."""
+        accept-time check is second-person about the clicking player themselves). remaining is
+        always 0 now (kept in the return shape for both call sites' sake).
+        reason_code is one of "not_confirmed"/"already_active"/None (ok)."""
         player = self.db.get_or_create_player(user_id, name)
         if not player["character_confirmed"]:
             return False, "not_confirmed", 0
         if self.has_active_inheritance_ground(player):
             return False, "already_active", 0
-        remaining = self.inheritance_ground_cooldown_remaining(player)
-        if remaining > 0:
-            return False, "on_cooldown", remaining
         return True, None, 0
 
     def start_active_inheritance_ground(self, user_ids: list):
@@ -931,27 +933,61 @@ class GameManager:
         self.db.clear_active_inheritance_ground_bulk(user_ids)
         self.db.set_inheritance_ground_cooldown_bulk(user_ids, now)
 
-    def resolve_inheritance_ground_stage(self, ground_key: str, stage_index: int, option_id: str, team: list) -> dict:
-        """team: [(user_id, name), ...]. A GROUP decision (whichever team member clicked first
-        already decided which option_id this is -- see InheritanceGroundView._on_stage_option)
-        resolved ONCE for the whole team, not per-player. Deducts stone_cost_per_member from
-        every member via spend_spirit_stones's own atomic all-or-nothing clamp (a member who
-        can't afford it just doesn't pay -- never blocks the group's progress over one poor
-        member). Returns {"success", "power_delta", "flavor", "option_label"}."""
+    # Bubble board (replaces the old branching-choice stages) -- team takes turns revealing
+    # bubbles that are either an immediate shared treasure or a real, multi-round interactive
+    # team fight against a monster that gets harder with every battle bubble revealed. See
+    # InheritanceGroundView's "bubble_board"/"battle" phases for the UI/round-by-round flow.
+    BUBBLES_PER_TEAM_MEMBER = 2
+    MIN_BATTLE_BUBBLES = 2  # flat, not scaled by team size -- a guaranteed minimum, same
+    # "fixed multiset, then shuffle" reasoning treasure_hunt.roll_board's own guaranteed
+    # treasure tile uses, rather than a per-bubble coin flip that could rarely land zero battles.
+    # Battles escalate faster than Battlefield's own solo 0.15/wave (WAVE_STAT_MULTIPLIER_PER_WAVE
+    # in battlefield_view.py) since a whole team is fighting together, not one player.
+    BATTLE_STAT_MULTIPLIER_PER_BATTLE = 0.20
+
+    def generate_inheritance_ground_board(self, team_size: int) -> list:
+        """Returns team_size * BUBBLES_PER_TEAM_MEMBER bubble labels ("battle"/"treasure"),
+        MIN_BATTLE_BUBBLES of them guaranteed "battle", shuffled so position is unpredictable."""
+        size = team_size * self.BUBBLES_PER_TEAM_MEMBER
+        battle_count = min(size, self.MIN_BATTLE_BUBBLES)
+        board = ["battle"] * battle_count + ["treasure"] * (size - battle_count)
+        random.shuffle(board)
+        return board
+
+    def roll_inheritance_ground_battle_monster(self, ground_key: str, battle_number: int):
+        """battle_number is 1-indexed (the Nth battle bubble revealed this run). Picks a base
+        monster from the SAME per-realm hunt pool /hunt itself draws from (no new monster
+        content needed) keyed off the ground's own gu_rank, then scales it up progressively via
+        dataclasses.replace -- mirrors battlefield_view.py's own _roll_wave_monster exactly,
+        just keyed by battle_number instead of a wave counter."""
         ground = inheritance_ground_data.GROUNDS[ground_key]
-        stage = ground["stages"][stage_index]
-        option = next(o for o in stage["options"] if o["id"] == option_id)
-        cost = option.get("stone_cost_per_member", 0)
-        if cost:
-            for user_id, _name in team:
-                self.db.spend_spirit_stones(user_id, cost)
-        success = random.random() < option["success_chance"]
-        power_delta = option["success_power_delta"] if success else option["failure_power_delta"]
-        flavor = option["success_flavor"] if success else option["failure_flavor"]
-        if "{volunteer}" in flavor:
-            volunteer_name = random.choice(team)[1]
-            flavor = flavor.format(volunteer=volunteer_name)
-        return {"success": success, "power_delta": power_delta, "flavor": flavor, "option_label": option["label"]}
+        great_realm_index = max(0, min(6, ground["gu_rank"] - 1))
+        name = monsters.hunt_monster_name_for_realm(great_realm_index)
+        base = monsters.MONSTERS[name]
+        multiplier = 1.0 + self.BATTLE_STAT_MULTIPLIER_PER_BATTLE * (battle_number - 1)
+        if multiplier == 1.0:
+            return base
+        return dataclasses.replace(
+            base,
+            hp=max(1, round(base.hp * multiplier)), atk_stat=max(1, round(base.atk_stat * multiplier)),
+            str_stat=max(1, round(base.str_stat * multiplier)), def_stat=max(1, round(base.def_stat * multiplier)),
+            spd_stat=max(1, round(base.spd_stat * multiplier)),
+        )
+
+    def grant_inheritance_ground_treasure_reward(self, ground_key: str, team: list) -> list:
+        """One independent, reduced-magnitude roll per team member -- same discovery_gen.
+        generate_loot machinery grant_inheritance_ground_share_reward already uses for the run's
+        own capstone reward, just at "Safe" difficulty (see search_data.DIFFICULTY_REWARD_
+        QUALITY_PCT, -15%/-1 rank vs "Standard"'s baseline) so the final Share/Backstab payout
+        still feels like the bigger prize. Returns [(name, reward_str), ...]."""
+        ground = inheritance_ground_data.GROUNDS[ground_key]
+        rng = random.Random()
+        results = []
+        for user_id, name in team:
+            category = discovery_gen.weighted_choice(search_data.INHERITANCE_FINAL_CHEST_TABLE, rng)
+            reward = discovery_gen.generate_loot(category, "inheritance_ground", ground["gu_rank"], "Safe", ground.get("tags", []), rng)
+            results.append((name, self.grant_reward(user_id, name, reward)))
+        return results
 
     def _inheritance_ground_team_power(self, team: list) -> float:
         """Sums each member's full (base + gear) combat stats, weighted the same way

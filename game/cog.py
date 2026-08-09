@@ -1048,12 +1048,11 @@ class GameCog(commands.Cog):
         # accept-time re-check of this exact same eligibility, which is "you"-phrased since
         # that one's checking the clicking player themselves.
         for m in invitees:
-            ok, reason_code, reason_remaining = await asyncio.to_thread(self.game.check_inheritance_ground_eligibility, m.id, m.display_name)
+            ok, reason_code, _reason_remaining = await asyncio.to_thread(self.game.check_inheritance_ground_eligibility, m.id, m.display_name)
             if not ok:
                 messages = {
                     "not_confirmed": f"**{m.display_name}** hasn't confirmed a character yet.",
                     "already_active": f"**{m.display_name}** is already in another inheritance ground run.",
-                    "on_cooldown": f"**{m.display_name}** is still recovering from their last run — {format_duration(reason_remaining)} left.",
                 }
                 await interaction.response.send_message(f"Can't invite them right now: {messages[reason_code]}", ephemeral=True)
                 return
