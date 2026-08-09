@@ -383,8 +383,7 @@ class GameCog(commands.Cog):
     @app_commands.command(name="join", description="Create or view your character")
     @app_commands.guilds(GUILD)
     async def join(self, interaction: discord.Interaction):
-        view = await asyncio.to_thread(
-            JoinView, interaction.user.id, self.game, interaction.user.display_name, interaction.user.display_avatar.url,
+        view = JoinView( interaction.user.id, self.game, interaction.user.display_name, interaction.user.display_avatar.url,
         )
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
@@ -425,7 +424,7 @@ class GameCog(commands.Cog):
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = await asyncio.to_thread(ShopView, interaction.user.id, self.game, interaction.user.display_name)
+        view = ShopView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
@@ -436,7 +435,7 @@ class GameCog(commands.Cog):
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = await asyncio.to_thread(PremiumView, interaction.user.id, self.game, interaction.user.display_name)
+        view = PremiumView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
@@ -447,7 +446,7 @@ class GameCog(commands.Cog):
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = await asyncio.to_thread(GuUpgradeView, interaction.user.id, self.game, interaction.user.display_name)
+        view = GuUpgradeView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
@@ -458,7 +457,7 @@ class GameCog(commands.Cog):
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = await asyncio.to_thread(GuCollectionView, interaction.user.id, self.game, interaction.user.display_name)
+        view = GuCollectionView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
@@ -510,7 +509,7 @@ class GameCog(commands.Cog):
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = await asyncio.to_thread(KillerMoveView, interaction.user.id, self.game, interaction.user.display_name)
+        view = KillerMoveView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
@@ -536,8 +535,7 @@ class GameCog(commands.Cog):
             return
         player, _ = await asyncio.to_thread(self.db.settle_qi, target.id)
         player = await asyncio.to_thread(self.db.settle_hp_regen, target.id)
-        view = await asyncio.to_thread(
-            ProfileView,
+        view = ProfileView(
             target.id,
             self.game,
             player,
@@ -666,7 +664,7 @@ class GameCog(commands.Cog):
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = await asyncio.to_thread(BalanceView, interaction.user.id, self.game, interaction.user.display_name)
+        view = BalanceView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
@@ -747,7 +745,7 @@ class GameCog(commands.Cog):
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = await asyncio.to_thread(InventoryView, interaction.user.id, self.game, interaction.user.display_name)
+        view = InventoryView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
@@ -759,8 +757,7 @@ class GameCog(commands.Cog):
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
         player = await asyncio.to_thread(self.db.settle_hp_regen, interaction.user.id)
-        view = await asyncio.to_thread(
-            EquipmentView, interaction.user.id, self.game, player, interaction.user.display_name, interaction.user.display_avatar.url,
+        view = EquipmentView( interaction.user.id, self.game, player, interaction.user.display_name, interaction.user.display_avatar.url,
         )
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
@@ -778,7 +775,7 @@ class GameCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        view = await asyncio.to_thread(AvatarView, interaction.user.id, self.game, interaction.user.display_name, interaction.user.display_avatar.url)
+        view = AvatarView( interaction.user.id, self.game, interaction.user.display_name, interaction.user.display_avatar.url)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
@@ -802,7 +799,7 @@ class GameCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        view = await asyncio.to_thread(SplitBodyView, interaction.user.id, self.game, interaction.user.display_name)
+        view = SplitBodyView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
@@ -821,7 +818,7 @@ class GameCog(commands.Cog):
         if not ok:
             await interaction.response.send_message(message, ephemeral=True)
             return
-        view = await asyncio.to_thread(TreasureHuntView, interaction.user.id, self.game, interaction.user.display_name, board)
+        view = TreasureHuntView( interaction.user.id, self.game, interaction.user.display_name, board)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(content=message, embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
@@ -1043,7 +1040,7 @@ class GameCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        view = await asyncio.to_thread(MiningVeinView, interaction.user.id, self.game, interaction.user.display_name, result["nodes"])
+        view = MiningVeinView( interaction.user.id, self.game, interaction.user.display_name, result["nodes"])
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
@@ -1065,7 +1062,7 @@ class GameCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        view = await asyncio.to_thread(GatheringPatchView, interaction.user.id, self.game, interaction.user.display_name, result["nodes"])
+        view = GatheringPatchView( interaction.user.id, self.game, interaction.user.display_name, result["nodes"])
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
@@ -1087,7 +1084,7 @@ class GameCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        view = await asyncio.to_thread(ExplorationHuntView, interaction.user.id, self.game, interaction.user.display_name, result["nodes"])
+        view = ExplorationHuntView( interaction.user.id, self.game, interaction.user.display_name, result["nodes"])
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
@@ -1102,7 +1099,7 @@ class GameCog(commands.Cog):
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = await asyncio.to_thread(RegionView, interaction.user.id, self.game, interaction.user.display_name)
+        view = RegionView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
@@ -1255,7 +1252,7 @@ class GameCog(commands.Cog):
         # No character_confirmed gate, deliberately — unlike almost every other command,
         # looking at the leaderboard doesn't touch your own state, and a brand new player
         # deciding whether to /join might reasonably want to see it first.
-        view = await asyncio.to_thread(LeaderboardView, self.game)
+        view = LeaderboardView( self.game)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
@@ -1266,7 +1263,7 @@ class GameCog(commands.Cog):
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = await asyncio.to_thread(TournamentView, self.game)
+        view = TournamentView( self.game)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
@@ -1277,7 +1274,7 @@ class GameCog(commands.Cog):
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = await asyncio.to_thread(FarmView, interaction.user.id, self.game, interaction.user.display_name)
+        view = FarmView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
@@ -1288,7 +1285,7 @@ class GameCog(commands.Cog):
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = await asyncio.to_thread(AlchemyView, interaction.user.id, self.game, interaction.user.display_name)
+        view = AlchemyView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
@@ -1299,7 +1296,7 @@ class GameCog(commands.Cog):
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = await asyncio.to_thread(BlacksmithView, interaction.user.id, self.game, interaction.user.display_name)
+        view = BlacksmithView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
@@ -1310,7 +1307,7 @@ class GameCog(commands.Cog):
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = await asyncio.to_thread(WeaponsView, interaction.user.id, self.game, interaction.user.display_name)
+        view = WeaponsView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
@@ -1321,7 +1318,7 @@ class GameCog(commands.Cog):
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = await asyncio.to_thread(AccessoriesView, interaction.user.id, self.game, interaction.user.display_name)
+        view = AccessoriesView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
@@ -1332,7 +1329,7 @@ class GameCog(commands.Cog):
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = await asyncio.to_thread(SellView, interaction.user.id, self.game, interaction.user.display_name)
+        view = SellView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
@@ -1349,7 +1346,7 @@ class GameCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        view = await asyncio.to_thread(DaoPathView, interaction.user.id, self.game, interaction.user.display_name)
+        view = DaoPathView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
@@ -1366,7 +1363,7 @@ class GameCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        view = await asyncio.to_thread(TransmuteView, interaction.user.id, self.game, interaction.user.display_name)
+        view = TransmuteView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
@@ -1377,7 +1374,7 @@ class GameCog(commands.Cog):
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = await asyncio.to_thread(StudyView, interaction.user.id, self.game, interaction.user.display_name)
+        view = StudyView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
@@ -1390,7 +1387,7 @@ class GameCog(commands.Cog):
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = await asyncio.to_thread(SearchView, interaction.user.id, self.game, interaction.user.display_name)
+        view = SearchView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
@@ -1536,8 +1533,7 @@ class GameCog(commands.Cog):
                 await interaction.response.send_message("No World Boss is currently active — check back soon with `/raidboss`.", ephemeral=True)
             return
 
-        view = await asyncio.to_thread(
-            WorldBossView,
+        view = WorldBossView(
             interaction.user.id, self.game, interaction.user.display_name,
             interaction.user.display_avatar.url, result["boss"], on_defeat=self._announce_world_boss_defeat,
         )
@@ -1567,7 +1563,7 @@ class GameCog(commands.Cog):
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = await asyncio.to_thread(ManualView, interaction.user.id, self.game, interaction.user.display_name)
+        view = ManualView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
@@ -1593,7 +1589,7 @@ class GameCog(commands.Cog):
             return
 
         trade_id = await asyncio.to_thread(self.game.start_trade, interaction.user.id, target.id)
-        view = await asyncio.to_thread(TradeRequestView, self.game, trade_id, interaction.user, target)
+        view = TradeRequestView( self.game, trade_id, interaction.user, target)
         # A mention inside an embed alone doesn't ping — it has to be in the actual message
         # content for Discord to notify the target.
         embed = await asyncio.to_thread(view.build_embed)
@@ -1622,7 +1618,7 @@ class GameCog(commands.Cog):
             return
 
         trade_id = await asyncio.to_thread(self.game.start_gamble, interaction.user.id, target.id)
-        view = await asyncio.to_thread(TradeRequestView, self.game, trade_id, interaction.user, target)
+        view = TradeRequestView( self.game, trade_id, interaction.user, target)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(content=target.mention, embed=embed, view=view)
         view.message = await interaction.original_response()
@@ -1820,7 +1816,7 @@ class GameCog(commands.Cog):
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        view = await asyncio.to_thread(SectView, interaction.user.id, self.game, interaction.user.display_name)
+        view = SectView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
@@ -1965,8 +1961,7 @@ class GameCog(commands.Cog):
         if not ok:
             await interaction.response.send_message(reason, ephemeral=True)
             return
-        view = await asyncio.to_thread(
-            MentorRequestView, self.game, interaction.user, member, self.game.sect_accept_disciple, offer_label="sect disciple",
+        view = MentorRequestView( self.game, interaction.user, member, self.game.sect_accept_disciple, offer_label="sect disciple",
         )
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view)
@@ -2087,8 +2082,7 @@ class GameCog(commands.Cog):
         if not ok:
             await interaction.response.send_message(reason, ephemeral=True)
             return
-        view = await asyncio.to_thread(
-            MentorRequestView, self.game, interaction.user, member, self.game.personal_accept_disciple, offer_label="personal disciple",
+        view = MentorRequestView( self.game, interaction.user, member, self.game.personal_accept_disciple, offer_label="personal disciple",
         )
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view)
@@ -2150,7 +2144,7 @@ class GameCog(commands.Cog):
         if not ok:
             await interaction.response.send_message(reason, ephemeral=True)
             return
-        view = await asyncio.to_thread(DaoCompanionRequestView, self.game, interaction.user, member, self.game.dao_companion_accept)
+        view = DaoCompanionRequestView( self.game, interaction.user, member, self.game.dao_companion_accept)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view)
         view.message = await interaction.original_response()

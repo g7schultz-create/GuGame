@@ -637,7 +637,7 @@ class InventoryView(GameView):
         from .equipment_view import EquipmentView  # local import: avoids a circular import at module load time
 
         player = await asyncio.to_thread(self.game.get_player_stats, self.user_id, self.display_name)
-        view = await asyncio.to_thread(EquipmentView, self.user_id, self.game, player, self.display_name, interaction.user.display_avatar.url)
+        view = EquipmentView( self.user_id, self.game, player, self.display_name, interaction.user.display_avatar.url)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.edit_message(embed=embed, view=view)
 

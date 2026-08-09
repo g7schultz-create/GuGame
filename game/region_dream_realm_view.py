@@ -68,7 +68,7 @@ class RegionDreamRealmView(GameView):
         handler for why self.stop() matters here."""
         from .search_view import SearchView  # local import: search_view imports this module
         self.stop()
-        new_view = await asyncio.to_thread(SearchView, self.user_id, self.game, self.display_name)
+        new_view = SearchView( self.user_id, self.game, self.display_name)
         embed = await asyncio.to_thread(new_view.build_embed)
         await interaction.response.edit_message(embed=embed, view=new_view)
         new_view.message = await interaction.original_response()

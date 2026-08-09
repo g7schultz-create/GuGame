@@ -728,7 +728,7 @@ class TradeWindowView(GameView):
             if interaction.user.id != member.id:
                 await interaction.response.send_message("That's not your row.", ephemeral=True)
                 return
-            picker = await asyncio.to_thread(TradeAddItemView, self.game, self.trade_id, member.id, self)
+            picker = TradeAddItemView( self.game, self.trade_id, member.id, self)
             await interaction.response.send_message("Choose a category to add an item to your offer:", view=picker, ephemeral=True)
 
         return callback
@@ -871,7 +871,7 @@ class TradeRequestView(GameView):
             await interaction.response.send_message("Only the invited player can accept this trade.", ephemeral=True)
             return
         await asyncio.to_thread(self.game.accept_trade, self.trade_id)
-        window = await asyncio.to_thread(TradeWindowView, self.game, self.trade_id, self.initiator, self.target)
+        window = TradeWindowView( self.game, self.trade_id, self.initiator, self.target)
         embed = await asyncio.to_thread(window.build_embed)
         await interaction.response.edit_message(embed=embed, view=window)
         window.message = await interaction.original_response()

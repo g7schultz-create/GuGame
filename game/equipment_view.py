@@ -486,7 +486,7 @@ class EquipmentView(GameView):
     async def _on_profile(self, interaction: discord.Interaction):
         from .views import ProfileView  # local import: avoids a circular import at module load time
 
-        view = await asyncio.to_thread(ProfileView, self.user_id, self.game, self.player, self.display_name, self.avatar_url)
+        view = ProfileView( self.user_id, self.game, self.player, self.display_name, self.avatar_url)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.edit_message(embed=embed, view=view)
 
