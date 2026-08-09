@@ -303,12 +303,14 @@ class GameDatabase:
     def connect(self):
         con = sqlite3.connect(self.db_path)
         con.row_factory = sqlite3.Row
-        # WAL lets readers proceed while a writer is mid-transaction instead of fully
-        # serializing on the default rollback journal; busy_timeout makes a genuinely
-        # contended write retry for up to 5s instead of raising "database is locked"
-        # immediately. journal_mode is persisted in the db file itself (a no-op after the
-        # first call), busy_timeout is per-connection so it's set every time.
-        con.execute("PRAGMA journal_mode=WAL")
+        # busy_timeout alone makes a genuinely contended write retry for up to 5s instead of
+        # raising "database is locked" immediately -- the actual problem this migration set
+        # out to fix. journal_mode=WAL was tried alongside it but reverted the same day: WAL
+        # needs proper mmap-based shared-memory locking from the filesystem for its -shm
+        # sidecar file, which Railway's persistent Volume doesn't reliably provide, and every
+        # single command touches the DB via this connect() -- so a WAL failure here broke
+        # every command/button in the bot at once, not just the ones this migration touched.
+        # busy_timeout has no such filesystem requirement, so it's kept on its own.
         con.execute("PRAGMA busy_timeout=5000")
         return con
 

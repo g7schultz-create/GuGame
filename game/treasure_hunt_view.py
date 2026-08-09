@@ -52,10 +52,13 @@ class TreasureHuntView(GameView):
 
     def _make_tile_callback(self, index: int):
         async def callback(interaction: discord.Interaction):
+            await interaction.response.defer()
             if self._digs_exhausted():  # guards a race between two near-simultaneous clicks
-                await interaction.response.defer()
                 return
             category = self.board[index]
+            # defer() above, THEN the DB work -- see MiningVeinView._on_strike's identical
+            # comment for why (a chain of asyncio.to_thread hops can exceed Discord's ~3s ACK
+            # window under real load).
             emoji, label = await asyncio.to_thread(treasure_hunt.grant_tile_reward, self.game, self.user_id, self.display_name, category)
             self.revealed[index] = True
             self.revealed_emoji[index] = emoji
@@ -63,7 +66,7 @@ class TreasureHuntView(GameView):
             self.found.append((emoji, label))
             await asyncio.to_thread(self._build_components)
             embed = await asyncio.to_thread(self.build_embed)
-            await interaction.response.edit_message(embed=embed, view=self)
+            await interaction.edit_original_response(embed=embed, view=self)
 
         return callback
 

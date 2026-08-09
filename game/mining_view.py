@@ -47,6 +47,11 @@ class MiningVeinView(GameView):
         self.game.collect_mining_vein(self.user_id, self.collected)
 
     async def _on_strike(self, interaction: discord.Interaction):
+        # defer() first, THEN do the DB work -- a chain of asyncio.to_thread hops can add up
+        # to more than Discord's ~3s interaction ACK window under real load (see
+        # project memory's "Slow-callback defer fix" for the original instance of this same
+        # class of bug). Deferring immediately buys up to 15 minutes for the edit that follows.
+        await interaction.response.defer()
         node = self.nodes[self.current_index]
         self.collected[node["item_name"]] = self.collected.get(node["item_name"], 0) + node["quantity"]
         self.current_index += 1
@@ -54,14 +59,15 @@ class MiningVeinView(GameView):
             await asyncio.to_thread(self._finish)
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.edit_original_response(embed=embed, view=self)
 
     async def _on_leave(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         self.left_early = True
         await asyncio.to_thread(self._finish)
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.edit_original_response(embed=embed, view=self)
 
     async def on_timeout(self):
         if not self.finished:

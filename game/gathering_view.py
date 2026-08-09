@@ -48,6 +48,10 @@ class GatheringPatchView(GameView):
         self.game.collect_gathering_patch(self.user_id, self.collected)
 
     async def _on_forage(self, interaction: discord.Interaction):
+        # defer() first, THEN do the DB work -- see MiningVeinView._on_strike's identical
+        # comment for why (a chain of asyncio.to_thread hops can exceed Discord's ~3s ACK
+        # window under real load).
+        await interaction.response.defer()
         node = self.nodes[self.current_index]
         self.collected[node["item_name"]] = self.collected.get(node["item_name"], 0) + node["quantity"]
         self.current_index += 1
@@ -55,14 +59,15 @@ class GatheringPatchView(GameView):
             await asyncio.to_thread(self._finish)
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.edit_original_response(embed=embed, view=self)
 
     async def _on_leave(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         self.left_early = True
         await asyncio.to_thread(self._finish)
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.edit_original_response(embed=embed, view=self)
 
     async def on_timeout(self):
         if not self.finished:
