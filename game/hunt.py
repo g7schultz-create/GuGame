@@ -181,6 +181,12 @@ class HuntView(GameView):
 
     # -- helpers -----------------------------------------------------------
 
+    def _clear_active_hunt(self):
+        """Called from every terminal-status transition (defeat/victory/fled/timeout) so
+        GameManager.has_active_hunt lets the player start a new /hunt again — see
+        cog.py's hunt command / manager.py's ACTIVE_HUNT_STALE_SECONDS block."""
+        self.game.db.clear_active_hunt(self.user_id)
+
     def _equipment_bonuses(self) -> dict:
         return self.game.compute_equipment_bonuses(self.user_id)
 
@@ -406,6 +412,7 @@ class HuntView(GameView):
             self._log_line(f"🩸 {self.monster.name} uses {self.monster.ability.name} for {result.damage} damage{crit}.{heal_text}")
         if self.player_hp <= 0:
             self.status = "defeat"
+            self._clear_active_hunt()
             self.player_hp = self.game.db.set_hp(self.user_id, 1)
             ward_name = self.game.check_and_consume_defeat_ward(self.user_id)
             if ward_name:
@@ -511,6 +518,7 @@ class HuntView(GameView):
 
     def _handle_victory(self):
         self.status = "victory"
+        self._clear_active_hunt()
         # Forest Walker-family physique's "after winning a hunt, recover 3% max HP".
         post_hunt_heal_pct = self._trait_bonus("post_hunt_heal_pct")
         if post_hunt_heal_pct:
@@ -671,6 +679,7 @@ class HuntView(GameView):
                     self._log_line("🌀 Your physique bends space just enough for a second chance!")
             if fled:
                 self.status = "fled"
+                self._clear_active_hunt()
                 self._log_line("🏃 You break away and escape the fight!")
                 return False
             self._log_line("❌ You fail to escape!")
@@ -856,6 +865,7 @@ class HuntView(GameView):
     async def on_timeout(self):
         if self.status == "fighting":
             self.status = "fled"
+            await asyncio.to_thread(self._clear_active_hunt)
         for child in self.children:
             child.disabled = True
         if self.message is not None:

@@ -834,6 +834,22 @@ class GameManager:
 
     AVATAR_SOUL_REROLL_COST = 200  # spirit stones; the very first pick is free
 
+    # -- /hunt's own "finish the one you've got before starting another" gate ------------------
+    # A hunt has no DB row of its own (pure in-memory HuntView session -- see HuntView.__init__'s
+    # own docstring), unlike /discovery's active_discovery_id which points at a real row. This
+    # timestamp exists purely so a second /hunt can be refused while one is still running.
+    # Generous on purpose -- a genuinely long, actively-played hunt (many rounds, real clicking)
+    # should never trip this; it only exists to self-heal a flag left stuck by e.g. a bot
+    # restart mid-hunt, before HuntView.on_timeout ever got a chance to clear it normally.
+    ACTIVE_HUNT_STALE_SECONDS = 2 * 3600
+
+    def has_active_hunt(self, player: dict) -> bool:
+        started = player["active_hunt_started_ts"]
+        return bool(started) and (time.time() - started) < self.ACTIVE_HUNT_STALE_SECONDS
+
+    def start_active_hunt(self, user_id: int):
+        self.db.start_active_hunt(user_id, int(time.time()))
+
     # -- /search_forgotten_blessed_land treasure-hunt board (see game/treasure_hunt.py) --------
     TREASURE_HUNT_REALM_GATE = 2  # Core Formation's great_realm_index
     TREASURE_HUNT_COOLDOWN_SECONDS = 1 * 3600  # 1 hour between boards, no stone/item cost
@@ -1630,9 +1646,19 @@ class GameManager:
             return False, "You have no Killer Move equipped in your Support slot."
         settled = self.db.settle_battle_qi(user_id)
         qi_cost = self.killer_move_qi_cost(settled, move)
-        if settled["battle_qi"] < qi_cost:
-            return False, f"Not enough Qi to use **{move['name']}** (needs {qi_cost:,}, you have {settled['battle_qi']:,.0f})."
-        self.db.set_battle_qi(user_id, settled["battle_qi"] - qi_cost)
+        # Equipped gear's flat qi_stat bonus (Artifacts, crafted gear's qi_pct, ...) is folded
+        # in as a live overlay on top of settled["battle_qi"] here, same convention hunt.py's
+        # own in-combat qi tracking already uses for self.player_qi (see HuntView.__init__) --
+        # otherwise this affordability check silently disagreed with the battle-qi number a
+        # player actually sees in combat, which could show "plenty of Qi" while this still
+        # said "not enough". qi_cost itself is left on the raw qi_stat basis, same as the
+        # Combat-slot version's own killer_move_qi_cost call (hunt.py's _on_killer_move) --
+        # only the "how much do you currently have" side was the mismatch being fixed here.
+        qi_bonus = self.compute_equipment_bonuses(user_id)["stats"]["qi_stat"]
+        current_qi = settled["battle_qi"] + qi_bonus
+        if current_qi < qi_cost:
+            return False, f"Not enough Qi to use **{move['name']}** (needs {qi_cost:,}, you have {current_qi:,.0f})."
+        self.db.set_battle_qi(user_id, max(0.0, current_qi - qi_cost - qi_bonus))
 
         effects = move["effects"]
         if move["kind"] == "essence":

@@ -194,6 +194,14 @@ class GameDatabase:
         # /search_forgotten_blessed_land's treasure-hunt board (see game/treasure_hunt.py) --
         # simple per-player cooldown timestamp, same shape as search_charges_last_ts above.
         "treasure_hunt_last_ts": "INTEGER DEFAULT 0",
+        # /hunt's own "one at a time" gate (see GameManager.has_active_hunt/start_active_hunt/
+        # clear_active_hunt) -- 0 means no active hunt. Mirrors active_discovery_id's shape,
+        # but as a timestamp rather than a foreign key since a hunt has no DB row of its own
+        # (it's a pure in-memory HuntView session, see HuntView.__init__'s own docstring) --
+        # storing WHEN it started, not just a boolean, lets a stale flag (e.g. from a bot
+        # restart mid-hunt, before HuntView.on_timeout ever got to fire and clear it) self-heal
+        # after ACTIVE_HUNT_STALE_SECONDS instead of blocking that player forever.
+        "active_hunt_started_ts": "INTEGER DEFAULT 0",
 
         # World region (see world_regions.py / /region) -- a mortal-realm (Nascent Soul and
         # below) character's chosen geographic zone, separate from search_data.REGIONS'
@@ -4230,6 +4238,18 @@ class GameDatabase:
     def set_treasure_hunt_last_ts(self, user_id: int, ts: int):
         con = self.connect()
         con.execute("UPDATE players SET treasure_hunt_last_ts = ? WHERE user_id = ?", (ts, user_id))
+        con.commit()
+        con.close()
+
+    def start_active_hunt(self, user_id: int, ts: int):
+        con = self.connect()
+        con.execute("UPDATE players SET active_hunt_started_ts = ? WHERE user_id = ?", (ts, user_id))
+        con.commit()
+        con.close()
+
+    def clear_active_hunt(self, user_id: int):
+        con = self.connect()
+        con.execute("UPDATE players SET active_hunt_started_ts = 0 WHERE user_id = ?", (user_id,))
         con.commit()
         con.close()
 

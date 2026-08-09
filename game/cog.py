@@ -916,6 +916,9 @@ class GameCog(commands.Cog):
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
+        if self.game.has_active_hunt(player):
+            await interaction.response.send_message("🐾 Finish your current hunt first!", ephemeral=True)
+            return
         great_realm_index = int(realm.value) if realm else _default_great_realm_index(player)
         monster_name = hunt_monster_name_for_realm(great_realm_index)
         region_modifiers = await asyncio.to_thread(self.game.region_encounter_modifiers, interaction.user.id, interaction.user.display_name)
@@ -928,6 +931,7 @@ class GameCog(commands.Cog):
             interaction.user.id, self.game, player, interaction.user.display_name, interaction.user.display_avatar.url,
             monster_name, region_modifiers,
         )
+        await asyncio.to_thread(self.game.start_active_hunt, interaction.user.id)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
