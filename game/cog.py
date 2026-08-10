@@ -692,6 +692,7 @@ class GameCog(commands.Cog):
         view = BalanceView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
+        view.message = await interaction.original_response()
 
     @app_commands.command(name="breakthrough", description="Attempt a breakthrough to the next cultivation realm")
     @app_commands.guilds(GUILD)
@@ -1006,6 +1007,43 @@ class GameCog(commands.Cog):
         # Constructed directly, NOT via asyncio.to_thread -- see the identical note on
         # HuntView's construction above (RaidView.__init__ also calls asyncio.create_task).
         view = RaidView(self.game, boss_name, stat_multiplier=region_modifiers["stat_multiplier"])
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
+        view.message = await interaction.original_response()
+        region_find = await asyncio.to_thread(self.game.maybe_trigger_region_discovery, interaction.user.id, interaction.user.display_name)
+        notice = _region_find_notice(region_find)
+        if notice:
+            await interaction.followup.send(notice, ephemeral=True)
+
+    @app_commands.command(name="solo_raid", description="Instantly start a raid solo — no join window, no other players")
+    @app_commands.describe(realm="Which realm of boss to raid (defaults to your own realm)")
+    @app_commands.choices(realm=REALM_CHOICES)
+    @app_commands.guilds(GUILD)
+    async def solo_raid(self, interaction: discord.Interaction, realm: Optional[app_commands.Choice[str]] = None):
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
+        if not player["character_confirmed"]:
+            await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
+            return
+        if self.game.has_active_raid(player):
+            abandon_view = AbandonRaidView(interaction.user.id, self.game)
+            await interaction.response.send_message("🐉 Finish your current raid first!", view=abandon_view, ephemeral=True)
+            return
+        great_realm_index = int(realm.value) if realm else _default_great_realm_index(player)
+        boss_name = raid_boss_name_for_realm(great_realm_index)
+        region_modifiers = await asyncio.to_thread(self.game.region_encounter_modifiers, interaction.user.id, interaction.user.display_name)
+        # Constructed directly, NOT via asyncio.to_thread -- see the identical note on /raid
+        # above (RaidView.__init__ also calls asyncio.create_task).
+        view = RaidView(self.game, boss_name, stat_multiplier=region_modifiers["stat_multiplier"])
+        # Skips the whole "starting" join-window countdown -- join the caller immediately and
+        # move straight to "fighting". RaidView.__init__ already scheduled its own
+        # _start_countdown background task, but that harmlessly no-ops once it eventually
+        # fires (it only acts while status is still "starting", see its own check).
+        await asyncio.to_thread(view._add_participant, interaction.user.id, interaction.user.display_name, player)
+        # _begin_fight_or_abandon starts the round timer (asyncio.create_task) -- must stay
+        # un-wrapped on the main thread, same rule as every other round-timer kickoff in this
+        # codebase (see commit 45e239a).
+        view._begin_fight_or_abandon()
+        await asyncio.to_thread(view._build_components)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()

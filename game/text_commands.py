@@ -101,7 +101,7 @@ ALIASES = {
     "inventory": ["inv"], "equipment": ["eq"], "mine": ["m"], "gather": ["g"],
     "explore": ["ex", "exp"], "farm": ["f"], "alchemy": ["a", "alch"], "blacksmith": ["bs"],
     "pvp": ["pv"], "leaderboard": ["lb"],
-    "hunt": ["h"], "raid": ["r"], "choose_class": ["cc"], "trade": ["tr"],
+    "hunt": ["h"], "raid": ["r"], "solo_raid": ["sr"], "choose_class": ["cc"], "trade": ["tr"],
     "exchange_essence": ["ee"], "absorb_essence": ["ae"], "study": ["st"],
     "grant_item": ["gi"], "grant_stones": ["gs"], "rest": ["rs"], "meditate": ["me"],
     "search": ["se"], "search_status": ["ss"], "discovery": ["d"], "manual": ["ma"],
@@ -187,6 +187,18 @@ def register_text_commands(bot: commands.Bot, cog):
     bot.add_command(commands.Command(
         text_raid, name="raid", aliases=ALIASES["raid"],
         help=f"{cog.raid.description} Usage: i raid [realm name]",
+    ))
+
+    async def text_solo_raid(ctx: commands.Context, *, realm: str = None):
+        choice, error = _resolve_realm_choice(realm)
+        if error:
+            await ctx.send(error)
+            return
+        await cog.solo_raid.callback(cog, ShimInteraction(ctx), choice)
+
+    bot.add_command(commands.Command(
+        text_solo_raid, name="solo_raid", aliases=ALIASES["solo_raid"],
+        help=f"{cog.solo_raid.description} Usage: i solo_raid [realm name]",
     ))
 
     async def text_choose_class(ctx: commands.Context, *, class_name: str = None):

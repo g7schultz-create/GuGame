@@ -988,9 +988,86 @@ class RaidView(GameView):
 
     # -- action handlers -----------------------------------------------------
 
+    def _add_participant(self, user_id: int, name: str, player: dict):
+        """Builds and inserts one participant's full combat-state dict (equipment overlay,
+        region modifiers, physique/root per-encounter state, etc.). Shared by _on_join (the
+        Join button, mid-"starting"-window) and cog.py's /solo_raid (the caller is
+        auto-joined immediately, no button click involved) — sync, callers dispatch via
+        asyncio.to_thread themselves."""
+        # Equipped gear's flat "hp"/"qi_stat" stat_bonuses are folded in as a live overlay
+        # on top of the persisted (gear-independent) hp/max_hp and battle_qi/qi_stat
+        # columns, same as atk/str/def/spd/luck already work — see _persist_hp/_persist_qi
+        # for why writes back to the DB subtract them back out again.
+        equip_bonuses = self.game.compute_equipment_bonuses(user_id)["stats"]
+        hp_bonus = equip_bonuses["hp"]
+        qi_bonus = equip_bonuses["qi_stat"]
+        hp_settled = self.game.db.settle_hp_regen(user_id)
+        # Sturdy Frame-family physique's battle_qi_regen_bonus_pct — same rate-multiplier
+        # hunt.py's own settle_battle_qi call applies.
+        regen_bonus = self.game._trait_bonus(player, "battle_qi_regen_bonus_pct")
+        qi_settled = self.game.db.settle_battle_qi(user_id, regen_rate_bonus_pct=regen_bonus)
+        alive = self._alive_enemies()
+        default_target = self.enemies.index(alive[0]) if alive else 0
+        # Each joiner rolls their OWN world_region loot/hoard bonus independently (unlike
+        # the shared stat_multiplier decided once at raid creation) — spirit stones/
+        # materials/pages are already granted per-participant at _on_victory, so this fits
+        # that same per-participant shape rather than needing a group-wide roll.
+        region_mods = self.game.region_encounter_modifiers(user_id, name)
+        self.participants[user_id] = {
+            "name": name, "hp": hp_settled["hp"] + hp_bonus, "max_hp": hp_settled["max_hp"] + hp_bonus, "down": False,
+            "qi": qi_settled["battle_qi"] + qi_bonus, "max_qi": qi_settled["qi_stat"] + qi_bonus, "empowered": False,
+            "target_index": default_target, "potions_used": 0, "loot_multiplier": 1.0,
+            "character_class": player["character_class"], "hp_bonus": hp_bonus, "qi_bonus": qi_bonus,
+            "race": player["race"], "physique_tier": player["physique_tier"],
+            "region_loot_chance_bonus_pct": region_mods["loot_chance_bonus_pct"],
+            "region_hoard_label": region_mods["hoard_label"], "region_hoard_reward": region_mods["hoard_reward"],
+            # A Fire-family root's "spend 30% of your battle Qi this encounter" trigger
+            # (see character_data.CharacterTraitSpec / hunt.py's identical
+            # _track_battle_qi_spent) — tracked per-participant since a raid has several
+            # people spending Qi at once.
+            "root_name": player["root_name"], "qi_spent": 0.0, "fire_str_pending": False, "fire_triggered": False,
+            # Common-tier physique combat state (see character_data.py's Common physique
+            # section / hunt.py's identical per-participant fields) — also per-participant.
+            "physique_name": player["physique_name"], "guard_stacks": 0,
+            "dodge_momentum_pending": False, "dodge_momentum_triggered": False, "attack_count": 0,
+            "first_gu_use_discounted": False, "guard_or_potion_qi_restored": False,
+            "damage_dealt": 0.0, "adaptive_stat_key": None,
+            # Uncommon/Rare-tier physique combat state (see character_data.py for the families).
+            "first_empower_discounted": False, "flee_reroll_used": False, "gu_miss_refunded": False,
+            # Nascent Soul Avatar (see avatar.py) — avatar_soul/avatar_level needed for both
+            # Soul Projection and the passive fold-in inside _attacker_stats; sect_id for
+            # Formation Soul's real ally-targeted raid buff (pure in-memory scan against
+            # every other participant's own cached sect_id, no per-round DB calls).
+            "avatar_soul": player["avatar_soul"], "avatar_level": player["avatar_level"], "sect_id": player["sect_id"],
+            "soul_projection_rounds_remaining": 0,
+        }
+        # Clear Mind-family physique's encounter-start adaptive stat — compared against the
+        # main boss specifically (self.enemies[0]) as "the opponent", same one-time-at-join
+        # computation hunt.py's own single-monster version uses.
+        physique_spec = chargen.get_physique_spec(player["physique_name"])
+        if physique_spec and physique_spec.stat_bonuses.get("encounter_start_adaptive_stat_pct"):
+            boss = self.enemies[0].monster
+            ratios = {
+                "atk_stat": player["atk_stat"] / max(1, boss.atk_stat),
+                "def_stat": player["def_stat"] / max(1, boss.def_stat),
+                "spd_stat": player["spd_stat"] / max(1, boss.spd_stat),
+            }
+            self.participants[user_id]["adaptive_stat_key"] = min(ratios, key=ratios.get)
+        self.game.apply_encounter_start_bonuses(user_id, name)
+        self.game.start_active_raid(user_id)
+        self._log(f"🙋 **{name}** joins the raid!")
+
     async def _on_join(self, interaction: discord.Interaction):
         user = interaction.user
-        if self.status not in ("starting", "fighting"):
+        # Joining is only open during the "starting" countdown window -- once the raid has
+        # actually begun (status "fighting"), late joins are refused entirely (per explicit
+        # request; this used to allow joining mid-fight too). A distinct message for each
+        # case so "you're too late, it already started" reads differently from "it's already
+        # completely over."
+        if self.status == "fighting":
+            await interaction.response.send_message("This raid has already started — you can't join once it's underway.", ephemeral=True)
+            return
+        if self.status != "starting":
             await interaction.response.send_message("This raid has already ended.", ephemeral=True)
             return
         if user.id in self.participants:
@@ -1005,71 +1082,7 @@ class RaidView(GameView):
             await interaction.response.send_message("🐉 Finish your current raid first!", view=abandon_view, ephemeral=True)
             return
 
-        def _resolve():
-            # Equipped gear's flat "hp"/"qi_stat" stat_bonuses are folded in as a live overlay
-            # on top of the persisted (gear-independent) hp/max_hp and battle_qi/qi_stat
-            # columns, same as atk/str/def/spd/luck already work — see _persist_hp/_persist_qi
-            # for why writes back to the DB subtract them back out again.
-            equip_bonuses = self.game.compute_equipment_bonuses(user.id)["stats"]
-            hp_bonus = equip_bonuses["hp"]
-            qi_bonus = equip_bonuses["qi_stat"]
-            hp_settled = self.game.db.settle_hp_regen(user.id)
-            # Sturdy Frame-family physique's battle_qi_regen_bonus_pct — same rate-multiplier
-            # hunt.py's own settle_battle_qi call applies.
-            regen_bonus = self.game._trait_bonus(player, "battle_qi_regen_bonus_pct")
-            qi_settled = self.game.db.settle_battle_qi(user.id, regen_rate_bonus_pct=regen_bonus)
-            alive = self._alive_enemies()
-            default_target = self.enemies.index(alive[0]) if alive else 0
-            # Each joiner rolls their OWN world_region loot/hoard bonus independently (unlike
-            # the shared stat_multiplier decided once at raid creation) — spirit stones/
-            # materials/pages are already granted per-participant at _on_victory, so this fits
-            # that same per-participant shape rather than needing a group-wide roll.
-            region_mods = self.game.region_encounter_modifiers(user.id, user.display_name)
-            self.participants[user.id] = {
-                "name": user.display_name, "hp": hp_settled["hp"] + hp_bonus, "max_hp": hp_settled["max_hp"] + hp_bonus, "down": False,
-                "qi": qi_settled["battle_qi"] + qi_bonus, "max_qi": qi_settled["qi_stat"] + qi_bonus, "empowered": False,
-                "target_index": default_target, "potions_used": 0, "loot_multiplier": 1.0,
-                "character_class": player["character_class"], "hp_bonus": hp_bonus, "qi_bonus": qi_bonus,
-                "race": player["race"], "physique_tier": player["physique_tier"],
-                "region_loot_chance_bonus_pct": region_mods["loot_chance_bonus_pct"],
-                "region_hoard_label": region_mods["hoard_label"], "region_hoard_reward": region_mods["hoard_reward"],
-                # A Fire-family root's "spend 30% of your battle Qi this encounter" trigger
-                # (see character_data.CharacterTraitSpec / hunt.py's identical
-                # _track_battle_qi_spent) — tracked per-participant since a raid has several
-                # people spending Qi at once.
-                "root_name": player["root_name"], "qi_spent": 0.0, "fire_str_pending": False, "fire_triggered": False,
-                # Common-tier physique combat state (see character_data.py's Common physique
-                # section / hunt.py's identical per-participant fields) — also per-participant.
-                "physique_name": player["physique_name"], "guard_stacks": 0,
-                "dodge_momentum_pending": False, "dodge_momentum_triggered": False, "attack_count": 0,
-                "first_gu_use_discounted": False, "guard_or_potion_qi_restored": False,
-                "damage_dealt": 0.0, "adaptive_stat_key": None,
-                # Uncommon/Rare-tier physique combat state (see character_data.py for the families).
-                "first_empower_discounted": False, "flee_reroll_used": False, "gu_miss_refunded": False,
-                # Nascent Soul Avatar (see avatar.py) — avatar_soul/avatar_level needed for both
-                # Soul Projection and the passive fold-in inside _attacker_stats; sect_id for
-                # Formation Soul's real ally-targeted raid buff (pure in-memory scan against
-                # every other participant's own cached sect_id, no per-round DB calls).
-                "avatar_soul": player["avatar_soul"], "avatar_level": player["avatar_level"], "sect_id": player["sect_id"],
-                "soul_projection_rounds_remaining": 0,
-            }
-            # Clear Mind-family physique's encounter-start adaptive stat — compared against the
-            # main boss specifically (self.enemies[0]) as "the opponent", same one-time-at-join
-            # computation hunt.py's own single-monster version uses.
-            physique_spec = chargen.get_physique_spec(player["physique_name"])
-            if physique_spec and physique_spec.stat_bonuses.get("encounter_start_adaptive_stat_pct"):
-                boss = self.enemies[0].monster
-                ratios = {
-                    "atk_stat": player["atk_stat"] / max(1, boss.atk_stat),
-                    "def_stat": player["def_stat"] / max(1, boss.def_stat),
-                    "spd_stat": player["spd_stat"] / max(1, boss.spd_stat),
-                }
-                self.participants[user.id]["adaptive_stat_key"] = min(ratios, key=ratios.get)
-            self.game.apply_encounter_start_bonuses(user.id, user.display_name)
-            self.game.start_active_raid(user.id)
-            self._log(f"🙋 **{user.display_name}** joins the raid!")
-
-        await asyncio.to_thread(_resolve)
+        await asyncio.to_thread(self._add_participant, user.id, user.display_name, player)
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -1399,7 +1412,10 @@ class RaidView(GameView):
     def _build_components(self):
         self.clear_items()
         active = self.status == "fighting"
-        can_join = self.status in ("starting", "fighting")
+        # Joining closes once the raid actually starts (see _on_join's own comment) -- the
+        # button reflects that directly instead of staying enabled and only refusing after
+        # the click.
+        can_join = self.status == "starting"
 
         join_button = discord.ui.Button(label="Join Raid", emoji="🙋", style=discord.ButtonStyle.primary, row=0, disabled=not can_join)
         join_button.callback = self._on_join

@@ -6,6 +6,11 @@ import discord
 from .base_view import GameView
 from .ui_utils import render_bar
 
+# /balance auto-refreshes on this cadence (see BalanceView._auto_refresh_loop) so a player
+# spending essence items elsewhere (e.g. Inventory's Use All on Primeval Essence Crystals)
+# sees their numbers update live instead of having to re-run /balance after every use.
+BALANCE_REFRESH_INTERVAL_SECONDS = 5
+
 
 async def _modal_error(interaction: discord.Interaction, error: Exception, modal_name: str):
     """Modal has its own separate error hook from View.on_error (see base_view.py) — same
@@ -65,7 +70,30 @@ class BalanceView(GameView):
         self.game = game
         self.display_name = display_name
         self.last_result: str = None
+        self.message: discord.Message = None
         self._build_components()
+        # asyncio.create_task requires a running loop on the CURRENT thread -- safe here since
+        # __init__ is always called via direct construction (never asyncio.to_thread), same
+        # hard rule every other View/Modal's own create_task follows (see commit 45e239a).
+        asyncio.create_task(self._auto_refresh_loop())
+
+    async def _auto_refresh_loop(self):
+        """Periodically re-renders and re-edits this SAME message so a player using essence
+        items elsewhere sees their balance update live, without needing to re-run /balance
+        after every item use (per explicit request). Stops on its own once the view's own
+        180s timeout fires (self.is_finished(), a real discord.ui.View method -- also True if
+        stop() is ever called manually) or the message becomes inaccessible (deleted, or the
+        bot loses permission) -- never runs forever."""
+        while not self.is_finished():
+            await asyncio.sleep(BALANCE_REFRESH_INTERVAL_SECONDS)
+            if self.is_finished() or self.message is None:
+                return
+            try:
+                await asyncio.to_thread(self._build_components)
+                embed = await asyncio.to_thread(self.build_embed)
+                await self.message.edit(embed=embed, view=self)
+            except discord.HTTPException:
+                return
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
