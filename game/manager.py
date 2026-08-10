@@ -3119,8 +3119,6 @@ class GameManager:
             self.db.set_pending_breakthrough_boost(user_id, {"chance_pct": 1.0})
             self.db.set_accessory_instance_state(instance["instance_id"], {"failure_insight_stacks": 0})
             return True, f"**{affix.name}**: consumed all 10 stacks — your next breakthrough is guaranteed to succeed."
-        if handler == "reversed_river_gourd":
-            return True, f"**{affix.name}**: your HP/essence/combat state will revert to this moment if things go wrong in your next encounter."
         if handler == "echo_sword":
             return True, f"**{affix.name}**: your first strike next encounter will echo automatically."
         if handler == "echo_earrings":

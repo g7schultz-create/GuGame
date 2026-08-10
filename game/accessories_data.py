@@ -24,9 +24,15 @@ already took for the manual system's exotic materials):
     effects key off /raid's multi-participant roster (the only multiplayer combat that does
     exist); world boss/tribulation/auction-sourced items are reachable through /search
     discoveries and dismantling instead (see the LOOT_SOURCE_TABLE adaptation below).
-  - "Rule/domain" and other Rank 6-7 signature effects for the 5 Unique items get real,
-    individually hand-implemented behavior (see manager.py's UNIQUE_HANDLERS) rather than a
-    generic mechanic, matching the doc's own "hand-authored" framing for Unique-rarity items.
+  - "Rule/domain" and other Rank 6-7 signature effects for 4 of the Unique items get real,
+    individually hand-implemented behavior (see manager.py's GameManager._activate_unique_
+    signature) rather than a generic mechanic, matching the doc's own "hand-authored" framing
+    for Unique-rarity items. The Gourd of Reversed Rivers was the 5th, originally described
+    as reverting HP/essence/combat state once every 7 days -- simplified 2026-08-10 (user's
+    explicit request) to a full daily primeval essence restore instead (effect_key
+    "essence_restore_charges", same mechanic the Springwater Essence Gourd/Dew-Gathering Jade
+    Ring already use, just at 100% instead of a smaller %), since the original revert idea
+    had no snapshot/restore hook anywhere in hunt.py/raid.py/pvp_view.py to actually run on.
 """
 
 from dataclasses import dataclass, field
@@ -348,9 +354,9 @@ _reg("art_calamity_drinking_black_gourd", "Calamity-Drinking Black Gourd", "Arti
      "Overfilling creates a backlash encounter; requires immortal essence upkeep.",
      "breakthrough_boost_daily", {"chance_pct": 0.15})
 _reg("art_gourd_of_reversed_rivers", "Gourd of Reversed Rivers", "Artifact", "Artifact", "Gourd", 7, "Unique",
-     "Water, Time", "Once every seven days, revert the player's HP, essence, and temporary combat states to their values at the start of the current encounter.",
-     "Loot, deaths, consumed permanent resources, and other players' states are not reversed.",
-     "unique_signature", {"handler": "reversed_river_gourd"})
+     "Water, Qi", "Once per day, fully restores the player's primeval essence.",
+     "Once per day; cannot overfill essence.",
+     "essence_restore_charges", {"charges": 1, "pct": 1.0})
 
 # -- Flying Swords -------------------------------------------------------------------------------
 _reg("art_green_bamboo_flying_sword", "Green Bamboo Flying Sword", "Artifact", "Artifact", "Flying Sword", 1, "Common",
