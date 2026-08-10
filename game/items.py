@@ -255,6 +255,22 @@ def _use_qi_multiplier_pill(tier: int):
     return use
 
 
+def _use_qi_ascension_pill(tier: int):
+    def use(db: GameDatabase, user_id: int) -> str:
+        result = db.use_qi_ascension_pill(user_id, tier)
+        if not result["used"]:
+            return (
+                f"Your dantian resists — you've already used **{result['max_uses']}** Qi Ascension "
+                f"Pills at your current Great Realm. Break through further to unlock more."
+            )
+        pct = db.QI_ASCENSION_PCT_PER_TIER * tier * 100
+        return (
+            f"Your qi aperture violently expands — qi multiplier surges **+{pct:.0f}%** to "
+            f"**x{result['new_multiplier']:.2f}** ({result['uses']}/{result['max_uses']} used this realm)!"
+        )
+    return use
+
+
 def _use_essence_restoration_pill(tier: int):
     def use(db: GameDatabase, user_id: int) -> str:
         percent = ESSENCE_RESTORATION_PILL_PERCENT_PER_TIER * tier
@@ -397,6 +413,52 @@ def roll_essence_restoration_pill_drop(rng: Optional[random.Random] = None) -> O
     quantity_weights = list(ESSENCE_RESTORATION_PILL_QUANTITY_WEIGHTS.values())
     quantity = r.choices(quantities, weights=quantity_weights, k=1)[0]
     return alchemy_pill_name("Essence Restoration", tier), quantity
+
+
+# Qi Ascension Pill -- never Alchemist-craftable (unlike the flat, additive Qi Multiplier
+# Pill above, this one MULTIPLIES qi_multiplier, so a reliable herb-and-brew supply would
+# undermine its own per-realm use cap almost immediately). Rare drop only, per explicit
+# request, from /search_forgotten_blessed_land, /explore, and World Boss specifically (see
+# this function's own call sites) -- deliberately NOT wired into hunt/raid/secret realm/
+# dream realm/battlefield the way Essence Restoration Pill is, since this pill's own
+# use_qi_ascension_pill cap already bounds how much benefit stacking up a big stockpile
+# can buy; a narrower drop pool keeps it a genuinely occasional find on top of that.
+# Shelved under the existing "Qi Multiplier" subcategory rather than a new one -- see
+# feedback_shared_category_lists_row_budget.md: growing a shared subcategory list can
+# silently blow out row budget in OTHER, unrelated renderers.
+for _tier in range(1, 8):
+    _name = alchemy_pill_name("Qi Ascension", _tier)
+    ITEMS[_name] = Item(
+        name=_name,
+        category="Pills",
+        rank=_tier,
+        description=(
+            f"A Tier {_tier} Qi Ascension Pill. MULTIPLIES your qi multiplier by "
+            f"+{GameDatabase.QI_ASCENSION_PCT_PER_TIER * _tier * 100:.0f}% per use instead of adding to it -- "
+            f"capped at {GameDatabase.QI_ASCENSION_MAX_USES_PER_RANK} uses per Great Realm. A rare find -- no Alchemist can brew this one."
+        ),
+        use=_use_qi_ascension_pill(_tier),
+        subcategory="Qi Multiplier",
+    )
+del _tier, _name
+
+QI_ASCENSION_PILL_DROP_CHANCE = 0.01
+QI_ASCENSION_PILL_TIER_WEIGHTS = {1: 35, 2: 25, 3: 16, 4: 10, 5: 7, 6: 4, 7: 3}
+
+
+def roll_qi_ascension_pill_drop(rng: Optional[random.Random] = None) -> Optional[Tuple[str, int]]:
+    """Independent rare-drop roll -- see this module's own comment just above for why this
+    pill is drop-only and only from /search_forgotten_blessed_land, /explore, and World Boss.
+    Returns (item_name, quantity) for a "Qi Ascension Pill (T{tier})", always quantity 1
+    (no multi-drop bonus roll, unlike Essence Restoration -- this pill is strong enough per
+    unit that stacking bonus quantities isn't worth the risk of a lucky multi-drop)."""
+    r = rng or random
+    if r.random() >= QI_ASCENSION_PILL_DROP_CHANCE:
+        return None
+    tiers = list(QI_ASCENSION_PILL_TIER_WEIGHTS.keys())
+    tier_weights = list(QI_ASCENSION_PILL_TIER_WEIGHTS.values())
+    tier = r.choices(tiers, weights=tier_weights, k=1)[0]
+    return alchemy_pill_name("Qi Ascension", tier), 1
 
 
 ITEM_CATEGORIES = ["Healing", "Pills", "Materials"]

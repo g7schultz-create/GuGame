@@ -198,6 +198,9 @@ class GameCog(commands.Cog):
         pill_finders = [c["name"] for c in end_summary["contributors"] if c.get("essence_pill")]
         if pill_finders:
             lines.append(f"💧 A rare Essence Restoration Pill also turned up for: **{', '.join(pill_finders)}**!")
+        qi_ascension_finders = [c["name"] for c in end_summary["contributors"] if c.get("qi_ascension_pill")]
+        if qi_ascension_finders:
+            lines.append(f"🌟 A rare Qi Ascension Pill also turned up for: **{', '.join(qi_ascension_finders)}**!")
         page_finders = [c for c in end_summary["contributors"] if c.get("manual_page")]
         if page_finders:
             page_lines = [f"**{c['name']}** ({c['manual_page']['name']}, Rank {c['manual_page']['rank']})" for c in page_finders]
@@ -246,6 +249,9 @@ class GameCog(commands.Cog):
             if c.get("essence_pill"):
                 qty = c.get("essence_pill_quantity", 1)
                 lines.append(f"💧 You also found {qty}x rare **{c['essence_pill']}**!")
+            if c.get("qi_ascension_pill"):
+                qty = c.get("qi_ascension_pill_quantity", 1)
+                lines.append(f"🌟 You also found {qty}x rare **{c['qi_ascension_pill']}**!")
             if c.get("manual_page"):
                 lines.append(f"📜 You also found a rare **{c['manual_page']['name']}** (Rank {c['manual_page']['rank']} page)!")
             for winner in end_summary["lottery_winners"]:

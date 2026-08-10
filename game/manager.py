@@ -4885,6 +4885,14 @@ class GameManager:
             pill_name, pill_qty = essence_pill if essence_pill else (None, 0)
             if pill_name:
                 self.db.add_item(c["user_id"], pill_name, pill_qty)
+            # Qi Ascension Pill: same "rare bonus roll for every contributor" shape as the
+            # Essence Restoration Pill roll just above, one of only three drop sources for
+            # this pill (the other two are /search_forgotten_blessed_land and /explore -- see
+            # items.roll_qi_ascension_pill_drop's own docstring for why it's this narrow).
+            qi_ascension_pill = items.roll_qi_ascension_pill_drop()
+            qi_ascension_pill_name, qi_ascension_pill_qty = qi_ascension_pill if qi_ascension_pill else (None, 0)
+            if qi_ascension_pill_name:
+                self.db.add_item(c["user_id"], qi_ascension_pill_name, qi_ascension_pill_qty)
             # Nascent Soul Avatar gear (see game/avatar_gear.py) — World Boss is this
             # system's "commonly" source (every contributor gets an independent roll, unlike
             # the single damage-weighted lottery winner below), gated on the avatar being
@@ -4907,6 +4915,7 @@ class GameManager:
             guaranteed_summaries.append({
                 "user_id": c["user_id"], "name": c["name"], "damage_dealt": c["damage_dealt"],
                 "stones": stones, "essence_pill": pill_name, "essence_pill_quantity": pill_qty,
+                "qi_ascension_pill": qi_ascension_pill_name, "qi_ascension_pill_quantity": qi_ascension_pill_qty,
                 "avatar_gear": avatar_gear_grant, "manual_page": manual_page_grant,
             })
 

@@ -69,6 +69,14 @@ class GameDatabase:
         "last_restore_ts": "INTEGER DEFAULT 0",
         "qi": "REAL DEFAULT 0",
         "qi_multiplier": "REAL DEFAULT 1.0",
+        # Qi Ascension Pill (see items.py / use_qi_ascension_pill) -- how many times used
+        # since qi_ascension_rank_tracked (a Great Realm rank, e.g. 1=Qi Condensation) was
+        # last recorded. A fresh count of QI_ASCENSION_MAX_USES_PER_RANK unlocks every time
+        # the player's CURRENT rank no longer matches qi_ascension_rank_tracked -- lazily
+        # detected/reset in use_qi_ascension_pill itself rather than needing every
+        # breakthrough site to know about this pill.
+        "qi_ascension_uses": "INTEGER DEFAULT 0",
+        "qi_ascension_rank_tracked": "INTEGER DEFAULT 0",
         "last_qi_ts": "INTEGER DEFAULT 0",
         "max_hp": "INTEGER DEFAULT 100",
         "max_primeval_essence": "INTEGER DEFAULT 1000",
@@ -1755,6 +1763,47 @@ class GameDatabase:
         new_multiplier = cur.fetchone()["qi_multiplier"]
         con.close()
         return new_multiplier
+
+    # Qi Ascension Pill (see items.py) -- unlike add_qi_multiplier above (a flat, unlimited-use
+    # PERMANENT ADD), this MULTIPLIES qi_multiplier, so repeated uses compound exponentially
+    # instead of stacking flat. That makes it far stronger per use, so it's capped to
+    # QI_ASCENSION_MAX_USES_PER_RANK uses per Great Realm rank (1=Qi Condensation ... 7=Ancient
+    # Realm) rather than being freely repeatable -- a player who stockpiles many can't just pop
+    # them all at once to skip ahead too fast; the rank gate resets naturally as they advance.
+    # Deliberately self-contained here (not in GameManager) since items.py's use() callback
+    # only ever receives (db, user_id), no GameManager access -- same constraint noted on
+    # essence_capacity_pct in database.py's own history.
+    QI_ASCENSION_MAX_USES_PER_RANK = 5
+    QI_ASCENSION_PCT_PER_TIER = 0.03
+
+    def use_qi_ascension_pill(self, user_id: int, tier: int) -> dict:
+        """Returns {"used", "new_multiplier", "uses", "max_uses", "player_rank"} -- "used" is
+        False (nothing changed) once the current rank's use cap is already hit."""
+        from . import realms as _realms
+
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute(
+            "SELECT realm_index, qi_multiplier, qi_ascension_uses, qi_ascension_rank_tracked FROM players WHERE user_id = ?",
+            (user_id,),
+        )
+        row = cur.fetchone()
+        player_rank = _realms.STAGES[row["realm_index"]].great_realm_index + 1
+        uses = row["qi_ascension_uses"] if row["qi_ascension_rank_tracked"] == player_rank else 0
+
+        if uses >= self.QI_ASCENSION_MAX_USES_PER_RANK:
+            con.close()
+            return {"used": False, "new_multiplier": row["qi_multiplier"], "uses": uses, "max_uses": self.QI_ASCENSION_MAX_USES_PER_RANK, "player_rank": player_rank}
+
+        new_multiplier = row["qi_multiplier"] * (1 + self.QI_ASCENSION_PCT_PER_TIER * tier)
+        uses += 1
+        cur.execute(
+            "UPDATE players SET qi_multiplier = ?, qi_ascension_uses = ?, qi_ascension_rank_tracked = ? WHERE user_id = ?",
+            (new_multiplier, uses, player_rank, user_id),
+        )
+        con.commit()
+        con.close()
+        return {"used": True, "new_multiplier": new_multiplier, "uses": uses, "max_uses": self.QI_ASCENSION_MAX_USES_PER_RANK, "player_rank": player_rank}
 
     def maybe_gain_aptitude(self, user_id: int, chance: float, amount: int = 1):
         con = self.connect()

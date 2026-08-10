@@ -95,17 +95,19 @@ BAND_POOLS = {
 
 
 def roll_explore(explorer_rank: int = 0, luck_stat: int = 0) -> dict:
-    """Returns {"band", "stones", "item_name", "quantity", "bonus_core", "bonus_essence_pill"}
-    — either stones or item_name is set (never both) for the main find; bonus_core (see
-    roll_monster_core_bonus) and bonus_essence_pill (a (item_name, quantity) tuple or None,
-    see items.roll_essence_restoration_pill_drop) are each a separate, independent long-shot
-    that can turn up alongside any main find."""
+    """Returns {"band", "stones", "item_name", "quantity", "bonus_core", "bonus_essence_pill",
+    "bonus_qi_ascension_pill"} — either stones or item_name is set (never both) for the main
+    find; bonus_core (see roll_monster_core_bonus), bonus_essence_pill, and
+    bonus_qi_ascension_pill (each a (item_name, quantity) tuple or None, see items.
+    roll_essence_restoration_pill_drop/roll_qi_ascension_pill_drop) are each a separate,
+    independent long-shot that can turn up alongside any main find."""
     names, weights = _weighted_bands(explorer_rank, luck_stat)
     band = random.choices(names, weights=weights, k=1)[0]
     result = BAND_POOLS[band]()
     result["band"] = band
     result["bonus_core"] = roll_monster_core_bonus()
     result["bonus_essence_pill"] = items.roll_essence_restoration_pill_drop()
+    result["bonus_qi_ascension_pill"] = items.roll_qi_ascension_pill_drop()
     return result
 
 

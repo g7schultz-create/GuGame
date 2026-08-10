@@ -65,8 +65,22 @@ def roll_board(rng: Optional[random.Random] = None) -> list:
 def grant_tile_reward(game, user_id: int, name: str, category: str, rng: Optional[random.Random] = None) -> tuple:
     """Grants whatever `category` rolls and returns (emoji, label) for the revealed tile.
     `game` is a GameManager instance -- reuses its db/roll_and_grant_* methods the same way
-    every other reward path in this codebase already does."""
+    every other reward path in this codebase already does. Layers an independent Qi Ascension
+    Pill bonus roll on top of EVERY dig (including a "dud"), one of only three drop sources
+    for that pill -- see items.roll_qi_ascension_pill_drop's own docstring."""
     rng = rng or random.Random()
+    emoji, label = _roll_base_tile_reward(game, user_id, name, category, rng)
+    qi_ascension_pill = items.roll_qi_ascension_pill_drop(rng)
+    if qi_ascension_pill:
+        pill_name, pill_qty = qi_ascension_pill
+        game.db.add_item(user_id, pill_name, pill_qty)
+        label += f" + 🌟 {pill_qty}x {pill_name}"
+        if emoji == "🕳️":
+            emoji = "🌟"
+    return emoji, label
+
+
+def _roll_base_tile_reward(game, user_id: int, name: str, category: str, rng: random.Random) -> tuple:
     db = game.db
 
     if category == "dud":
