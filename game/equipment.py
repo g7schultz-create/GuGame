@@ -444,6 +444,22 @@ def parse_gu_name(item_name: str):
     return None, None
 
 
+def gu_quality_for(item_name: str) -> Optional[str]:
+    """A Gu's quality for anywhere that needs one regardless of whether it's tiered or a flat
+    single-instance item (e.g. World Boss Gu — see world_boss.py's own module docstring on why
+    those are deliberately "trophies, not a leveling rung" with no Family (Quality) naming).
+    Tries parse_gu_name first (tiered/canon Gu); falls back to the item's own `rank` field when
+    that's itself a real GU_QUALITY_ORDER value (set at registration for flat Gu meant to carry
+    real rarity — see world_boss.py's _register_items). Returns None if neither resolves."""
+    _, quality = parse_gu_name(item_name)
+    if quality is not None:
+        return quality
+    item = EQUIPMENT.get(item_name)
+    if item is not None and item.rank in GU_QUALITY_ORDER:
+        return item.rank
+    return None
+
+
 # Total foundation-stat percentage budget per Gu quality — same 7-tier curve
 # blacksmith.py's TIER_PCT_BUDGET already uses for crafted gear (Common..Immortal lining up
 # 1:1 with blacksmith's Tier 1..7), so a Gu and a piece of gear of matching quality carry

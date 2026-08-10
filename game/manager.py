@@ -1793,12 +1793,15 @@ class GameManager:
         core_gear = equipment.EQUIPMENT.get(core_gu_name)
         if core_gear is None or core_gear.slot_type != "Gu":
             return {"ok": False, "reason": f"**{core_gu_name}** isn't a Gu."}
-        _, core_quality = equipment.parse_gu_name(core_gu_name)
+        # gu_quality_for (not raw parse_gu_name) so flat single-instance Gu with a real rank
+        # (World Boss Gu -- see world_boss.py's own registration comment) can anchor a move
+        # too, not just tiered/canon Family (Quality) items.
+        core_quality = equipment.gu_quality_for(core_gu_name)
         if core_quality is None:
             return {
                 "ok": False,
                 "reason": f"**{core_gu_name}** has no quality tier and can't anchor a Killer Move as its core "
-                          "-- pick a tiered or canon Gu instead (it can still be one of your 10 components).",
+                          "-- pick a tiered, canon, or World Boss Gu instead (it can still be one of your 10 components).",
             }
         for component_name in component_gu_names:
             component_gear = equipment.EQUIPMENT.get(component_name)
@@ -1831,7 +1834,8 @@ class GameManager:
                           f"{other_slot} slot instead -- try assembling it there.",
             }
 
-        component_qualities = [equipment.parse_gu_name(n)[1] for n in component_gu_names]
+        # gu_quality_for, not raw parse_gu_name -- see the core_quality lookup above for why.
+        component_qualities = [equipment.gu_quality_for(n) for n in component_gu_names]
         rng = random.Random()
         if slot == "combat":
             effects = killer_move_gen.roll_combat_effects(kind, move_tier, harmony, component_qualities, rng)

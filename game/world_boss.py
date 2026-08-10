@@ -198,6 +198,15 @@ _BOSS_GU = {
 # under the same name. Granted at "Immortal" (7-star) quality, the ceiling of that system.
 _EXISTING_CANON_ULTRA_RARE_GU = ["Fortune Rivalling Heaven Gu", "Heavenly Essence Treasure Lotus"]
 
+# Non-exclusive generic pools every boss's loot table can pull from, on top of its own
+# exclusive_pool (see WORLD_BOSSES) -- built from the sets above minus whatever's exclusive
+# to a specific boss, so a generic Legendary/Mythic hit still feels like real Gu, not filler.
+# Computed BEFORE _register_items() below (not after, like it originally was) so registration
+# can use it to assign each Gu's real rank -- see that function's own comment.
+_ALL_EXCLUSIVE_NAMES = {name for boss in WORLD_BOSSES.values() for name in boss["exclusive_pool"]}
+GENERIC_GU_POOL = [name for name in _BOSS_GU if name not in _ALL_EXCLUSIVE_NAMES]
+GENERIC_EQUIPMENT_POOL = [name for name in _BOSS_EQUIPMENT if name not in _ALL_EXCLUSIVE_NAMES]
+
 
 def _register_items():
     for name, (slot_type, description, stat_bonuses) in _BOSS_EQUIPMENT.items():
@@ -205,19 +214,22 @@ def _register_items():
             name=name, slot_type=slot_type, rank="World Boss", description=description, stat_bonuses=stat_bonuses,
         )
     for name, (description, stat_bonuses) in _BOSS_GU.items():
+        # Real GU_QUALITY_ORDER rank (not the flat "World Boss" string equipment above still
+        # uses) so these are eligible as a Killer Move core/component at their true rarity
+        # (see equipment.gu_quality_for) instead of always reading as the lowest possible
+        # quality -- per explicit request. Still single flat items, not part of the tiered
+        # Family (Quality) naming/fusion ladder (see this module's own docstring on why) --
+        # only the rank VALUE changes, not the naming convention. Mythic-band-exclusive Gu
+        # (only obtainable via a specific boss's own exclusive_pool) rank higher than the
+        # generic Rare/Legendary-band pool, mirroring the real difference in how hard each is
+        # to obtain.
+        rank = "Legendary" if name in _ALL_EXCLUSIVE_NAMES else "Epic"
         equipment.EQUIPMENT[name] = equipment.Equipment(
-            name=name, slot_type="Gu", rank="World Boss", description=f"[World Boss] {description}", stat_bonuses=stat_bonuses,
+            name=name, slot_type="Gu", rank=rank, description=f"[World Boss] {description}", stat_bonuses=stat_bonuses,
         )
 
 
 _register_items()
-
-# Non-exclusive generic pools every boss's loot table can pull from, on top of its own
-# exclusive_pool (see WORLD_BOSSES) -- built from the sets above minus whatever's exclusive
-# to a specific boss, so a generic Legendary/Mythic hit still feels like real Gu, not filler.
-_ALL_EXCLUSIVE_NAMES = {name for boss in WORLD_BOSSES.values() for name in boss["exclusive_pool"]}
-GENERIC_GU_POOL = [name for name in _BOSS_GU if name not in _ALL_EXCLUSIVE_NAMES]
-GENERIC_EQUIPMENT_POOL = [name for name in _BOSS_EQUIPMENT if name not in _ALL_EXCLUSIVE_NAMES]
 
 # -- Loot table (see the doc's own 5-tier table; weights sum to 1000) -----------------------
 # "Boss Titles"/"Exclusive Cosmetic" dropped from Mythic -- no title or cosmetic system
