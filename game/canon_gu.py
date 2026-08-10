@@ -105,6 +105,15 @@ CANON_GU = [
      "description": "A brutal bone-path battle Gu suited to repeated attacks.", "effect_text": "Repeated Bone-path damage. (Active ability — coming soon.)"},
     {"name": "Heavenly Essence Treasure Lotus", "gu_rank": 5, "path": "Wood", "role": "Resource", "rarity": "Mythic", "drop_weight": 1, "base_power": 140, "is_passive": True,
      "description": "Produces cultivation resources and accelerates essence recovery.", "effect_text": "Boosts primeval essence recovered from essence-restoring items."},
+    # Gu Rank 7 (Ancient Realm) had no normally-droppable entry at all -- roll_canon_gu_drop's
+    # "enemy_gu_rank or one rank below" fallback landed on rank 6, but that slot (Spring Autumn
+    # Cicada) is ALSO drop_weight=0 (event-only), so Ancient Realm hunts/raids could never drop
+    # a canon Gu at all. Same rarity/drop_weight as rank 5's own Mythic entry (the rarest tier
+    # that's still normally obtainable, one step below the Unique/event-only tier ranks 6 and 8
+    # sit at) rather than another event-only slot, since that wouldn't have closed the gap.
+    {"name": "Primeval Origin Gu", "gu_rank": 7, "path": "Heaven", "role": "Attack", "rarity": "Mythic", "drop_weight": 1, "base_power": 175, "is_passive": False,
+     "description": "A Gu condensed from the primeval origin-qi of creation itself, said to carry a sliver of the world's own genesis intent.",
+     "effect_text": "Unleashes a devastating Heaven-path strike drawn from the world's origin. (Active ability — coming soon.)"},
     {"name": "Spring Autumn Cicada", "gu_rank": 6, "path": "Time", "role": "Rebirth", "rarity": "Unique", "drop_weight": 0, "base_power": 500, "is_passive": False,
      "description": "A time-path Immortal Gu associated with rebirth through the River of Time.", "effect_text": "Event-only Immortal Gu. Never drops normally. (Active ability — coming soon.)"},
     {"name": "Fortune Rivalling Heaven Gu", "gu_rank": 8, "path": "Luck", "role": "Luck", "rarity": "Unique", "drop_weight": 0, "base_power": 900, "is_passive": True,

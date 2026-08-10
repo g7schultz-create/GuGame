@@ -155,14 +155,33 @@ _SPIRIT_SEVERING_BREAKTHROUGH_RANGES = {
     "Peak": (1000, 1000),
 }
 
+# Same lump-sum-per-breakthrough shape as Spirit Severing above, per explicit request that
+# Ancient Realm "still" grants Dao Marks per breakthrough rather than the mechanic staying
+# Spirit-Severing-only forever. Scaled ~3x Spirit Severing's own ranges (Dao Seeking, the
+# realm in between, deliberately keeps getting nothing -- only these two Great Realms grant a
+# breakthrough lump sum) -- a Peak-Ancient-Realm breakthrough alone funds most of a fresh
+# DAO_MARKS_CAP_PER_PATH path (2000), a fitting one-time payout for the very top of the ladder.
+_ANCIENT_REALM_BREAKTHROUGH_RANGES = {
+    "Early": (600, 1200),
+    "Middle": (900, 1500),
+    "Late": (1200, 2100),
+    "Peak": (3000, 3000),
+}
+
+_BREAKTHROUGH_MARK_RANGES_BY_GREAT_REALM = {
+    "Spirit Severing": _SPIRIT_SEVERING_BREAKTHROUGH_RANGES,
+    "Ancient Realm": _ANCIENT_REALM_BREAKTHROUGH_RANGES,
+}
+
 
 def breakthrough_marks(great_realm_name: str, substage_name: str) -> Optional[int]:
-    """One-time Dao Marks lump sum for breaking through INTO one of Spirit Severing's 4
-    substages. None for every other breakthrough (any other Great Realm, before or after
-    Spirit Severing)."""
-    if great_realm_name != "Spirit Severing":
+    """One-time Dao Marks lump sum for breaking through INTO one of Spirit Severing's or
+    Ancient Realm's 4 substages. None for every other breakthrough (any other Great Realm,
+    including Dao Seeking in between)."""
+    ranges = _BREAKTHROUGH_MARK_RANGES_BY_GREAT_REALM.get(great_realm_name)
+    if ranges is None:
         return None
-    bounds = _SPIRIT_SEVERING_BREAKTHROUGH_RANGES.get(substage_name)
+    bounds = ranges.get(substage_name)
     if bounds is None:
         return None
     low, high = bounds
