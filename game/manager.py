@@ -1992,6 +1992,46 @@ class GameManager:
         self.db.cancel_study(user_id)
         return {"outcome": "cancelled", "profession": profession, "hours_lost": hours_lost}
 
+    def check_and_complete_ready_studies(self) -> list:
+        """Periodic sweep (see GameCog.study_tick) -- auto-completes any profession study
+        that's crossed 100% progress, without the player needing to manually re-run /study
+        to claim it (per explicit request: study used to just sit at "done" until the player
+        happened to check back in). Mirrors study()'s own completion math exactly (including
+        the Human-family root's profession_study_speed_pct), just applied across every
+        currently-studying player instead of one. Returns [{"user_id", "name", "profession",
+        "new_rank"}, ...] for every completion this sweep triggered, for the caller to DM."""
+        completed = []
+        for player in self.db.get_players_currently_studying():
+            profession = player["studying_profession"]
+            rank_column = professions.RANK_COLUMN[profession]
+            current_rank = player[rank_column]
+            if current_rank >= professions.MAX_RANK_INDEX:
+                continue  # shouldn't normally happen (study() itself blocks starting past max) -- never crash on it
+            required_hours = professions.hours_required(current_rank) * (1 - self._trait_bonus(player, "profession_study_speed_pct"))
+            elapsed_hours = (time.time() - player["studying_started_ts"]) / 3600
+            if elapsed_hours >= required_hours:
+                updated = self.db.complete_study(player["user_id"], rank_column)
+                completed.append({
+                    "user_id": player["user_id"], "name": player["name"], "profession": profession,
+                    "new_rank": updated[rank_column],
+                })
+        return completed
+
+    def grant_profession_rank(self, user_id: int, name: str, profession: str, amount: int = 1) -> dict:
+        """/grant_profession_rank (admin) -- flat +amount to a profession's rank, clamped at
+        Dao Master. Deliberately independent of study()/complete_study(): does NOT touch
+        studying_profession/studying_started_ts at all, so granting a rank never silently
+        cancels unrelated in-progress study (see GameDatabase.add_profession_rank's own
+        docstring). Returns {"profession", "old_rank", "new_rank", "capped"}."""
+        player = self.db.get_or_create_player(user_id, name)
+        rank_column = professions.RANK_COLUMN[profession]
+        old_rank = player[rank_column]
+        new_rank = self.db.add_profession_rank(user_id, rank_column, amount, professions.MAX_RANK_INDEX)
+        return {
+            "profession": profession, "old_rank": old_rank, "new_rank": new_rank,
+            "capped": old_rank + amount > professions.MAX_RANK_INDEX,
+        }
+
     # -- World region: /region (see world_regions.py) ---------------------------------------
     # A mortal-realm character's chosen geographic zone -- separate from search_data's own
     # per-realm "region" (danger tier). Eligibility and every bonus number lives in

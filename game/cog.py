@@ -110,12 +110,14 @@ class GameCog(commands.Cog):
         self.split_body_tick.start()
         self.tournament_tick.start()
         self.trade_timeout_tick.start()
+        self.study_tick.start()
 
     async def cog_unload(self):
         self.world_boss_tick.cancel()
         self.split_body_tick.cancel()
         self.tournament_tick.cancel()
         self.trade_timeout_tick.cancel()
+        self.study_tick.cancel()
 
     # World Boss respawn scheduler (see world_boss.py's own module docstring) -- checks every
     # 5 minutes whether the current boss expired and/or a fresh one is due; GameManager.
@@ -315,6 +317,37 @@ class GameCog(commands.Cog):
                 await user.send(message)
             except discord.HTTPException:
                 pass
+
+    # Same 5-minute cadence as the other loops -- profession study takes at least an hour per
+    # rank (see professions.STUDY_HOURS_PER_STEP), so there's no need to poll any faster.
+    # Auto-completes any study that's crossed 100% progress instead of leaving it sitting at
+    # "ready to complete" until the player happens to run /study again (per explicit request).
+    STUDY_TICK_INTERVAL_SECONDS = 300
+
+    @tasks.loop(seconds=STUDY_TICK_INTERVAL_SECONDS)
+    async def study_tick(self):
+        for completed in await asyncio.to_thread(self.game.check_and_complete_ready_studies):
+            await self._dm_study_complete(completed)
+
+    @study_tick.before_loop
+    async def _before_study_tick(self):
+        await self.bot.wait_until_ready()
+
+    async def _dm_study_complete(self, completed: dict):
+        """Best-effort, same shape as _dm_trade_timeout/_dm_split_body_ready -- a player with
+        DMs closed just silently doesn't get one, and one failed DM must never stop the rest
+        of the sweep."""
+        rank_name = professions.rank_name(completed["new_rank"])
+        emoji = professions.PROFESSION_EMOJI.get(completed["profession"], "📖")
+        message = (
+            f"{emoji} Your **{completed['profession']}** study is complete — you've advanced "
+            f"to **{rank_name}**! Run `/study` to start your next rank."
+        )
+        try:
+            user = self.bot.get_user(completed["user_id"]) or await self.bot.fetch_user(completed["user_id"])
+            await user.send(message)
+        except discord.HTTPException:
+            pass
 
     async def _announce_tournament_signup_open(self, opened: dict):
         """Best-effort channel ping when maybe_open_tournament auto-opens a fresh signup --
@@ -1931,6 +1964,43 @@ class GameCog(commands.Cog):
         await interaction.response.send_message(
             f"Reset all cooldowns for **{target.display_name}** — mine, gather, explore, battlefield, pvp, rest, meditate, "
             f"manual change, region change, and teach (sect + personal).",
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="grant_profession_rank", description="[Admin] Grant a player ranks in a profession")
+    @app_commands.guilds(GUILD)
+    @app_commands.describe(profession="Which profession to advance", amount="How many ranks to grant (default 1)", member="Player to grant it to (defaults to you)")
+    @app_commands.choices(profession=[app_commands.Choice(name=name, value=name) for name in professions.PROFESSIONS])
+    async def grant_profession_rank(
+        self,
+        interaction: discord.Interaction,
+        profession: app_commands.Choice[str],
+        amount: int = 1,
+        member: Optional[discord.Member] = None,
+    ):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+            return
+        if amount < 1:
+            await interaction.response.send_message("Amount must be at least 1.", ephemeral=True)
+            return
+
+        target = member or interaction.user
+
+        def _do_grant():
+            result = self.game.grant_profession_rank(target.id, target.display_name, profession.value, amount)
+            self.db.log_admin_action(
+                interaction.user.id, interaction.user.display_name,
+                target.id, target.display_name,
+                "grant_profession_rank", f"{profession.value} +{amount} ({professions.rank_name(result['old_rank'])} -> {professions.rank_name(result['new_rank'])})",
+            )
+            return result
+
+        result = await asyncio.to_thread(_do_grant)
+        cap_note = " (capped at Dao Master)" if result["capped"] else ""
+        await interaction.response.send_message(
+            f"Granted **{target.display_name}** {profession.value} rank: "
+            f"**{professions.rank_name(result['old_rank'])}** -> **{professions.rank_name(result['new_rank'])}**{cap_note}.",
             ephemeral=True,
         )
 

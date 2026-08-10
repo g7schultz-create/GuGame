@@ -3925,6 +3925,35 @@ class GameDatabase:
         con.commit()
         con.close()
 
+    def get_players_currently_studying(self) -> list:
+        """Every player with a profession currently being studied — used by GameManager's
+        periodic auto-complete sweep (see GameCog.study_tick) to find who's crossed 100%
+        progress since their last /study check-in, per explicit request that study no longer
+        needs a manual re-run to actually claim the rank-up once it's done."""
+        con = self.connect()
+        rows = con.execute("SELECT * FROM players WHERE studying_profession IS NOT NULL").fetchall()
+        con.close()
+        return [dict(row) for row in rows]
+
+    def add_profession_rank(self, user_id: int, rank_column: str, amount: int, max_rank: int) -> int:
+        """/grant_profession_rank (admin) — flat +amount to rank_column, clamped at max_rank.
+        Deliberately does NOT touch studying_profession/studying_started_ts at all, unlike
+        complete_study, which clears those as part of a study session naturally finishing —
+        an admin grant must never silently cancel unrelated in-progress study. rank_column
+        must be one of professions.RANK_COLUMN's values — never built from raw user input.
+        Returns the new rank index."""
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute(
+            f"UPDATE players SET {rank_column} = MIN({rank_column} + ?, ?) WHERE user_id = ?",
+            (amount, max_rank, user_id),
+        )
+        con.commit()
+        cur.execute(f"SELECT {rank_column} FROM players WHERE user_id = ?", (user_id,))
+        new_rank = cur.fetchone()[rank_column]
+        con.close()
+        return new_rank
+
     # -- Nascent Soul Avatar's /split_body mission (see game/split_body.py) -----------------
     # Same single-pending-job idiom as start_study/complete_study/cancel_study above.
 
