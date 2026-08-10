@@ -1087,7 +1087,7 @@ class GameCog(commands.Cog):
 
     @app_commands.command(
         name="inheritance_ground",
-        description="[Admin] Invite 2-3 others to explore an inheritance ground (or leave both blank to solo-test it yourself)",
+        description="[Admin] Invite 2-3 others into an inheritance ground (leave blank to solo-test)",
     )
     @app_commands.describe(
         member1="First required teammate (leave blank along with member2 to start solo, for testing)",
