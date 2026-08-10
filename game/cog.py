@@ -46,7 +46,9 @@ from .study_view import StudyView
 from .search_view import SearchView
 from .treasure_hunt_view import TreasureHuntView
 from .discovery_view import AbandonDiscoveryView, build_discovery_entry_view
-from .inheritance_ground_view import AbandonInheritanceGroundView, InheritanceGroundLobbyView
+from .inheritance_ground_view import (
+    AbandonInheritanceGroundView, InheritanceGroundLobbyView, InheritanceGroundView, build_intro_image_file,
+)
 from .region_view import RegionView
 from .battlefield_view import BattlefieldView
 from .world_boss_view import WorldBossView
@@ -1006,20 +1008,69 @@ class GameCog(commands.Cog):
         if notice:
             await interaction.followup.send(notice, ephemeral=True)
 
-    @app_commands.command(name="inheritance_ground", description="[Admin] Invite 2-3 others to explore an ancient inheritance ground together (3-4 player team)")
+    @app_commands.command(
+        name="inheritance_ground",
+        description="[Admin] Invite 2-3 others to explore an inheritance ground (or leave both blank to solo-test it yourself)",
+    )
     @app_commands.describe(
-        member1="First required teammate", member2="Second required teammate",
-        member3="Optional 4th teammate",
+        member1="First required teammate (leave blank along with member2 to start solo, for testing)",
+        member2="Second required teammate (leave blank along with member1 to start solo, for testing)",
+        member3="Optional 4th teammate (only used alongside member1/member2)",
     )
     @app_commands.guilds(GUILD)
     async def inheritance_ground(
-        self, interaction: discord.Interaction, member1: discord.Member, member2: discord.Member,
-        member3: Optional[discord.Member] = None,
+        self, interaction: discord.Interaction, member1: Optional[discord.Member] = None,
+        member2: Optional[discord.Member] = None, member3: Optional[discord.Member] = None,
     ):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
             return
         leader = interaction.user
+        # Solo test mode: an admin leaves BOTH member1/member2 blank to skip the invite lobby
+        # entirely and start immediately as a 1-person team -- everything downstream (the bubble
+        # board, battles, Final Trial, betrayal) already tolerates any team size, so this needs
+        # no gameplay changes, just a shortcut around the lobby. Giving exactly one of the two
+        # is ambiguous (a real team invite needs both), so that's refused rather than guessed at.
+        if member1 is None and member2 is None:
+            leader_player = await asyncio.to_thread(self.game.get_player_stats, leader.id, leader.display_name)
+            if not leader_player["character_confirmed"]:
+                await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
+                return
+            if self.game.has_active_inheritance_ground(leader_player):
+                abandon_view = AbandonInheritanceGroundView(leader.id, self.game)
+                await interaction.response.send_message("🗺️ Finish your current inheritance ground run first!", view=abandon_view, ephemeral=True)
+                return
+            remaining = self.game.inheritance_ground_cooldown_remaining(leader_player)
+            if remaining > 0:
+                await interaction.response.send_message(
+                    f"You're still recovering from your last inheritance ground run — try again in **{format_duration(remaining)}**.",
+                    ephemeral=True,
+                )
+                return
+
+            ground_key = "blood_sea_ancestor"  # only one ground exists so far -- see inheritance_ground_data.GROUNDS
+            team = [(leader.id, leader.display_name)]
+            # Constructed directly, NOT via asyncio.to_thread -- see InheritanceGroundLobbyView's
+            # own construction note in inheritance_ground_view.py for why this is a hard rule for
+            # every View/Modal in this codebase.
+            view = InheritanceGroundView(self.game, ground_key, team)
+            await asyncio.to_thread(self.game.start_active_inheritance_ground, [leader.id])
+            embed = await asyncio.to_thread(view.build_embed)
+            file = await asyncio.to_thread(build_intro_image_file, ground_key)
+            if file:
+                await interaction.response.send_message(embed=embed, view=view, file=file)
+            else:
+                await interaction.response.send_message(embed=embed, view=view)
+            view.message = await interaction.original_response()
+            return
+
+        if member1 is None or member2 is None:
+            await interaction.response.send_message(
+                "Pick both `member1` and `member2` for a real team, or leave both blank to start solo for testing.",
+                ephemeral=True,
+            )
+            return
+
         invitees = [member1, member2] + ([member3] if member3 else [])
         if any(m.bot for m in invitees):
             await interaction.response.send_message("You can't invite a bot.", ephemeral=True)

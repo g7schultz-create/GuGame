@@ -29,6 +29,20 @@ BATTLE_ROUND_TIMEOUT_SECONDS = 30  # matches raid.ROUND_TIMEOUT_SECONDS's own pa
 GUARD_DAMAGE_REDUCTION = 0.5  # matches hunt.py/raid.py/battlefield_view.py's own constant
 
 
+def build_intro_image_file(ground_key: str) -> discord.File:
+    """The intro embed's image (see inheritance_ground_data.GROUNDS[...]["intro_image"]) has to
+    be attached as a real discord.File on whichever send/edit call first shows the intro phase --
+    embed.set_image's "attachment://..." URL only resolves against a file attached to THAT SAME
+    message. Shared by InheritanceGroundLobbyView._resolve (team invite flow) and cog.py's solo
+    admin test-start path so the attach logic only lives in one place. Returns None (no image)
+    if the ground has none configured or the file isn't present yet -- every caller degrades
+    gracefully either way, same as build_embed's own os.path.exists guard."""
+    image_path = inheritance_ground_data.GROUNDS[ground_key].get("intro_image")
+    if image_path and os.path.exists(image_path):
+        return discord.File(image_path, filename=os.path.basename(image_path))
+    return None
+
+
 class AbandonInheritanceGroundView(GameView):
     def __init__(self, user_id: int, game):
         super().__init__(timeout=60)
@@ -151,13 +165,8 @@ class InheritanceGroundLobbyView(GameView):
         run_view = InheritanceGroundView(self.game, self.ground_key, team)
         await asyncio.to_thread(self.game.start_active_inheritance_ground, [uid for uid, _ in team])
         embed = await asyncio.to_thread(run_view.build_embed)
-        # The intro's image (see inheritance_ground_data.GROUNDS[...]["intro_image"]) has to be
-        # attached as a real discord.File on THIS send -- embed.set_image's "attachment://..."
-        # URL only resolves against a file attached to that same message. Degrades gracefully
-        # (no image) if the file isn't present -- see build_embed's identical os.path.exists guard.
-        image_path = inheritance_ground_data.GROUNDS[self.ground_key].get("intro_image")
-        if image_path and os.path.exists(image_path):
-            file = discord.File(image_path, filename=os.path.basename(image_path))
+        file = await asyncio.to_thread(build_intro_image_file, self.ground_key)
+        if file:
             await interaction.response.edit_message(embed=embed, view=run_view, attachments=[file])
         else:
             await interaction.response.edit_message(embed=embed, view=run_view)
