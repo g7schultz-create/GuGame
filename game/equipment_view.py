@@ -582,6 +582,14 @@ class EquipmentView(GameView):
         elif self.selected_category:
             cat_label, cat_emoji, _ = CATEGORY_BY_KEY[self.selected_category]
             slot_keys = self._effective_slot_keys(self.selected_category, p)
+            # The legacy "manual" slot (superseded by manual_primary/manual_auxiliary) is
+            # dropped from this summary when it's empty -- almost nobody has anything there
+            # anymore, so an always-"Empty" third line was just noise (per explicit request).
+            # Still shown if a player genuinely has something equipped there (from before the
+            # newer system existed), and still reachable/manageable via the slot picker either
+            # way -- this only trims the summary, not the actual slot.
+            if "manual" in slot_keys and not self.game.get_equipped(self.user_id).get("manual"):
+                slot_keys = [sk for sk in slot_keys if sk != "manual"]
             detail = "\n".join(self._describe_slot(slot_key) for slot_key in slot_keys)
             embed.add_field(name=f"{cat_emoji} {cat_label}", value=detail[:1024], inline=False)
         else:
