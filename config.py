@@ -15,11 +15,15 @@ DB_PATH = os.getenv("DB_PATH", "game.db")
 _world_boss_channel_env = os.getenv("WORLD_BOSS_ANNOUNCE_CHANNEL_ID")
 WORLD_BOSS_ANNOUNCE_CHANNEL_ID = int(_world_boss_channel_env) if _world_boss_channel_env else None
 
-# PvP Tournament announcements (see GameCog.tournament_tick in cog.py) -- optional, same shape
-# as WORLD_BOSS_ANNOUNCE_CHANNEL_ID above; kept as its own separate var rather than reusing the
-# World Boss channel since it's a different audience/cadence.
+# PvP Tournament announcements (see GameCog.tournament_tick in cog.py) -- user's explicit
+# channel, defaulted here rather than left env-only for the same reason
+# WORLD_BOSS_DAMAGE_RANKING_CHANNEL_ID below is: it was given as a specific ID directly, and an
+# unset env var here means results silently never post anywhere (found live 2026-08-09 -- the
+# Railway env never had this var set, so every completed tournament's channel announcement
+# quietly no-opped at the `if TOURNAMENT_ANNOUNCE_CHANNEL_ID is None: return` guard while the DM
+# side kept working fine). Still env-overridable without a code push.
 _tournament_channel_env = os.getenv("TOURNAMENT_ANNOUNCE_CHANNEL_ID")
-TOURNAMENT_ANNOUNCE_CHANNEL_ID = int(_tournament_channel_env) if _tournament_channel_env else None
+TOURNAMENT_ANNOUNCE_CHANNEL_ID = int(_tournament_channel_env) if _tournament_channel_env else 1534388272174862397
 
 # World Boss damage ranking (see GameCog._announce_world_boss_defeat) -- user's explicit
 # channel, defaulted here rather than left env-only since it was given as a specific ID
