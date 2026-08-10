@@ -1245,12 +1245,14 @@ _root_spec(
 # Sun Inheritor Root's Luck Tide / Sovereign Immortal Root's path-settling skip).
 _root_spec(
     "Ancient Solar Spiritual Root", "Unique", ("fire", "sun"),
-    "Solar Ascendance: +15% cultivation speed during the 12 hours of daytime (06:00-18:00 UTC).",
+    "Solar Ascendance: +15% cultivation speed during the 12 hours of daytime (06:00-18:00 UTC) "
+    "-- doubled to +30% if your Dao Companion holds the Ancient Moon Spiritual Root.",
     {}, coherence_tags={"fire": 10, "sun": 10},
 )
 _root_spec(
     "Ancient Moon Spiritual Root", "Unique", ("moon",),
-    "Lunar Ascendance: +15% cultivation speed during the 12 hours of night (18:00-06:00 UTC).",
+    "Lunar Ascendance: +15% cultivation speed during the 12 hours of night (18:00-06:00 UTC) "
+    "-- doubled to +30% if your Dao Companion holds the Ancient Solar Spiritual Root.",
     {}, coherence_tags={"moon": 20},
 )
 
@@ -2079,8 +2081,9 @@ _physique_spec(
 _physique_spec(
     "Heavenly Solar Physique", "Unique", ("fire", "sun", "strength"),
     "Solar Flare: each successful basic Attack this encounter stacks a growing damage bonus, "
-    "+4% per stack, up to +20% at 5 stacks.",
-    {"solar_stack_damage_pct": 0.04},
+    "+4% per stack, up to +20% at 5 stacks. Radiant Ward: in a raid, every OTHER ally fighting "
+    "alongside you gains +12% DEF for as long as you're both still standing.",
+    {"solar_stack_damage_pct": 0.04, "ally_def_aura_pct": 0.12},
 )
 _physique_spec(
     "Twin Gu Sovereign Physique", "Unique", ("qi", "human"),
@@ -2091,8 +2094,10 @@ _physique_spec(
 _physique_spec(
     "Heavenly Lunar Physique", "Unique", ("moon",),
     "Lunar Sunder: each successful basic Attack this encounter further weakens the target's "
-    "defense against you, +5% armor penetration per stack, up to +25% at 5 stacks.",
-    {"lunar_stack_armor_pen_pct": 0.05},
+    "defense against you, +5% armor penetration per stack, up to +25% at 5 stacks. Moonlit "
+    "Cleave: in a raid, your basic Attacks strike every enemy still standing instead of just "
+    "one.",
+    {"lunar_stack_armor_pen_pct": 0.05, "lunar_aoe_attacks": 1},
 )
 # Three more genuinely new one-off Unique mechanics, same allowance as Heavenly Solar/Lunar
 # just above. sunfire_burn_max_hp_pct and retaliation_damage_pct are each consumed by a new

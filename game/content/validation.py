@@ -420,7 +420,9 @@ KNOWN_PHYSIQUE_ONLY_STAT_KEYS = {
     "kill_qi_restore_pct", "flee_reroll_once", "great_realm_vigor_buff_pct",
     # Heavenly Solar/Lunar Physique (Unique) — see hunt.py/raid.py's per-encounter stack
     # counters, feeding combat.resolve_attack's damage_pct_bonus/armor_penetration_pct.
-    "solar_stack_damage_pct", "lunar_stack_armor_pen_pct",
+    # ally_def_aura_pct/lunar_aoe_attacks are raid-only (no meaning in hunt.py's solo fights) —
+    # see RaidView._attacker_stats' ally-scan and _resolve_round's per-attack target list.
+    "solar_stack_damage_pct", "lunar_stack_armor_pen_pct", "ally_def_aura_pct", "lunar_aoe_attacks",
     # Blazing Glory Sunfire / Immovable Mountain Physique (Unique) — see hunt.py/raid.py's
     # new burn-tick state (mirrors Fire Dao Path's own) and retaliation handling (mirrors
     # Iron Skin's own guard-stack shape). Blood Sea Demon Physique's lifesteal_percent/

@@ -1151,11 +1151,25 @@ class GameDatabase:
         # half the day, which doesn't fit the always-on additive stat_bonuses pool
         # effective_qi_rate_bonus reads from, so it's a localized root_name check here instead
         # (same "Unique mechanics check name directly" precedent as Giant Sun Inheritor Root's
-        # Luck Tide -- see character_data.py's own root-spec comment).
-        if player["root_name"] == "Ancient Solar Spiritual Root" and chargen.is_daytime():
-            character_bonus += 0.15
-        elif player["root_name"] == "Ancient Moon Spiritual Root" and not chargen.is_daytime():
-            character_bonus += 0.15
+        # Luck Tide -- see character_data.py's own root-spec comment). Doubled to +30% if this
+        # player's Dao Companion (see dao_companions) holds the OPPOSITE root -- Solar+Moon
+        # paired together, per explicit request -- checked directly via the shared cursor
+        # rather than GameDatabase.get_dao_companion, since that would open a second connection.
+        solar_active = player["root_name"] == "Ancient Solar Spiritual Root" and chargen.is_daytime()
+        moon_active = player["root_name"] == "Ancient Moon Spiritual Root" and not chargen.is_daytime()
+        if solar_active or moon_active:
+            bonus = 0.15
+            opposite_root = "Ancient Moon Spiritual Root" if solar_active else "Ancient Solar Spiritual Root"
+            companion_row = cur.execute(
+                "SELECT partner_a_id, partner_b_id FROM dao_companions WHERE partner_a_id = ? OR partner_b_id = ?",
+                (user_id, user_id),
+            ).fetchone()
+            if companion_row:
+                partner_id = companion_row["partner_b_id"] if companion_row["partner_a_id"] == user_id else companion_row["partner_a_id"]
+                partner_row = cur.execute("SELECT root_name FROM players WHERE user_id = ?", (partner_id,)).fetchone()
+                if partner_row and partner_row["root_name"] == opposite_root:
+                    bonus *= 2
+            character_bonus += bonus
 
         cur.execute("SELECT item_name FROM equipped WHERE user_id = ? AND slot_key = 'manual'", (user_id,))
         manual_row = cur.fetchone()

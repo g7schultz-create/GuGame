@@ -293,6 +293,17 @@ class RaidView(GameView):
                     stats["str_stat"] = round(stats["str_stat"] * (1 + str_bonus))
                 if def_bonus:
                     stats["def_stat"] = round(stats["def_stat"] * (1 + def_bonus))
+        # Heavenly Solar Physique -- every OTHER alive participant (no sect gate, unlike
+        # Formation Soul above -- "every friendly character" per explicit request) with this
+        # physique buffs THIS participant's DEF, always on. Same self-exclusion as Formation
+        # Soul: the holder buffs allies fighting alongside them, not themselves this way.
+        for other_id, other in self.participants.items():
+            if other_id == user_id or other.get("down"):
+                continue
+            def_aura_pct = chargen.get_physique_spec(other.get("physique_name"))
+            def_aura_pct = def_aura_pct.stat_bonuses.get("ally_def_aura_pct", 0) if def_aura_pct else 0
+            if def_aura_pct:
+                stats["def_stat"] = round(stats["def_stat"] * (1 + def_aura_pct))
         # Soul Projection (see avatar.py): Formation Soul's ACTIVE version buffs the caster's
         # own STR/DEF (their ally-targeted passive is the scan just above); Demon Soul's
         # amplified low_hp_atk_bonus folds into the SAME below-50%-HP-gated flat bonus the
@@ -485,120 +496,141 @@ class RaidView(GameView):
             # Gu abilities / Freeze / Soul Projection / Killer Moves count as "technique"
             # damage; a plain Attack is "physical" — see manual_view.EFFECT_LABELS'
             # technique_damage_pct/physical_damage_pct.
-            damage_pct_bonus = (bonuses.get("technique_damage_pct", 0) if (is_gu or is_freeze or is_soul_projection or is_killer_move) else bonuses.get("physical_damage_pct", 0)) + bonuses.get("total_damage_pct", 0)
+            base_damage_pct_bonus = (bonuses.get("technique_damage_pct", 0) if (is_gu or is_freeze or is_soul_projection or is_killer_move) else bonuses.get("physical_damage_pct", 0)) + bonuses.get("total_damage_pct", 0)
             # A Lightning-family root's empower_damage_pct (only on an actually-Empowered
             # attack) and a Fire-family root's battle-Qi trigger (consumed on whichever
             # attack comes next, hit or miss — see _track_battle_qi_spent) — mirrors hunt.py's
             # identical _do_attack handling.
             root_spec = chargen.get_root_spec(p.get("root_name"))
             if action.get("guaranteed"):
-                damage_pct_bonus += self._trait_bonus(p, "empower_damage_pct")
+                base_damage_pct_bonus += self._trait_bonus(p, "empower_damage_pct")
             if p.get("fire_str_pending"):
-                damage_pct_bonus += root_spec.fire_battle_qi_str_bonus_pct
+                base_damage_pct_bonus += root_spec.fire_battle_qi_str_bonus_pct
                 p["fire_str_pending"] = False
-            # A Strength-family root's beast_damage_pct only applies against Beast-type
-            # enemies — the offensive counterpart to Gu's existing beast_damage_reduction_pct.
-            if target.monster.monster_type == "Beast":
-                damage_pct_bonus += self._trait_bonus(p, "beast_damage_pct")
             # Swift Foot-family physique's Momentum (consumed on whichever basic Attack comes
             # next, hit or miss) and Strong Bone-family physique's every-3rd-basic-Attack
             # bonus — both "basic Attack" only, mirrors hunt.py's identical _do_attack.
             lunar_armor_pen = 0.0
             if label == "Attack":
                 if p.get("dodge_momentum_pending"):
-                    damage_pct_bonus += self._trait_bonus(p, "dodge_momentum_str_bonus_pct")
+                    base_damage_pct_bonus += self._trait_bonus(p, "dodge_momentum_str_bonus_pct")
                     p["dodge_momentum_pending"] = False
                 p["attack_count"] = p.get("attack_count", 0) + 1
                 if p["attack_count"] % 3 == 0:
-                    damage_pct_bonus += self._trait_bonus(p, "every_third_attack_bonus_pct")
+                    base_damage_pct_bonus += self._trait_bonus(p, "every_third_attack_bonus_pct")
                 # Heavenly Solar/Lunar Physique -- both read the stack count BEFORE this
                 # attack (grown by prior landed basic Attacks), same "read old count,
                 # increment after a landed hit" order Iron Skin's own guard_stacks uses.
                 # Per-player dict entry (not an instance attribute) since raid tracks several
                 # participants at once -- mirrors guard_stacks/attack_count's own p.get(...) idiom.
-                damage_pct_bonus += self._trait_bonus(p, "solar_stack_damage_pct") * p.get("solar_stacks", 0)
+                base_damage_pct_bonus += self._trait_bonus(p, "solar_stack_damage_pct") * p.get("solar_stacks", 0)
                 lunar_armor_pen = self._trait_bonus(p, "lunar_stack_armor_pen_pct") * p.get("lunar_stacks", 0)
-            # Demon Soul's execute_damage_pct (passive + Soul Projection's amplified delta)
-            # only applies once the target's already below half HP, mirroring hunt.py's
-            # identical caller-side pattern.
-            if target.hp > 0 and target.hp < target.max_hp * 0.5:
-                damage_pct_bonus += bonuses.get("execute_damage_pct", 0) + sp.get("execute_damage_pct", 0)
-            result = combat.resolve_attack(
-                attacker_stats, target.stats(), str_multiplier=str_multiplier,
-                guaranteed_hit=action.get("guaranteed", False),
-                crit_chance_bonus=bonuses.get("crit_chance_pct", 0) + sp.get("crit_chance_pct", 0),
-                crit_damage_bonus=bonuses.get("crit_damage_pct", 0) + sp.get("crit_damage_pct", 0),
-                lifesteal_percent=bonuses.get("lifesteal_percent", 0) + sp.get("lifesteal_percent", 0),
-                damage_pct_bonus=damage_pct_bonus,
-                armor_penetration_pct=bonuses.get("armor_penetration_pct", 0) + sp.get("armor_penetration_pct", 0) + lunar_armor_pen,
-                max_dodge_chance=combat.MONSTER_MAX_DODGE_CHANCE,
-            )
-            if not result.hit:
-                self._log(f"❌ **{p['name']}** uses {label} on {target.monster.name} but misses!")
-                # Moonlight-family physique: the first Gu ability that misses each encounter
-                # refunds half its Qi cost — mirrors hunt.py's identical _on_gu_ability handling.
-                if is_gu and not p.get("gu_miss_refunded"):
-                    refund_pct = self._trait_bonus(p, "gu_miss_qi_refund_pct")
-                    if refund_pct:
-                        p["gu_miss_refunded"] = True
-                        refund = round(action["ability"].qi_cost * refund_pct)
-                        if refund > 0:
-                            p["qi"] = min(p["max_qi"], p["qi"] + refund)
-                            self._persist_qi(user_id, p)
-                            self._log(f"🌙 **{p['name']}**'s miss wasn't a total loss — {refund} Qi flows back.")
-            elif result.dodged:
-                self._log(f"💨 {target.monster.name} dodges **{p['name']}**'s {label}!")
+            # Heavenly Lunar Physique -- basic Attacks hit EVERY alive enemy instead of just
+            # the chosen one, per explicit request. Snapshotted once per action so a kill
+            # mid-volley doesn't retroactively shrink who else gets hit; each target still
+            # gets its own independent hit/dodge/crit roll and damage number below (a real
+            # AOE cleave, not one roll copied to every enemy).
+            if label == "Attack" and self._trait_bonus(p, "lunar_aoe_attacks"):
+                attack_targets = list(alive)
             else:
-                target.hp = max(0, target.hp - result.damage)
-                # Paradise Earth Inheritor Root's Merit needs to know who DIDN'T deal the
-                # most damage this raid — see _on_victory.
-                p["damage_dealt"] = p.get("damage_dealt", 0) + result.damage
-                crit = " (Critical!)" if result.crit else ""
-                heal_text = ""
-                if result.heal:
-                    p["hp"] = min(p["max_hp"], p["hp"] + result.heal)
-                    self._persist_hp(user_id, p)
-                    heal_text = f" 💚 +{result.heal} HP"
-                self._log(f"⚔️ **{p['name']}** hits {target.monster.name} for {result.damage} damage{crit}.{heal_text}")
-                if label == "Attack":
-                    p["solar_stacks"] = min(5, p.get("solar_stacks", 0) + 1)
-                    p["lunar_stacks"] = min(5, p.get("lunar_stacks", 0) + 1)
-                # Fire Dao Path: refreshes (doesn't stack) on every landed hit from ANY
-                # Fire-path participant -- see the Phase 1.5 tick loop below for where this
-                # actually deals damage, once per round.
-                fire_burn_pct = bonuses.get("fire_burn_damage_pct", 0)
-                if fire_burn_pct > 0 and target.hp > 0:
-                    tick_damage = dao_paths.fire_burn_tick_damage(result.damage, fire_burn_pct)
-                    if tick_damage > 0:
-                        target.burn_damage_per_tick = tick_damage
-                        target.burn_ticks_remaining = dao_paths.FIRE_BURN_TICKS
-                        self._log(f"🔥 **{p['name']}**'s flames catch hold of {target.monster.name}!")
-                # Blazing Glory Sunfire Physique: same "refreshes, doesn't stack" shape as Fire
-                # Dao Path's burn above, but sized off the target's max HP rather than this
-                # hit's damage -- a separate, independently-ticking burn source (Phase 1.5).
-                sunfire_pct = self._trait_bonus(p, "sunfire_burn_max_hp_pct")
-                if sunfire_pct > 0 and target.hp > 0:
-                    total_burn = round(target.max_hp * sunfire_pct)
-                    tick_damage = max(1, round(total_burn / dao_paths.FIRE_BURN_TICKS))
-                    target.sunfire_burn_damage_per_tick = tick_damage
-                    target.sunfire_burn_ticks_remaining = dao_paths.FIRE_BURN_TICKS
-                    self._log(f"☀️ **{p['name']}**'s sunfire catches hold of {target.monster.name}!")
-                if target.hp <= 0:
-                    self._log(f"💥 {target.monster.name} is defeated!")
-                    if target is self.enemies[0] and self.charge_target_id is not None:
-                        self.charge_target_id = None
-                        self._log(f"⚡ {target.monster.name}'s charging attack collapses along with it!")
-                    # Phoenix Feather-family physique: "defeating an enemy restores battle Qi".
-                    kill_qi_restore_pct = self._trait_bonus(p, "kill_qi_restore_pct")
-                    if kill_qi_restore_pct:
-                        restored = round(p["max_qi"] * kill_qi_restore_pct)
-                        if restored > 0:
-                            p["qi"] = min(p["max_qi"], p["qi"] + restored)
-                            self._persist_qi(user_id, p)
-                            self._log(f"🔥 **{p['name']}**'s kill rekindles {restored} battle Qi.")
-                elif is_freeze and random.random() < FREEZE_PROC_CHANCE:
-                    target.frozen_rounds = max(target.frozen_rounds, 1)
-                    self._log(f"❄️ {target.monster.name} is frozen solid and will miss its next attack!")
+                attack_targets = [target]
+            any_hit_landed = False
+            for target in attack_targets:
+                if not target.alive:
+                    continue
+                damage_pct_bonus = base_damage_pct_bonus
+                # A Strength-family root's beast_damage_pct only applies against Beast-type
+                # enemies — the offensive counterpart to Gu's existing beast_damage_reduction_pct.
+                if target.monster.monster_type == "Beast":
+                    damage_pct_bonus += self._trait_bonus(p, "beast_damage_pct")
+                # Demon Soul's execute_damage_pct (passive + Soul Projection's amplified delta)
+                # only applies once the target's already below half HP, mirroring hunt.py's
+                # identical caller-side pattern.
+                if target.hp > 0 and target.hp < target.max_hp * 0.5:
+                    damage_pct_bonus += bonuses.get("execute_damage_pct", 0) + sp.get("execute_damage_pct", 0)
+                result = combat.resolve_attack(
+                    attacker_stats, target.stats(), str_multiplier=str_multiplier,
+                    guaranteed_hit=action.get("guaranteed", False),
+                    crit_chance_bonus=bonuses.get("crit_chance_pct", 0) + sp.get("crit_chance_pct", 0),
+                    crit_damage_bonus=bonuses.get("crit_damage_pct", 0) + sp.get("crit_damage_pct", 0),
+                    lifesteal_percent=bonuses.get("lifesteal_percent", 0) + sp.get("lifesteal_percent", 0),
+                    damage_pct_bonus=damage_pct_bonus,
+                    armor_penetration_pct=bonuses.get("armor_penetration_pct", 0) + sp.get("armor_penetration_pct", 0) + lunar_armor_pen,
+                    max_dodge_chance=combat.MONSTER_MAX_DODGE_CHANCE,
+                )
+                if not result.hit:
+                    self._log(f"❌ **{p['name']}** uses {label} on {target.monster.name} but misses!")
+                    # Moonlight-family physique: the first Gu ability that misses each encounter
+                    # refunds half its Qi cost — mirrors hunt.py's identical _on_gu_ability handling.
+                    if is_gu and not p.get("gu_miss_refunded"):
+                        refund_pct = self._trait_bonus(p, "gu_miss_qi_refund_pct")
+                        if refund_pct:
+                            p["gu_miss_refunded"] = True
+                            refund = round(action["ability"].qi_cost * refund_pct)
+                            if refund > 0:
+                                p["qi"] = min(p["max_qi"], p["qi"] + refund)
+                                self._persist_qi(user_id, p)
+                                self._log(f"🌙 **{p['name']}**'s miss wasn't a total loss — {refund} Qi flows back.")
+                elif result.dodged:
+                    self._log(f"💨 {target.monster.name} dodges **{p['name']}**'s {label}!")
+                else:
+                    any_hit_landed = True
+                    target.hp = max(0, target.hp - result.damage)
+                    # Paradise Earth Inheritor Root's Merit needs to know who DIDN'T deal the
+                    # most damage this raid — see _on_victory.
+                    p["damage_dealt"] = p.get("damage_dealt", 0) + result.damage
+                    crit = " (Critical!)" if result.crit else ""
+                    heal_text = ""
+                    if result.heal:
+                        p["hp"] = min(p["max_hp"], p["hp"] + result.heal)
+                        self._persist_hp(user_id, p)
+                        heal_text = f" 💚 +{result.heal} HP"
+                    self._log(f"⚔️ **{p['name']}** hits {target.monster.name} for {result.damage} damage{crit}.{heal_text}")
+                    # Fire Dao Path: refreshes (doesn't stack) on every landed hit from ANY
+                    # Fire-path participant -- see the Phase 1.5 tick loop below for where this
+                    # actually deals damage, once per round.
+                    fire_burn_pct = bonuses.get("fire_burn_damage_pct", 0)
+                    if fire_burn_pct > 0 and target.hp > 0:
+                        tick_damage = dao_paths.fire_burn_tick_damage(result.damage, fire_burn_pct)
+                        if tick_damage > 0:
+                            target.burn_damage_per_tick = tick_damage
+                            target.burn_ticks_remaining = dao_paths.FIRE_BURN_TICKS
+                            self._log(f"🔥 **{p['name']}**'s flames catch hold of {target.monster.name}!")
+                    # Blazing Glory Sunfire Physique: same "refreshes, doesn't stack" shape as Fire
+                    # Dao Path's burn above, but sized off the target's max HP rather than this
+                    # hit's damage -- a separate, independently-ticking burn source (Phase 1.5).
+                    sunfire_pct = self._trait_bonus(p, "sunfire_burn_max_hp_pct")
+                    if sunfire_pct > 0 and target.hp > 0:
+                        total_burn = round(target.max_hp * sunfire_pct)
+                        tick_damage = max(1, round(total_burn / dao_paths.FIRE_BURN_TICKS))
+                        target.sunfire_burn_damage_per_tick = tick_damage
+                        target.sunfire_burn_ticks_remaining = dao_paths.FIRE_BURN_TICKS
+                        self._log(f"☀️ **{p['name']}**'s sunfire catches hold of {target.monster.name}!")
+                    if target.hp <= 0:
+                        self._log(f"💥 {target.monster.name} is defeated!")
+                        if target is self.enemies[0] and self.charge_target_id is not None:
+                            self.charge_target_id = None
+                            self._log(f"⚡ {target.monster.name}'s charging attack collapses along with it!")
+                        # Phoenix Feather-family physique: "defeating an enemy restores battle
+                        # Qi" -- fires once per kill even within one AOE volley (each defeat is
+                        # its own event), unlike the stack growth below which is once per action.
+                        kill_qi_restore_pct = self._trait_bonus(p, "kill_qi_restore_pct")
+                        if kill_qi_restore_pct:
+                            restored = round(p["max_qi"] * kill_qi_restore_pct)
+                            if restored > 0:
+                                p["qi"] = min(p["max_qi"], p["qi"] + restored)
+                                self._persist_qi(user_id, p)
+                                self._log(f"🔥 **{p['name']}**'s kill rekindles {restored} battle Qi.")
+                    elif is_freeze and random.random() < FREEZE_PROC_CHANCE:
+                        target.frozen_rounds = max(target.frozen_rounds, 1)
+                        self._log(f"❄️ {target.monster.name} is frozen solid and will miss its next attack!")
+            # Heavenly Solar/Lunar Physique stack growth -- ONCE per action if at least one
+            # target was hit, never once per target, so a Lunar Physique AOE swing that lands
+            # on several enemies at once doesn't grow stacks several times faster than a
+            # normal single-target attacker.
+            if label == "Attack" and any_hit_landed:
+                p["solar_stacks"] = min(5, p.get("solar_stacks", 0) + 1)
+                p["lunar_stacks"] = min(5, p.get("lunar_stacks", 0) + 1)
 
         # Phase 1.5: Fire Dao Path burn ticks -- once per round, for every enemy with an
         # active burn (seeded by a landed hit somewhere in Phase 1 above), independent of
@@ -1413,13 +1445,14 @@ class RaidView(GameView):
         self.clear_items()
         active = self.status == "fighting"
         # Joining closes once the raid actually starts (see _on_join's own comment) -- the
-        # button reflects that directly instead of staying enabled and only refusing after
-        # the click.
+        # button is removed entirely once fighting begins (not just disabled), so it's
+        # UI-invisible rather than a dead greyed-out control to click on.
         can_join = self.status == "starting"
 
-        join_button = discord.ui.Button(label="Join Raid", emoji="🙋", style=discord.ButtonStyle.primary, row=0, disabled=not can_join)
-        join_button.callback = self._on_join
-        self.add_item(join_button)
+        if can_join:
+            join_button = discord.ui.Button(label="Join Raid", emoji="🙋", style=discord.ButtonStyle.primary, row=0)
+            join_button.callback = self._on_join
+            self.add_item(join_button)
 
         if self.status == "starting":
             start_button = discord.ui.Button(
