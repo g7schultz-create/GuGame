@@ -75,20 +75,6 @@ class GameManager:
             player = self.db.get_or_create_player(user_id, name)
             if player["primeval_essence"] >= self.db.get_effective_max_essence(user_id):
                 return False, "Your primeval essence is already full — no crystals were used."
-        # Cultivation Boost Pills stack their timer/bonus onto an already-active buff of the
-        # SAME item (see GameDatabase.add_or_extend_cultivation_boost_buff), but a lower-tier
-        # pill must never be able to extend a higher-tier buff — per explicit request, that'd
-        # let a trickle of cheap Tier 1 pills keep an expensive Tier 7 buff alive forever.
-        # Checked (and refused) BEFORE removal, same convention as the Primeval Essence Crystal
-        # check above, so a refused pill is never actually consumed.
-        if item_name.startswith("Cultivation Boost Pill"):
-            requested_tier = items.parse_pill_tier(item_name)
-            active_tier = self.db.get_active_cultivation_boost_tier(user_id)
-            if requested_tier is not None and active_tier is not None and requested_tier < active_tier:
-                return False, (
-                    f"Your Cultivation Boost buff is already Tier {active_tier} — a Tier {requested_tier} "
-                    f"pill is too weak to extend it. Use a Tier {active_tier}+ pill instead."
-                )
         # Food Dao Path: a scaled chance the Pill isn't actually consumed by this use. Rolled
         # before removal so a "saved" pill never even leaves the inventory (item.use's effect
         # still fires normally either way) -- but ownership still has to be checked either way,

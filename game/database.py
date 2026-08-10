@@ -1430,84 +1430,44 @@ class GameDatabase:
         con.commit()
         con.close()
 
-    @staticmethod
-    def _parse_cultivation_boost_tier(name: str) -> Optional[int]:
-        """Duplicated (not imported) from items.parse_pill_tier -- items.py already imports
-        FROM this module, so importing back would be circular. Recovers the tier from a
-        Cultivation Boost buff row's own stored name ("Cultivation Boost Pill (T{tier})")."""
-        if name and name.endswith(")") and " (T" in name:
-            tier_part = name.rsplit(" (T", 1)[1][:-1]
-            if tier_part.isdigit():
-                return int(tier_part)
-        return None
-
-    def get_active_cultivation_boost_tier(self, user_id: int) -> Optional[int]:
-        """The highest tier that's ever contributed to the player's CURRENTLY active
-        Cultivation Boost buff (see add_or_extend_cultivation_boost_buff's own "never
-        downgrade the stored name" rule below), or None if no such buff is active right now.
-        GameManager.use_item checks this BEFORE removing a pill from inventory, to refuse a
-        lower-tier pill from extending a higher-tier buff -- per explicit request ("any tier
-        of pill does not extend higher pill tier buffs")."""
-        con = self.connect()
-        row = con.execute(
-            "SELECT name FROM buffs WHERE user_id = ? AND name LIKE 'Cultivation Boost Pill%' AND expires_at > ?",
-            (user_id, int(time.time())),
-        ).fetchone()
-        con.close()
-        return self._parse_cultivation_boost_tier(row["name"]) if row else None
-
-    def add_or_extend_cultivation_boost_buff(self, user_id: int, name: str, tier: int, qi_multiplier_bonus: float, duration_seconds: int):
-        """Cultivation Boost pills stack differently from every other buff source: using
-        another one while a Cultivation Boost buff (any tier) is already active EXTENDS its
-        remaining time by this pill's own duration, consolidating into ONE row instead of a
-        separate independently-expiring buff -- per explicit request ("the timer goes up").
-        The BONUS itself does not stack on top -- per explicit follow-up request ("i want
-        the qi bonus to be the same as one pill just extend the time on using multiple"), it
-        stays pinned to whatever a single pill of the highest tier used grants, same as the
-        stored name never downgrades below the highest tier used (see
-        get_active_cultivation_boost_tier). Every other buff source (Killer Moves, Epic
-        Physique's post-breakthrough vigor, etc.) keeps add_buff's original
-        always-insert-a-new-row, always-additive behavior, untouched.
-
-        A STRICTLY HIGHER tier pill does NOT add its duration on top of whatever time was
-        left on the weaker buff -- per explicit follow-up request, that let a Tier 1 pill
-        eaten right before a Tier 2 pill produce MORE total buffed time than a single Tier 2
-        pill by itself (leftover Tier 1 time + a full fresh Tier 2 duration). Instead it
-        resets the timer to its own full duration from right now, same as if no buff had
-        been active at all -- the stronger pill fully replaces the weaker one. A SAME-tier
-        pill still only extends (adds), unchanged from the paragraph above.
-
-        The actual "a lower tier can't extend a higher tier" gate lives in GameManager.use_item
-        (it has to run BEFORE the pill leaves inventory, which this method has no visibility
-        into). Returns (new_total_bonus, new_total_remaining_seconds)."""
+    def add_or_extend_cultivation_boost_buff(self, user_id: int, name: str, qi_multiplier_bonus: float, duration_seconds: int):
+        """Cultivation Boost pills stack per-TIER, not globally -- per explicit request, a
+        player can have every tier's buff (T1 through T7) running at once, each contributing
+        its own qi_multiplier_bonus. _qi_rate_components already sums qi_multiplier_bonus
+        across EVERY active buff row unconditionally, and the Active Buffs displays (cog.py's
+        /qi and /cd, views.py's ProfileView) already group by the buff's own `name` -- since
+        `name` already encodes the tier (see items.alchemy_pill_name, "Cultivation Boost Pill
+        (T{tier})"), tiers naturally render as separate lines with zero display changes needed.
+        This method's only job is per-tier consolidation: using ANOTHER pill of the SAME tier
+        while that tier's buff is already active EXTENDS its remaining time by this pill's own
+        duration rather than starting a second independently-expiring row for that same tier
+        -- per the original "the timer goes up" request, now scoped to one tier at a time
+        instead of any Cultivation Boost Pill. A different tier never touches this tier's row
+        at all (or vice versa) -- no cross-tier interaction of any kind anymore. Returns
+        (qi_multiplier_bonus, new_total_remaining_seconds)."""
         con = self.connect()
         cur = con.cursor()
         now = int(time.time())
         cur.execute(
-            "SELECT id, name, qi_multiplier_bonus, expires_at FROM buffs WHERE user_id = ? AND name LIKE 'Cultivation Boost Pill%' AND expires_at > ?",
-            (user_id, now),
+            "SELECT id, expires_at FROM buffs WHERE user_id = ? AND name = ? AND expires_at > ?",
+            (user_id, name, now),
         )
         existing = cur.fetchone()
         if existing:
-            existing_tier = self._parse_cultivation_boost_tier(existing["name"]) or 0
-            upgrading = tier >= existing_tier
-            new_bonus = qi_multiplier_bonus if upgrading else existing["qi_multiplier_bonus"]
-            new_expires_at = now + duration_seconds if tier > existing_tier else existing["expires_at"] + duration_seconds
-            new_name = name if upgrading else existing["name"]
+            new_expires_at = existing["expires_at"] + duration_seconds
             cur.execute(
-                "UPDATE buffs SET name = ?, qi_multiplier_bonus = ?, expires_at = ? WHERE id = ?",
-                (new_name, new_bonus, new_expires_at, existing["id"]),
+                "UPDATE buffs SET qi_multiplier_bonus = ?, expires_at = ? WHERE id = ?",
+                (qi_multiplier_bonus, new_expires_at, existing["id"]),
             )
         else:
-            new_bonus = qi_multiplier_bonus
             new_expires_at = now + duration_seconds
             cur.execute(
                 "INSERT INTO buffs (user_id, name, qi_multiplier_bonus, expires_at) VALUES (?, ?, ?, ?)",
-                (user_id, name, new_bonus, new_expires_at),
+                (user_id, name, qi_multiplier_bonus, new_expires_at),
             )
         con.commit()
         con.close()
-        return new_bonus, new_expires_at - now
+        return qi_multiplier_bonus, new_expires_at - now
 
     def get_active_combat_buff_totals(self, user_id: int) -> dict:
         """Summed flat str/atk/def/spd bonuses from currently-active buffs (e.g. Epic

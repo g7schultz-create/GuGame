@@ -232,12 +232,13 @@ def _use_cultivation_boost_pill(tier: int):
         bonus = CULTIVATION_BOOST_PILL_MULTIPLIER_PER_TIER * tier
         duration = CULTIVATION_BOOST_PILL_DURATION_SECONDS_BASE + CULTIVATION_BOOST_PILL_DURATION_SECONDS_PER_TIER * tier
         total_bonus, total_remaining = db.add_or_extend_cultivation_boost_buff(
-            user_id, alchemy_pill_name("Cultivation Boost", tier), tier, bonus, duration,
+            user_id, alchemy_pill_name("Cultivation Boost", tier), bonus, duration,
         )
         if total_remaining > duration:
-            # Stacked onto an already-active Cultivation Boost buff -- only the timer goes
-            # up (never the bonus itself, which stays pinned to the strongest single pill
-            # tier used so far) so repeated pill use can't snowball the multiplier.
+            # Stacked onto an already-active buff of this SAME tier -- only the timer goes up
+            # (the bonus is identical either way, since same-tier pills always grant the same
+            # amount). A different tier is a completely separate, independently-timed buff --
+            # see GameDatabase.add_or_extend_cultivation_boost_buff's own docstring.
             return (
                 f"A wave of vigor floods your meridians — your **+{total_bonus:.2f} qi multiplier** buff "
                 f"is extended to **{total_remaining // 60} minutes** remaining!"
@@ -333,16 +334,6 @@ ALCHEMY_PILL_TYPES = list(_ALCHEMY_PILL_USE_FACTORIES.keys())
 
 def alchemy_pill_name(pill_type: str, tier: int) -> str:
     return f"{pill_type} Pill (T{tier})"
-
-
-def parse_pill_tier(item_name: str) -> Optional[int]:
-    """Reverses alchemy_pill_name — recovers the tier from a crafted pill's own display name
-    ("{pill_type} Pill (T{tier})"), or None if it doesn't match that shape at all."""
-    if item_name.endswith(")") and " (T" in item_name:
-        tier_part = item_name.rsplit(" (T", 1)[1][:-1]
-        if tier_part.isdigit():
-            return int(tier_part)
-    return None
 
 
 for _pill_type in ALCHEMY_PILL_TYPES:
