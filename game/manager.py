@@ -5127,8 +5127,15 @@ class GameManager:
 
     def resolve_tournament_if_ready(self) -> Optional[dict]:
         """Idempotent check-and-act, called by the tick loop AND opportunistically by
-        join_tournament (mirrors maybe_spawn_world_boss's "also called from player-facing
-        commands" pattern). Returns a summary dict to announce/DM, or None if nothing changed."""
+        join_tournament/get_tournament_status (mirrors maybe_spawn_world_boss's "also called
+        from player-facing commands" pattern) -- so whichever happens first, a player running
+        /tournament or /cd or the 5-minute tick, is the one that actually flips a
+        signup/running tournament to completed/cancelled. Returns a summary dict to
+        announce/DM, or None if nothing changed. IMPORTANT: the direct return value is only
+        ever consumed by the tick loop's own immediate call, and every non-tick caller
+        discards it -- announcing/DMing must NOT be wired to this return value alone (see
+        get_pending_tournament_announcements, which is what actually guarantees an announcement
+        regardless of which caller was the one that resolved it)."""
         now = int(time.time())
         active = self.db.get_active_tournament()
         if active is None:
@@ -5147,6 +5154,38 @@ class GameManager:
             # state alone, nothing in-memory to have lost.
             return self._run_and_complete_tournament(active["tournament_id"], self.db.get_tournament_participants(active["tournament_id"]))
         return None
+
+    def get_pending_tournament_announcements(self) -> list:
+        """The single choke point GameCog.tournament_tick uses to decide what to post/DM --
+        NOT resolve_tournament_if_ready's own return value. Fixes a real bug: resolve_tournament_
+        if_ready is also called opportunistically by join_tournament and get_tournament_status
+        (i.e. by an ordinary player running /tournament, /cd, or hitting Join), so a tournament
+        could -- and in practice regularly did -- get resolved by one of THOSE calls in the gap
+        between two ticks. Those callers discard the return value, so the tournament finished
+        with rewards silently granted but zero channel post and zero placement DMs. Settles
+        anything overdue first (same as before), then returns every completed/cancelled
+        tournament that hasn't been marked announced yet, in the same shape
+        resolve_tournament_if_ready's own return value used -- caller must call
+        mark_tournament_announced on each one once it's actually posted, so a tournament is
+        never announced twice even if this is called again before that happens."""
+        self.resolve_tournament_if_ready()
+        pending = []
+        for row in self.db.get_unannounced_tournament_results():
+            if row["status"] == "completed":
+                pending.append({
+                    "outcome": "completed", "tournament_id": row["tournament_id"],
+                    "placements": row["result_log"]["placements"],
+                })
+            else:
+                participant_count = len(self.db.get_tournament_participants(row["tournament_id"]))
+                pending.append({
+                    "outcome": "cancelled", "tournament_id": row["tournament_id"],
+                    "participant_count": participant_count,
+                })
+        return pending
+
+    def mark_tournament_announced(self, tournament_id: int):
+        self.db.mark_tournament_announced(tournament_id)
 
     def get_tournament_status(self) -> tuple:
         """(phase, row) -- phase is 'none'/'signup'/'running'/'completed_recent'. Settles

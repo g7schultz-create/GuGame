@@ -263,22 +263,25 @@ class GameCog(commands.Cog):
                 pass
 
     # PvP Tournament countdown/resolution scheduler (see game/tournament.py / /tournament) --
-    # same 5-minute cadence as the other two loops; GameManager.resolve_tournament_if_ready and
-    # maybe_open_tournament are both idempotent (return None/falsy when nothing needs to
-    # change), so calling them this often is cheap. resolve_tournament_if_ready fires the
-    # actual battle royale every 4 hours (TOURNAMENT_SIGNUP_SECONDS); maybe_open_tournament
-    # immediately reopens a fresh signup right after (TOURNAMENT_COOLDOWN_SECONDS is 0), so
-    # signup stays open continuously between one tournament and the next, mirroring
-    # world_boss_tick's own auto-respawn shape.
+    # same 5-minute cadence as the other two loops. GameManager.get_pending_tournament_
+    # announcements (NOT resolve_tournament_if_ready's own return value -- see its docstring)
+    # is what actually guarantees a post/DM even when a player's own /tournament, /cd, or Join
+    # action was the thing that resolved the tournament in the gap between two ticks, instead
+    # of this loop. maybe_open_tournament is idempotent (returns falsy when nothing needs to
+    # change), so calling it this often is cheap; it immediately reopens a fresh signup right
+    # after a tournament ends (TOURNAMENT_COOLDOWN_SECONDS is 0), so signup stays open
+    # continuously between one tournament and the next, mirroring world_boss_tick's own
+    # auto-respawn shape.
     TOURNAMENT_TICK_INTERVAL_SECONDS = 300
 
     @tasks.loop(seconds=TOURNAMENT_TICK_INTERVAL_SECONDS)
     async def tournament_tick(self):
-        result = await asyncio.to_thread(self.game.resolve_tournament_if_ready)
-        if result and result["outcome"] == "completed":
-            await self._announce_tournament_result(result)
-        elif result and result["outcome"] == "cancelled":
-            await self._announce_tournament_cancelled(result)
+        for result in await asyncio.to_thread(self.game.get_pending_tournament_announcements):
+            if result["outcome"] == "completed":
+                await self._announce_tournament_result(result)
+            else:
+                await self._announce_tournament_cancelled(result)
+            await asyncio.to_thread(self.game.mark_tournament_announced, result["tournament_id"])
         opened = await asyncio.to_thread(self.game.maybe_open_tournament)
         if opened:
             await self._announce_tournament_signup_open(opened)

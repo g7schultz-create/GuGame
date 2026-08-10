@@ -837,9 +837,20 @@ class GameDatabase:
             signup_ends_ts INTEGER,
             started_ts INTEGER DEFAULT NULL,
             ended_ts INTEGER DEFAULT NULL,
-            result_log TEXT DEFAULT NULL
+            result_log TEXT DEFAULT NULL,
+            announced_ts INTEGER DEFAULT NULL
         )
         """)
+        tournament_columns = {row[1] for row in cur.execute("PRAGMA table_info(tournament)").fetchall()}
+        if "announced_ts" not in tournament_columns:
+            cur.execute("ALTER TABLE tournament ADD COLUMN announced_ts INTEGER DEFAULT NULL")
+            # Backfill so this migration doesn't retroactively re-announce every tournament
+            # that already finished before announced_ts existed -- see
+            # GameManager.get_pending_tournament_announcements's own docstring for why this
+            # column exists at all (a player's /tournament, /cd, or join action can resolve a
+            # tournament via resolve_tournament_if_ready() before the tick loop gets to it,
+            # which used to mean it finished with zero channel post and zero DMs).
+            cur.execute("UPDATE tournament SET announced_ts = COALESCE(ended_ts, 0) WHERE status IN ('completed', 'cancelled') AND announced_ts IS NULL")
 
         # One row per (tournament, signed-up player) -- unlike world_boss_damage's running
         # contribution total, snapshot is written ONCE at signup and never updated again (the
@@ -2093,6 +2104,24 @@ class GameDatabase:
             "UPDATE tournament SET status = 'cancelled', ended_ts = ? WHERE tournament_id = ?",
             (int(time.time()), tournament_id),
         )
+        con.commit()
+        con.close()
+
+    def get_unannounced_tournament_results(self) -> list:
+        """Every completed/cancelled tournament that hasn't been posted/DMed yet -- see
+        GameManager.get_pending_tournament_announcements's docstring for why a tournament can
+        finish without the tick loop being the one that resolved it."""
+        con = self.connect()
+        rows = con.execute(
+            "SELECT * FROM tournament WHERE status IN ('completed', 'cancelled') AND announced_ts IS NULL "
+            "ORDER BY tournament_id ASC"
+        ).fetchall()
+        con.close()
+        return [self._tournament_row_to_dict(row) for row in rows]
+
+    def mark_tournament_announced(self, tournament_id: int):
+        con = self.connect()
+        con.execute("UPDATE tournament SET announced_ts = ? WHERE tournament_id = ?", (int(time.time()), tournament_id))
         con.commit()
         con.close()
 
