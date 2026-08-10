@@ -1620,6 +1620,32 @@ class GameManager:
             return
         self.db.add_dao_marks(user_id, dao_paths.random_activity_marks())
 
+    def backfill_dao_marks_for_all_players(self) -> list:
+        """/backfill_dao_marks (admin, one-time) -- Spirit Severing/Dao Seeking/Ancient Realm's
+        per-breakthrough Dao Marks lump sum (see dao_paths.breakthrough_marks) only ever fires
+        going forward from attempt_breakthrough; a player who already crossed one or more of
+        those substages before this existed (or before Dao Seeking/Ancient Realm were added to
+        it) never got that grant. This walks every not-yet-backfilled confirmed player's
+        history from realm_index 1 up to their CURRENT realm_index, rolling
+        breakthrough_marks fresh for every qualifying stage they've already reached (same
+        distribution they'd have gotten at the time, just rolled now), sums it into one grant,
+        and marks them backfilled either way (even a 0-mark player, e.g. still below Spirit
+        Severing, so this never re-scans them). Returns [{"user_id", "name", "marks_granted"},
+        ...] for every player who actually received marks, for the caller to report."""
+        granted = []
+        for player in self.db.get_players_pending_dao_marks_backfill():
+            total = 0
+            for stage_index in range(1, player["realm_index"] + 1):
+                stage = realms.STAGES[stage_index]
+                marks = dao_paths.breakthrough_marks(stage.great_realm_name, stage.substage_name)
+                if marks:
+                    total += marks
+            if total > 0:
+                self.db.add_dao_marks(player["user_id"], total)
+                granted.append({"user_id": player["user_id"], "name": player["name"], "marks_granted": total})
+            self.db.mark_dao_marks_backfill_applied(player["user_id"])
+        return granted
+
     def allocate_dao_marks(self, user_id: int, path_name: str, amount: int):
         """Moves `amount` Dao Marks from the banked pool into `path_name` — permanently; see
         GameDatabase.allocate_dao_marks, the only place this can fail (not enough banked, or it

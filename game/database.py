@@ -315,6 +315,12 @@ class GameDatabase:
         # from a path once spent (see GameDatabase.allocate_dao_marks).
         "dao_marks_banked": "INTEGER DEFAULT 0",
         "dao_path_marks": "TEXT DEFAULT NULL",
+        # Guards GameManager.backfill_dao_marks_for_all_players (the retroactive one-time grant
+        # for breakthroughs completed before Spirit Severing/Dao Seeking/Ancient Realm's own
+        # dao_paths.breakthrough_marks lump sums existed for them) -- 0 until backfilled, then 1
+        # forever, so /backfill_dao_marks is safe to run more than once by accident without
+        # double-granting anyone.
+        "dao_marks_backfill_applied": "INTEGER DEFAULT 0",
         # Transformation path's /transmute daily charges -- same UTC-date-string reset idiom as
         # last_fatal_hit_negated_date above, except this tracks a use COUNT against the day
         # rather than a single yes/no flag, since charges scale 1-5/day with marks invested.
@@ -3839,6 +3845,22 @@ class GameDatabase:
     def add_dao_marks(self, user_id: int, amount: int):
         con = self.connect()
         con.execute("UPDATE players SET dao_marks_banked = dao_marks_banked + ? WHERE user_id = ?", (amount, user_id))
+        con.commit()
+        con.close()
+
+    def get_players_pending_dao_marks_backfill(self) -> list:
+        """Every confirmed player who hasn't been through /backfill_dao_marks yet -- see
+        dao_marks_backfill_applied's own column comment."""
+        con = self.connect()
+        rows = con.execute(
+            "SELECT * FROM players WHERE character_confirmed = 1 AND dao_marks_backfill_applied = 0"
+        ).fetchall()
+        con.close()
+        return [dict(row) for row in rows]
+
+    def mark_dao_marks_backfill_applied(self, user_id: int):
+        con = self.connect()
+        con.execute("UPDATE players SET dao_marks_backfill_applied = 1 WHERE user_id = ?", (user_id,))
         con.commit()
         con.close()
 

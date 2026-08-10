@@ -2060,6 +2060,38 @@ class GameCog(commands.Cog):
             ephemeral=True,
         )
 
+    @app_commands.command(name="backfill_dao_marks", description="[Admin, one-time] Retroactively grant Dao Marks for breakthroughs already completed")
+    @app_commands.guilds(GUILD)
+    async def backfill_dao_marks(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+            return
+        # Iterates every confirmed player -- defer BEFORE the loop, not after (see the Use All/
+        # Make All "Unknown interaction" fix: a chain of DB work across many players can easily
+        # exceed Discord's ~3s ACK window).
+        await interaction.response.defer(ephemeral=True)
+
+        granted = await asyncio.to_thread(self.game.backfill_dao_marks_for_all_players)
+        total_marks = sum(g["marks_granted"] for g in granted)
+        self.db.log_admin_action(
+            interaction.user.id, interaction.user.display_name,
+            interaction.user.id, "everyone",
+            "backfill_dao_marks", f"{len(granted)} players granted, {total_marks:,} total marks",
+        )
+
+        if not granted:
+            await interaction.followup.send("No players needed a backfill (everyone was already covered, or nobody's reached Spirit Severing yet).", ephemeral=True)
+            return
+
+        top = sorted(granted, key=lambda g: -g["marks_granted"])[:10]
+        top_lines = [f"**{g['name']}**: {g['marks_granted']:,} marks" for g in top]
+        more_note = f"\n...and {len(granted) - 10} more." if len(granted) > 10 else ""
+        await interaction.followup.send(
+            f"Backfilled **{len(granted)}** player(s), **{total_marks:,}** total Dao Marks granted.\n"
+            f"Top recipients:\n" + "\n".join(top_lines) + more_note,
+            ephemeral=True,
+        )
+
     @app_commands.command(name="audit_log", description="[Admin] Review recent /grant_item, /grant_stones, and /reset_cooldowns activity")
     @app_commands.guilds(GUILD)
     @app_commands.describe(member="Only show entries granted TO this player (defaults to everyone)", limit="How many entries to show (default 20, max 50)")
