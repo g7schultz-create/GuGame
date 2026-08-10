@@ -122,13 +122,48 @@ class GameManager:
             message += " 🍲 Your Food Dao Path saves the pill — it wasn't consumed!"
         return True, message
 
-    def use_item_multiple(self, user_id: int, name: str, item_name: str, quantity: int):
+    def use_item_multiple(self, user_id: int, name: str, item_name: str, quantity: int, until_stack_empty: bool = False):
         """Uses up to `quantity` of item_name back-to-back (e.g. Inventory's Use x1/x10/All
-        buttons), stopping early if the player runs out. Returns (times_used, message) —
-        message is the last successful use's result, or the failure reason if none succeeded."""
+        buttons), stopping early if the player runs out. Returns (times_used, message) --
+        message is the last successful use's result, or the failure reason if none succeeded.
+
+        until_stack_empty (Use All only — see InventoryView._make_use_callback) changes what
+        "stopping early" means. A pill can succeed (ok=True, its effect fires) WITHOUT
+        actually leaving inventory: the Food Dao Path's pill_save_chance_pct (see use_item's
+        own "pill_saved" branch) randomly saves a pill from being consumed. Use All's whole
+        point is "empty my current stack," so with this flag it keeps attempting until
+        `quantity` items have actually been REMOVED from inventory, not just attempted
+        `quantity` times — otherwise a save silently left that pill behind even though the
+        button promised the whole stack would go (found live 2026-08-09, players reporting
+        Use All leaving a seemingly-random number of pills). Use x1/x10 deliberately do NOT
+        get this treatment (until_stack_empty defaults False, unchanged flat-attempt-count
+        loop): their contract is "N attempts," and a Food Dao Path save on one of those is a
+        real, intended bonus (a free pill kept) — forcing extra attempts to guarantee exactly
+        N real removals would fight that bonus instead of letting it land. The max_attempts
+        safety bound guards until_stack_empty against a pathological runaway if
+        pill_save_chance_pct (currently caps at 40%, see dao_paths.py) ever approached 100% —
+        at today's cap the expected attempts to consume `quantity` is only ~1.7x quantity."""
+        target = max(0, quantity)
         used = 0
         last_message = None
-        for _ in range(max(0, quantity)):
+
+        if not until_stack_empty:
+            for _ in range(target):
+                ok, message = self.use_item(user_id, name, item_name)
+                if not ok:
+                    if used == 0:
+                        return 0, message
+                    break
+                used += 1
+                last_message = message
+            return used, last_message
+
+        consumed = 0
+        attempts = 0
+        max_attempts = target * 20 + 20
+        while consumed < target and attempts < max_attempts:
+            attempts += 1
+            before = self.db.get_item_quantity(user_id, item_name)
             ok, message = self.use_item(user_id, name, item_name)
             if not ok:
                 if used == 0:
@@ -136,6 +171,8 @@ class GameManager:
                 break
             used += 1
             last_message = message
+            if self.db.get_item_quantity(user_id, item_name) < before:
+                consumed += 1
         return used, last_message
 
     # -- Character creation (/join) --------------------------------------

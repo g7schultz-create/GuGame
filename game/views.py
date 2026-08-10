@@ -594,7 +594,7 @@ class InventoryView(GameView):
             self.add_item(use10)
 
             use_all = discord.ui.Button(label=f"Use All ({owned})", emoji="⏭️", style=discord.ButtonStyle.success, row=use_row)
-            use_all.callback = self._make_use_callback(owned)
+            use_all.callback = self._make_use_callback(owned, until_stack_empty=True)
             self.add_item(use_all)
 
     def _make_category_callback(self, category: str):
@@ -628,7 +628,7 @@ class InventoryView(GameView):
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
 
-    def _make_use_callback(self, quantity: int):
+    def _make_use_callback(self, quantity: int, until_stack_empty: bool = False):
         async def callback(interaction: discord.Interaction):
             # Use All can be hundreds of DB round-trips (see GameManager.use_item_multiple) --
             # defer first so we have up to 15 minutes to finish instead of Discord's normal
@@ -639,7 +639,9 @@ class InventoryView(GameView):
             # user's activity for that same window either.
             await interaction.response.defer()
             item_name = self.selected_item
-            used, message = await asyncio.to_thread(self.game.use_item_multiple, self.user_id, self.display_name, item_name, quantity)
+            used, message = await asyncio.to_thread(
+                self.game.use_item_multiple, self.user_id, self.display_name, item_name, quantity, until_stack_empty,
+            )
             self.last_result = message if used <= 1 else f"Used **{used}x {item_name}**. {message}"
             inventory = await asyncio.to_thread(self.game.get_inventory, self.user_id)
             if inventory.get(item_name, 0) <= 0:

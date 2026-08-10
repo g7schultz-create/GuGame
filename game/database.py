@@ -1875,6 +1875,15 @@ class GameDatabase:
         con.close()
         return {row["item_name"]: row["quantity"] for row in rows}
 
+    def get_item_quantity(self, user_id: int, item_name: str) -> int:
+        """Single-item counterpart to get_inventory -- used by GameManager.use_item_multiple's
+        Use All loop, which needs to check ONE item's count after every single use; fetching
+        (and re-parsing) the player's WHOLE inventory dict for that would be wasted work."""
+        con = self.connect()
+        row = con.execute("SELECT quantity FROM inventory WHERE user_id = ? AND item_name = ?", (user_id, item_name)).fetchone()
+        con.close()
+        return row["quantity"] if row else 0
+
     def log_admin_action(self, actor_id: int, actor_name: str, target_id: int, target_name: str, action: str, detail: str):
         con = self.connect()
         con.execute(
