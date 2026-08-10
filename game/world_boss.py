@@ -72,9 +72,9 @@ WORLD_BOSS_ATTACKS_PER_COOLDOWN = 5
 # pool this system is built around. Raised again to 20,000,000 (2026-08-08, user's explicit
 # request) as the playerbase's top end has grown since the 10,000,000 calibration above --
 # back to the original first-tried value this constant was once walked back from (20,000,000
-# -> 2,500,000 -> 1,500,000 -> 10,000,000), now re-justified by real growth rather than
-# over-tuning. Ongoing live-ops tuning either way, not a one-time number.
-WORLD_BOSS_MAX_HP = 20_000_000
+# -> 2,500,000 -> 1,500,000 -> 10,000,000). Raised again to 100,000,000 (2026-08-09, user's
+# explicit request) -- ongoing live-ops tuning either way, not a one-time number.
+WORLD_BOSS_MAX_HP = 100_000_000
 # Low on purpose -- a real fight's monster would scale DEF/SPD to be dangerous, but "every
 # cultivation realm" being able to meaningfully participate (the doc's own stated goal) means
 # even a fresh character's attack needs to land and deal more than the MIN_DAMAGE=1 floor.
@@ -347,3 +347,25 @@ def weighted_lottery_winner(contributions: dict, rng: Optional[random.Random] = 
     user_ids = [uid for uid, _ in candidates]
     weights = [dmg for _, dmg in candidates]
     return (rng or random).choices(user_ids, weights=weights, k=1)[0]
+
+
+# Manual page bonus roll -- every contributor gets an independent shot at this (same "everyone
+# gets their own roll" convention the essence-pill/avatar-gear per-contributor rolls in
+# GameManager._end_world_boss already use, NOT tied to the damage-weighted lottery above).
+# User's own explicit odds.
+MANUAL_PAGE_DROP_ODDS = {7: 1 / 2000, 6: 1 / 1000, 5: 1 / 200}
+
+
+def roll_manual_page_rank(rng: Optional[random.Random] = None) -> Optional[int]:
+    """One shared draw sliced rarest-tier-first (not 3 independent per-tier checks), so a
+    single contributor can win a page from at most one tier per boss kill, while each tier
+    still lands at EXACTLY its own stated odds (see MANUAL_PAGE_DROP_ODDS) -- same "fixed
+    slices of one draw" shape LOOT_BANDS above already uses. Returns the winning rank (7/6/5)
+    or None (the overwhelmingly common case: 1 - 1/2000 - 1/1000 - 1/200 ~= 99.35%)."""
+    roll = (rng or random).random()
+    threshold = 0.0
+    for rank in (7, 6, 5):  # rarest first
+        threshold += MANUAL_PAGE_DROP_ODDS[rank]
+        if roll < threshold:
+            return rank
+    return None

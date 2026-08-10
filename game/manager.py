@@ -4833,11 +4833,20 @@ class GameManager:
             avatar_gear_grant = None
             if self.is_avatar_unlocked(c["user_id"], c["name"]) and random.random() < self.WORLD_BOSS_AVATAR_GEAR_CHANCE:
                 avatar_gear_grant = self.roll_and_grant_avatar_gear(c["user_id"], c["name"], "world_boss", avatar_gear.MAX_TIER)
+            # Manual page: rare bonus roll for every contributor (see world_boss.
+            # roll_manual_page_rank's own docstring for the exact odds), same independent-
+            # per-contributor shape as the pill/avatar-gear rolls just above.
+            manual_page_grant = None
+            page_rank = world_boss.roll_manual_page_rank()
+            if page_rank is not None:
+                page = random.choice([p for p in manual_data.PAGES.values() if p.rank == page_rank])
+                self.db.add_player_page(c["user_id"], page.page_id, 1)
+                manual_page_grant = {"rank": page_rank, "name": page.name}
             self.db.mark_world_boss_contributor_rewarded(boss_instance_id, c["user_id"])
             guaranteed_summaries.append({
                 "user_id": c["user_id"], "name": c["name"], "damage_dealt": c["damage_dealt"],
                 "stones": stones, "essence_pill": pill_name, "essence_pill_quantity": pill_qty,
-                "avatar_gear": avatar_gear_grant,
+                "avatar_gear": avatar_gear_grant, "manual_page": manual_page_grant,
             })
 
         contribution_map = {c["user_id"]: c["damage_dealt"] for c in contributors}
