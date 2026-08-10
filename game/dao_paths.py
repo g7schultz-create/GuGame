@@ -157,10 +157,18 @@ _SPIRIT_SEVERING_BREAKTHROUGH_RANGES = {
 
 # Same lump-sum-per-breakthrough shape as Spirit Severing above, per explicit request that
 # Ancient Realm "still" grants Dao Marks per breakthrough rather than the mechanic staying
-# Spirit-Severing-only forever. Scaled ~3x Spirit Severing's own ranges (Dao Seeking, the
-# realm in between, deliberately keeps getting nothing -- only these two Great Realms grant a
-# breakthrough lump sum) -- a Peak-Ancient-Realm breakthrough alone funds most of a fresh
+# Spirit-Severing-only forever -- then extended to Dao Seeking too (per a direct follow-up
+# request) so all three post-Nascent-Soul Great Realms grant a lump sum, evenly stepped 1x/2x/3x
+# off Spirit Severing's own ranges (Dao Seeking sits at 2x, exactly between Spirit Severing and
+# Ancient Realm). A Peak-Ancient-Realm breakthrough alone funds most of a fresh
 # DAO_MARKS_CAP_PER_PATH path (2000), a fitting one-time payout for the very top of the ladder.
+_DAO_SEEKING_BREAKTHROUGH_RANGES = {
+    "Early": (400, 800),
+    "Middle": (600, 1000),
+    "Late": (800, 1400),
+    "Peak": (2000, 2000),
+}
+
 _ANCIENT_REALM_BREAKTHROUGH_RANGES = {
     "Early": (600, 1200),
     "Middle": (900, 1500),
@@ -170,14 +178,14 @@ _ANCIENT_REALM_BREAKTHROUGH_RANGES = {
 
 _BREAKTHROUGH_MARK_RANGES_BY_GREAT_REALM = {
     "Spirit Severing": _SPIRIT_SEVERING_BREAKTHROUGH_RANGES,
+    "Dao Seeking": _DAO_SEEKING_BREAKTHROUGH_RANGES,
     "Ancient Realm": _ANCIENT_REALM_BREAKTHROUGH_RANGES,
 }
 
 
 def breakthrough_marks(great_realm_name: str, substage_name: str) -> Optional[int]:
-    """One-time Dao Marks lump sum for breaking through INTO one of Spirit Severing's or
-    Ancient Realm's 4 substages. None for every other breakthrough (any other Great Realm,
-    including Dao Seeking in between)."""
+    """One-time Dao Marks lump sum for breaking through INTO one of Spirit Severing's, Dao
+    Seeking's, or Ancient Realm's 4 substages. None for every other breakthrough."""
     ranges = _BREAKTHROUGH_MARK_RANGES_BY_GREAT_REALM.get(great_realm_name)
     if ranges is None:
         return None
