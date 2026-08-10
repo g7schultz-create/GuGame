@@ -7,7 +7,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from config import GUILD_ID, TOURNAMENT_ANNOUNCE_CHANNEL_ID, WORLD_BOSS_ANNOUNCE_CHANNEL_ID, WORLD_BOSS_DAMAGE_RANKING_CHANNEL_ID
-from . import chargen, equipment, professions, realms, sects, tournament, world_boss
+from . import blacksmith, chargen, equipment, professions, realms, sects, tournament, world_boss
 from .character_class import CLASSES
 from .character_data import PATHS
 from .database import GameDatabase
@@ -66,6 +66,13 @@ NOT_CONFIRMED_MESSAGE = "You haven't created a character yet — run `/join` fir
 
 # Shared by /hunt and /raid's optional `realm` parameter — one Choice per Great Realm.
 REALM_CHOICES = [app_commands.Choice(name=great_realm["name"], value=str(i)) for i, great_realm in enumerate(realms.GREAT_REALMS)]
+
+# /grant_gear's gear_type choices — precomputed at module level rather than inline in the
+# @app_commands.choices(...) decorator: GameCog's own class body defines methods literally
+# named `equipment`/`blacksmith` (the /equipment and /blacksmith commands), which shadow
+# those module imports for any decorator-argument code evaluated later in the SAME class body
+# (methods themselves are unaffected -- only class-body-evaluated expressions like this one).
+GRANT_GEAR_TYPE_CHOICES = [app_commands.Choice(name=name, value=name) for name in equipment.BLACKSMITH_GEAR_TYPES]
 
 # /verify's auto-created rank roles (see REALM_NAMES) — a simple ascending-prestige palette,
 # grey at the bottom to red at the top, one color per Great Realm.
@@ -2010,6 +2017,46 @@ class GameCog(commands.Cog):
         await interaction.response.send_message(
             f"Granted **{target.display_name}** {profession.value} rank: "
             f"**{professions.rank_name(result['old_rank'])}** -> **{professions.rank_name(result['new_rank'])}**{cap_note}.",
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="grant_gear", description="[Admin] Grant a player a freshly-rolled piece of crafted gear")
+    @app_commands.guilds(GUILD)
+    @app_commands.describe(
+        gear_type="Sword (Weapon), Helm (Head), or Armor (Body)",
+        tier="Gear tier (1-7)",
+        member="Player to grant it to (defaults to you)",
+    )
+    @app_commands.choices(gear_type=GRANT_GEAR_TYPE_CHOICES)
+    async def grant_gear(
+        self,
+        interaction: discord.Interaction,
+        gear_type: app_commands.Choice[str],
+        tier: int,
+        member: Optional[discord.Member] = None,
+    ):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+            return
+        if not (blacksmith.MIN_TIER <= tier <= blacksmith.MAX_TIER):
+            await interaction.response.send_message(f"Tier must be between {blacksmith.MIN_TIER} and {blacksmith.MAX_TIER}.", ephemeral=True)
+            return
+
+        target = member or interaction.user
+
+        def _do_grant():
+            result = self.game.grant_crafted_gear(target.id, target.display_name, gear_type.value, tier)
+            self.db.log_admin_action(
+                interaction.user.id, interaction.user.display_name,
+                target.id, target.display_name,
+                "grant_gear", f"{result['item_name']} (power {result['power_score']:.1f})",
+            )
+            return result
+
+        result = await asyncio.to_thread(_do_grant)
+        await interaction.response.send_message(
+            f"Granted **{target.display_name}** a freshly-rolled **{result['item_name']}** "
+            f"(power {result['power_score']:.1f}): {equipment.describe_stat_bonuses(result['stat_bonuses'])}.",
             ephemeral=True,
         )
 

@@ -2825,6 +2825,23 @@ class GameManager:
             })
         return result
 
+    def grant_crafted_gear(self, user_id: int, name: str, gear_type: str, tier: int) -> dict:
+        """/grant_gear (admin) -- unconditional version of craft_gear's own success branch:
+        same real roll_gear_stats roll (a genuine random instance, not a fixed/admin-typed
+        stat block), just skipping the material cost, Blacksmith-rank gate, and success-chance
+        roll entirely. Deliberately no budget_bonus_pct (that's a player's own earned trait
+        bonus, not something an admin grant should apply on their behalf) -- a clean roll at
+        the requested tier, same as any other player would get from a lucky craft."""
+        self.db.get_or_create_player(user_id, name)
+        slot_type = equipment.BLACKSMITH_GEAR_SLOT_TYPE[gear_type]
+        stat_bonuses = blacksmith.roll_gear_stats(tier, random.Random())
+        power_score = equipment.gear_power_score_from_stats(stat_bonuses)
+        gear_id = self.db.create_crafted_gear(user_id, gear_type, slot_type, tier, stat_bonuses, power_score)
+        return {
+            "gear_id": gear_id, "item_name": blacksmith.crafted_gear_display_name(gear_type, tier, gear_id),
+            "stat_bonuses": stat_bonuses, "power_score": power_score,
+        }
+
     def get_player_crafted_gear(self, user_id: int) -> list:
         """Every rolled Weapon/Head/Body instance the player owns (equipped or not),
         strongest first — see equipment.py's gear_power_score_from_stats docstring for why
