@@ -22,6 +22,7 @@ import discord
 
 from . import avatar, inheritance_ground_data
 from .base_view import GameView
+from .content.monsters import blood_sea_ancestor
 from .team_battle import EMPOWER_QI_COST, RaidEnemy, TeamBattleEngine
 from .ui_utils import render_bar
 
@@ -280,8 +281,27 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
                 self.add_item(button)
         elif self.phase == "battle":
             # Full TeamBattleEngine action set (team_battle.py) -- same combat loop /raid
-            # runs, just against a single guardian instead of a boss group, so there's no
-            # target-select row to build (every action always targets self.enemies[0]).
+            # runs. Most battles are single-enemy (no target-select needed, every action
+            # just targets self.enemies[0]) -- Crimson Formation Guardian's own fight is the
+            # one exception (guardian + 2 formation nodes, see _start_battle), so the select
+            # only appears when there's actually more than one enemy to choose between.
+            if len(self.enemies) > 1:
+                target_options = [
+                    discord.SelectOption(
+                        label=f"{e.monster.name} — {max(0, e.hp):.0f}/{e.max_hp:.0f} HP", value=str(idx),
+                        emoji="🛡️" if idx == 0 else "🔺",
+                    )
+                    for idx, e in enumerate(self.enemies) if e.alive
+                ]
+                target_select = discord.ui.Select(
+                    placeholder="Choose your target (for Attack/Guard/Gu ability)..." if target_options else "No targets left",
+                    options=target_options or [discord.SelectOption(label="None", value="none")],
+                    disabled=not target_options,
+                    row=2,
+                )
+                target_select.callback = self._on_pick_target
+                self.add_item(target_select)
+
             attack_button = discord.ui.Button(label="Attack", emoji="⚔️", style=discord.ButtonStyle.danger, row=0)
             attack_button.callback = self._on_attack
             self.add_item(attack_button)
@@ -390,6 +410,12 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         self.phase = "battle"
         monster = self.game.roll_inheritance_ground_battle_monster(self.ground_key, self.battles_fought)
         self.enemies = [RaidEnemy(monster)]
+        if monster.name == blood_sea_ancestor.CRIMSON_FORMATION_GUARDIAN.name:
+            # Crimson Formation Guardian's own shield_while_ally_alive_pct only means anything
+            # alongside other living enemies -- spawn its 2 formation nodes as real,
+            # independently-targetable/killable extra enemies (see team_battle.py's Phase 1
+            # shield dispatch, this view's own target-select in _build_components).
+            self.enemies += [RaidEnemy(blood_sea_ancestor.CRIMSON_FORMATION_NODE) for _ in range(2)]
         self.participants = {}
         for uid, name in self.team:
             player = self.game.get_player_stats(uid, name)
@@ -434,6 +460,22 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         await self._refresh_message()
         if self.phase == "battle":
             self._start_battle_round_timer()
+
+    async def _on_pick_target(self, interaction: discord.Interaction):
+        """Only ever wired up when len(self.enemies) > 1 (see _build_components) -- mirrors
+        raid.py's own _on_pick_target."""
+        p = self.participants.get(interaction.user.id)
+        if p is None:
+            await interaction.response.send_message("This isn't your inheritance ground run.", ephemeral=True)
+            return
+        select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 2)
+        try:
+            idx = int(select.values[0])
+        except ValueError:
+            await interaction.response.defer()
+            return
+        p["target_index"] = idx
+        await interaction.response.send_message(f"🎯 Targeting **{self.enemies[idx].monster.name}** for your next Attack/Guard/Gu ability.", ephemeral=True)
 
     def _on_victory(self):
         """Called by TeamBattleEngine._resolve_round (team_battle.py) once the guardian's HP
@@ -616,11 +658,18 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             return embed
 
         if self.phase == "battle":
-            monster = self.enemies[0].monster
-            monster_hp = max(0, self.enemies[0].hp)
-            monster_max_hp = self.enemies[0].max_hp
-            monster_pct = int(100 * monster_hp / monster_max_hp) if monster_max_hp else 0
-            description = f"{monster.name}: {monster_hp:,}/{monster_max_hp:,} HP ({monster_pct}%)\n`{render_bar(monster_hp, monster_max_hp)}`"
+            monster = self.enemies[0].monster  # the "main" enemy (Formation Guardian, if this fight has adds) always sits at index 0
+            enemy_lines = []
+            for idx, e in enumerate(self.enemies):
+                if not e.alive:
+                    enemy_lines.append(f"{'🛡️' if idx == 0 else '🔺'} **{e.monster.name}** — 💀 Defeated")
+                    continue
+                pct = int(100 * max(0, e.hp) / e.max_hp) if e.max_hp else 0
+                submerged_note = " 🌊 *Submerged*" if e.submerged_rounds_remaining > 0 else ""
+                enemy_lines.append(
+                    f"{'🛡️' if idx == 0 else '🔺'} **{e.monster.name}**{submerged_note} — {max(0, e.hp):,}/{e.max_hp:,} HP ({pct}%)\n`{render_bar(e.hp, e.max_hp)}`"
+                )
+            description = "\n".join(enemy_lines)
             if self.inspire_rounds_remaining > 0:
                 description += f"\n✨ **Inspire active** — party STR/DEF boosted ({self.inspire_rounds_remaining} round(s) left)."
             embed = discord.Embed(
