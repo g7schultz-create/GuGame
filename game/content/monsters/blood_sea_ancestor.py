@@ -8,14 +8,19 @@ accessories_data.LOOT_SOURCE_TABLE's existing hunt_kill/raid_boss/world_boss tie
 richer beast-material drops below) -- "loot getting better as it gets more elite," per the
 brief.
 
-Tuning approach: this ground's gu_rank=4 puts it at great_realm_index=3 (gu_rank-1) -- the
-SAME realm content/monsters/duskwraith_barrens.py's own already-simulated roster occupies, so
-that file's stat baseline (Guardian/Skirmisher/Assassin/Brute/Mystic archetype multipliers off
-a shared per-realm anchor) is reused directly as this ground's own "Common" tier, with a
-RARITY_MULTIPLIER stacked on top per tier below. This is a first-pass calibration (no live
-per-monster simulation run, unlike Duskwraith's own validated numbers) -- same documented gap
-Dao Seeking/Ancient Realm content shipped with this session; expect to retune off real player
-results.
+Tuning approach: originally anchored to content/monsters/duskwraith_barrens.py's realm-3
+(Nascent Soul) baseline via this ground's gu_rank=4 -> great_realm_index=3 mapping. Per
+explicit request, HP was recalibrated for a full 4-person SPIRIT SEVERING team (great_realm_
+index=4, one Great Realm above the original anchor) fighting together, not a solo realm-3
+hunter -- STR/DEF/ATK/SPD are UNCHANGED (only HP moved), per the request's own scope. Cross-
+checked against two realm-4 reference points in game/monsters.py: the generic solo hunt
+placeholder for that realm (_generate_hunt_monster(4), ~203k HP/~47k STR) and the realm-4
+raid boss (_generate_raid_group(4), ~187k HP) -- both already-established, if unvalidated,
+per-realm anchors. _BASELINE["hp"] is set well above the solo-hunt figure since FOUR real
+attackers deal roughly 4x a solo hunter's damage per round; the per-tier/per-archetype
+multipliers below then spread that baseline the same way they always did. This is a first-
+pass calibration (no live per-monster simulation run) -- same documented gap Dao Seeking/
+Ancient Realm content shipped with this session; expect to retune off real player results.
 
 Each of these monsters' special mechanic is a small, real combat effect (see
 monsters.MonsterAbility/Monster's own added fields, team_battle.py's _resolve_round/
@@ -25,7 +30,7 @@ _resolve_enemy_hit) -- not flavor text with no mechanical backing.
 from ...monsters import DropEntry, Monster, MonsterAbility
 
 # -- Calibration (see module docstring) ---------------------------------------------------
-_BASELINE = dict(hp=26000, atk_stat=2200, str_stat=4800, def_stat=2600, spd_stat=2000, luck_stat=1)
+_BASELINE = dict(hp=300000, atk_stat=2200, str_stat=4800, def_stat=2600, spd_stat=2000, luck_stat=1)
 _QI_BY_RARITY = {"Common": 5500, "Uncommon": 6200, "Rare": 7000, "Elite": 8000}
 _RARITY_MULTIPLIER = {"Common": 1.0, "Uncommon": 1.35, "Rare": 1.8, "Elite": 2.4}
 # (hp, str, def, spd, atk) -- same 5-archetype framework duskwraith_barrens.py established.

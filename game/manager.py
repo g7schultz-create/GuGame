@@ -964,12 +964,23 @@ class GameManager:
     # in battlefield_view.py) since a whole team is fighting together, not one player.
     BATTLE_STAT_MULTIPLIER_PER_BATTLE = 0.20
 
+    # Every non-"battle" bubble independently rolls one of these -- "treasure" most of the
+    # time, sometimes a dud ("nothing"), occasionally a guaranteed Qi Ascension Pill (see
+    # grant_inheritance_ground_pill_reward) -- rather than always being "treasure". First-pass
+    # weights, easy to retune.
+    BUBBLE_OUTCOME_WEIGHT = {"treasure": 60, "nothing": 25, "ascension_pill": 15}
+
     def generate_inheritance_ground_board(self, team_size: int) -> list:
-        """Returns team_size * BUBBLES_PER_TEAM_MEMBER bubble labels ("battle"/"treasure"),
-        MIN_BATTLE_BUBBLES of them guaranteed "battle", shuffled so position is unpredictable."""
+        """Returns team_size * BUBBLES_PER_TEAM_MEMBER bubble labels, MIN_BATTLE_BUBBLES of
+        them guaranteed "battle" (same "fixed multiset, then shuffle" reasoning as before --
+        a guaranteed minimum, not a coin flip that could rarely land zero battles). Every
+        other slot independently rolls via BUBBLE_OUTCOME_WEIGHT, so the non-battle bubbles
+        are now genuinely random (treasure/nothing/ascension_pill) instead of always treasure."""
         size = team_size * self.BUBBLES_PER_TEAM_MEMBER
         battle_count = min(size, self.MIN_BATTLE_BUBBLES)
-        board = ["battle"] * battle_count + ["treasure"] * (size - battle_count)
+        outcomes = list(self.BUBBLE_OUTCOME_WEIGHT.keys())
+        weights = list(self.BUBBLE_OUTCOME_WEIGHT.values())
+        board = ["battle"] * battle_count + random.choices(outcomes, weights=weights, k=size - battle_count)
         random.shuffle(board)
         return board
 
@@ -1065,6 +1076,24 @@ class GameManager:
             category = discovery_gen.weighted_choice(search_data.INHERITANCE_FINAL_CHEST_TABLE, rng)
             reward = discovery_gen.generate_loot(category, "inheritance_ground", ground["gu_rank"], "Safe", ground.get("tags", []), rng)
             results.append((name, self.grant_reward(user_id, name, reward)))
+        return results
+
+    def grant_inheritance_ground_pill_reward(self, team: list) -> list:
+        """An "ascension_pill" bubble (see generate_inheritance_ground_board) -- unlike
+        items.roll_qi_ascension_pill_drop's own 1%-gated roll (used by /search_forgotten_
+        blessed_land, /explore, World Boss), the bubble already committed to this outcome, so
+        the grant itself is guaranteed; only the TIER is randomized, via that same module's
+        own QI_ASCENSION_PILL_TIER_WEIGHTS. One independent roll per team member, same "whole
+        team shares the bubble's find" shape grant_inheritance_ground_treasure_reward uses.
+        Returns [(name, reward_str), ...]."""
+        tiers = list(items.QI_ASCENSION_PILL_TIER_WEIGHTS.keys())
+        weights = list(items.QI_ASCENSION_PILL_TIER_WEIGHTS.values())
+        results = []
+        for user_id, name in team:
+            tier = random.choices(tiers, weights=weights, k=1)[0]
+            pill_name = items.alchemy_pill_name("Qi Ascension", tier)
+            self.db.add_item(user_id, pill_name, 1)
+            results.append((name, f"1x **{pill_name}**"))
         return results
 
     def grant_inheritance_ground_share_reward(self, ground_key: str, user_id: int, name: str) -> str:

@@ -10,8 +10,9 @@ Three views:
   InheritanceGroundView        -- the run itself: intro -> bubble board -> trial -> betrayal ->
                                    resolution, with a real multi-round team fight embedded as its
                                    own "battle" phase whenever a battle bubble is popped, and (if
-                                   2+ team members backstab) a real live Attack/Guard FFA duel
-                                   among just the backstabbers as its own "backstab_duel" phase.
+                                   anyone backstabs) a real live multi-way Attack/Guard duel --
+                                   every backstabber their own side, every sharer one shared side
+                                   -- as its own "backstab_duel" phase.
   AbandonInheritanceGroundView -- self-service escape hatch, same shape as AbandonRaidView/
                                    AbandonDiscoveryView, shipped from day one rather than added
                                    reactively (see the raid flee bug fixed in commit 0b6b712).
@@ -32,6 +33,9 @@ from .ui_utils import render_bar
 BETRAYAL_DECISION_SECONDS = 60
 BATTLE_ROUND_TIMEOUT_SECONDS = 30  # matches raid.ROUND_TIMEOUT_SECONDS's own pacing
 DUEL_ROUND_TIMEOUT_SECONDS = 30  # matches BATTLE_ROUND_TIMEOUT_SECONDS's own pacing
+SHARER_SIDE = "sharers"  # the one shared duel "side" every Share-choosing member belongs to
+
+BUBBLE_ICON = {"treasure": "💰", "battle": "⚔️", "nothing": "💨", "ascension_pill": "💊"}
 
 
 def build_intro_image_file(ground_key: str) -> discord.File:
@@ -224,7 +228,9 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         self.board: list = []
         self.revealed: list = []
         self.turn_index = 0
-        self.board_log: list = []  # (name_or_None, "treasure"/"battle", text)
+        # Only the MOST RECENT bubble result -- replaced, never appended, so old notifications
+        # disappear on the very next turn instead of piling up in a growing "So far" history.
+        self.last_bubble_notice: str = None
         self.bubble_resolving = False  # re-entrancy guard, mirrors raid.py's own click guards
         self.battles_fought = 0  # feeds roll_inheritance_ground_battle_monster's own scaling
 
@@ -251,9 +257,11 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         self.share_grants: list = []
         self.betrayal_result: dict = None
 
-        # Backstab duel (2+ backstabbers) -- a real, live, turn-based Attack/Guard FFA among
-        # just the backstabbers, resolved on the "backstab_duel" phase (see
-        # _start_backstab_duel). Empty/zeroed until (if ever) a duel actually starts.
+        # Backstab duel (1+ backstabbers) -- a real, live, turn-based Attack/Guard multi-way
+        # fight, resolved on the "backstab_duel" phase (see _start_backstab_duel). Every
+        # backstabber is their OWN side (solo); every sharer shares ONE side (SHARER_SIDE) --
+        # so a lone backstabber faces the whole sharer group, 2 backstabbers + sharers is a
+        # real 3-way, and so on. Empty/zeroed until (if ever) a duel actually starts.
         self.duel_participants: dict = {}
         self.duel_actions: dict = {}
         self.duel_round = 1
@@ -290,8 +298,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             for index, category in enumerate(self.board):
                 row = index // 5
                 if self.revealed[index]:
-                    icon = "💰" if category == "treasure" else "⚔️"
-                    button = discord.ui.Button(label="", emoji=icon, style=discord.ButtonStyle.secondary, row=row, disabled=True)
+                    button = discord.ui.Button(label="", emoji=BUBBLE_ICON[category], style=discord.ButtonStyle.secondary, row=row, disabled=True)
                 else:
                     button = discord.ui.Button(label="?", emoji="🫧", style=discord.ButtonStyle.primary, row=row)
                     button.callback = self._make_bubble_callback(index)
@@ -305,7 +312,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             if len(self.enemies) > 1:
                 target_options = [
                     discord.SelectOption(
-                        label=f"{e.monster.name} — {max(0, e.hp):.0f}/{e.max_hp:.0f} HP", value=str(idx),
+                        label=f"{e.monster.name} — {max(0, e.hp):,.0f}/{e.max_hp:,.0f} HP", value=str(idx),
                         emoji="🛡️" if idx == 0 else "🔺",
                     )
                     for idx, e in enumerate(self.enemies) if e.alive
@@ -359,9 +366,9 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             backstab_button.callback = self._make_betrayal_callback("backstab")
             self.add_item(backstab_button)
         elif self.phase == "backstab_duel":
-            # Attack/Guard only, auto-targeted at a random other living duelist -- see
-            # _resolve_duel_round. No target-select: the request was "clicks Attack/Guard",
-            # not a full manual-targeting FFA.
+            # Attack/Guard only, auto-targeted at a random living duelist on a different side
+            # -- see _resolve_duel_round. No target-select: the request was "clicks
+            # Attack/Guard", not a full manual-targeting FFA.
             attack_button = discord.ui.Button(label="Attack", emoji="⚔️", style=discord.ButtonStyle.danger)
             attack_button.callback = self._on_duel_attack
             self.add_item(attack_button)
@@ -392,23 +399,14 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
                 await interaction.response.defer()
                 return
             self.bubble_resolving = True
-            # defer() first -- both branches below do real DB work (loot grants, or settling
+            # defer() first -- every branch below does real DB work (loot grants, or settling
             # HP/Qi to start a battle) that can run past Discord's 3s ack window under load,
             # same reasoning as every other bulk-write callback in this codebase.
             await interaction.response.defer()
             category = self.board[index]
             self.revealed[index] = True
-            if category == "treasure":
-                results = await asyncio.to_thread(self.game.grant_inheritance_ground_treasure_reward, self.ground_key, self.team)
-                summary = "; ".join(f"**{name}**: {reward}" for name, reward in results)
-                self.board_log.append((None, "treasure", summary))
-                self._advance_turn()
-                self.phase = "pre_trial" if all(self.revealed) else "bubble_board"
-                self.bubble_resolving = False
-                await asyncio.to_thread(self._build_components)
-                embed = await asyncio.to_thread(self.build_embed)
-                await interaction.edit_original_response(embed=embed, view=self)
-            else:  # "battle" -- turn rotation PAUSES until the fight is actually won
+            if category == "battle":  # turn rotation PAUSES until the fight is actually won
+                self.last_bubble_notice = None
                 self.battles_fought += 1
                 await asyncio.to_thread(self._start_battle)
                 self.bubble_resolving = False
@@ -416,6 +414,24 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
                 embed = await asyncio.to_thread(self.build_embed)
                 await interaction.edit_original_response(embed=embed, view=self)
                 self._start_battle_round_timer()
+                return
+
+            if category == "treasure":
+                results = await asyncio.to_thread(self.game.grant_inheritance_ground_treasure_reward, self.ground_key, self.team)
+                summary = "; ".join(f"**{name}**: {reward}" for name, reward in results)
+                self.last_bubble_notice = f"💰 {summary}"
+            elif category == "ascension_pill":
+                results = await asyncio.to_thread(self.game.grant_inheritance_ground_pill_reward, self.team)
+                summary = "; ".join(f"**{name}**: {reward}" for name, reward in results)
+                self.last_bubble_notice = f"💊 The bubble held a stash of Qi Ascension Pills! {summary}"
+            else:  # "nothing" -- a dud, matching BUBBLE_OUTCOME_WEIGHT's own possible outcomes
+                self.last_bubble_notice = "💨 Just an empty bubble. Nothing here."
+            self._advance_turn()
+            self.phase = "pre_trial" if all(self.revealed) else "bubble_board"
+            self.bubble_resolving = False
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.edit_original_response(embed=embed, view=self)
 
         return callback
 
@@ -544,7 +560,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             self._log(f"🏆 The team brings down {monster.name}! {loot_summary}")
             self.phase = "betrayal"
             return
-        self.board_log.append((None, "battle", f"The team defeats {monster.name}! {loot_summary}"))
+        self.last_bubble_notice = f"⚔️ The team defeats {monster.name}! {loot_summary}"
         self._advance_turn()
         self.phase = "pre_trial" if all(self.revealed) else "bubble_board"
 
@@ -593,9 +609,9 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
                 return
             self.betrayal_choices[interaction.user.id] = choice
             confirm_text = (
-                "🤝 You chose to **share the loot equally**."
+                "🤝 You chose to **share the loot equally** (guaranteed either way) — if anyone backstabs, you'll also have to fight them for the bonus Core Gu."
                 if choice == "share"
-                else "🗡️ You chose to **backstab** — if anyone else does too, you'll duel for the Core Gu."
+                else "🗡️ You chose to **backstab** — you'll have to fight whoever shared for the Core Gu."
             )
             await interaction.response.send_message(confirm_text, ephemeral=True)
             if len(self.betrayal_choices) >= len(self.team):
@@ -606,7 +622,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
     async def _finish_betrayal_resolution(self):
         """Shared by both race paths that can conclude the betrayal vote (everyone clicked,
         or the timer ran out) -- resolves, rebuilds, refreshes, and -- since resolving can
-        land the phase on "backstab_duel" instead of "resolved" (2+ backstabbers) -- starts
+        land the phase on "backstab_duel" instead of "resolved" (anyone backstabbed) -- starts
         that duel's own round timer. asyncio.create_task (via _start_duel_round_timer) needs
         a running loop on the CURRENT thread, so that check has to happen here in real async
         context, never inside the to_thread-dispatched _resolve_betrayal itself -- same
@@ -625,9 +641,12 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
     def _resolve_betrayal(self):
         """Sync -- always dispatched via asyncio.to_thread by _finish_betrayal_resolution,
         never called directly from an async context. Anyone who never clicked defaults to
-        Share. 0 or 1 backstabbers resolve (and finish the run) immediately; 2+ instead kick
-        off a real live duel among just the backstabbers (see _start_backstab_duel) -- the
-        run doesn't finish until THAT concludes (see _finish_backstab_duel)."""
+        Share. Sharers ALWAYS get their share reward, whether or not anyone backstabbed --
+        the duel below is only ever a fight over the extra Core Gu prize. 0 backstabbers
+        resolves (and finishes the run) immediately; 1+ instead kicks off a real live duel
+        (see _start_backstab_duel) between every backstabber (each their own side) and the
+        sharers (one combined side) -- the run doesn't finish until THAT concludes (see
+        _finish_backstab_duel)."""
         if self.phase != "betrayal":
             return  # already resolved by the other race path (click-triggered vs timeout)
         for uid, _name in self.team:
@@ -639,21 +658,19 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             (name, self.game.grant_inheritance_ground_share_reward(self.ground_key, uid, name))
             for uid, name in sharers
         ]
-        if len(backstabbers) >= 2:
-            self._start_backstab_duel(backstabbers)
-            return
         if backstabbers:
-            uid, name = backstabbers[0]
-            gu_name = self.game.grant_inheritance_ground_bonus_gu(self.ground_key, uid, name)
-            self.betrayal_result = {"winner_user_id": uid, "winner_name": name, "duel": None, "gu_name": gu_name}
+            self._start_backstab_duel(backstabbers, sharers)
+            return
 
         self.game.finish_inheritance_ground_run([uid for uid, _ in self.team])
         self.phase = "resolved"
 
-    # -- backstab duel (2+ backstabbers -- a real live Attack/Guard FFA, not a simulation) ----
-    # asyncio.create_task (via _start_duel_round_timer) requires a running loop on the CURRENT
-    # thread, so it's always called directly on the main thread, never from inside a
-    # to_thread-dispatched function -- same discipline every other round timer in this view
+    # -- backstab duel (anyone backstabs -- a real live multi-way Attack/Guard fight, not a
+    # simulation) -- every backstabber is their OWN side, every sharer shares SHARER_SIDE, so a
+    # lone backstabber faces the whole sharer group, 2 backstabbers + sharers is a real 3-way,
+    # and so on. asyncio.create_task (via _start_duel_round_timer) requires a running loop on
+    # the CURRENT thread, so it's always called directly on the main thread, never from inside
+    # a to_thread-dispatched function -- same discipline every other round timer in this view
     # already established (see _start_battle_round_timer's own comment).
 
     def _duel_combat_stats(self, user_id: int) -> dict:
@@ -673,26 +690,35 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
     def _duel_alive_ids(self):
         return [uid for uid, p in self.duel_participants.items() if not p["down"]]
 
-    def _start_backstab_duel(self, backstabbers: list):
+    def _seed_duel_participant(self, uid: int, name: str, side: str):
+        """Seeds one duelist's HP from their real current HP (same equipment-overlay pattern
+        _build_participant_state/pvp_view use) -- this is a real fight with real stakes, not a
+        harmless /pvp-style duel, matching "back stab ... for the loot" being a genuine risk."""
+        equip_bonuses = self.game.compute_equipment_bonuses(uid)["stats"]
+        hp_bonus = equip_bonuses["hp"]
+        hp_settled = self.game.db.settle_hp_regen(uid)
+        self.duel_participants[uid] = {
+            "name": name, "hp": hp_settled["hp"] + hp_bonus, "max_hp": hp_settled["max_hp"] + hp_bonus,
+            "hp_bonus": hp_bonus, "down": False, "side": side,
+        }
+
+    def _start_backstab_duel(self, backstabbers: list, sharers: list):
         """Sync -- called from within _resolve_betrayal, itself always dispatched via
-        asyncio.to_thread. Seeds each backstabber's duel HP from their real current HP (same
-        equipment-overlay pattern _build_participant_state/pvp_view use) -- this is a real
-        fight with real stakes, not a harmless /pvp-style duel, matching "back stab ... for
-        the loot" being a genuine risk."""
+        asyncio.to_thread."""
         self.phase = "backstab_duel"
         self.duel_participants = {}
         for uid, name in backstabbers:
-            equip_bonuses = self.game.compute_equipment_bonuses(uid)["stats"]
-            hp_bonus = equip_bonuses["hp"]
-            hp_settled = self.game.db.settle_hp_regen(uid)
-            self.duel_participants[uid] = {
-                "name": name, "hp": hp_settled["hp"] + hp_bonus, "max_hp": hp_settled["max_hp"] + hp_bonus,
-                "hp_bonus": hp_bonus, "down": False,
-            }
+            self._seed_duel_participant(uid, name, side=uid)  # each backstabber is their own side
+        for uid, name in sharers:
+            self._seed_duel_participant(uid, name, side=SHARER_SIDE)
         self.duel_actions = {}
         self.duel_round = 1
-        names = ", ".join(name for _, name in backstabbers)
-        self.duel_log = [f"🗡️ {names} turn on each other for the Core Gu!"]
+        names_b = ", ".join(name for _, name in backstabbers)
+        if sharers:
+            names_s = ", ".join(name for _, name in sharers)
+            self.duel_log = [f"🗡️ {names_b} backstab the team! {names_s} fight back to defend the loot!"]
+        else:
+            self.duel_log = [f"🗡️ {names_b} turn on each other for the Core Gu!"]
 
     def _apply_duel_afk_actions(self):
         for uid in self._duel_alive_ids():
@@ -726,9 +752,11 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
 
     def _resolve_duel_round(self):
         """Sync -- dispatched via asyncio.to_thread by both callers above. Every duelist who
-        attacks targets a randomly-chosen other living duelist (no manual targeting -- the
-        request scope is just Attack/Guard); guarding halves whatever damage lands on you
-        this round. Ends the round at <=1 duelist left standing."""
+        attacks targets a randomly-chosen living duelist on a DIFFERENT side (no manual
+        targeting -- the request scope is just Attack/Guard; same-side allies, i.e. fellow
+        sharers, are never attacked); guarding halves whatever damage lands on you this round.
+        Ends the round once at most one SIDE still has anyone alive -- not just one person,
+        since the sharer side can have several survivors."""
         alive = self._duel_alive_ids()
         attackers = [uid for uid in alive if self.duel_actions.get(uid, "attack") == "attack"]
         random.shuffle(attackers)
@@ -736,7 +764,8 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             attacker = self.duel_participants[uid]
             if attacker["down"]:
                 continue
-            targets = [t for t in self._duel_alive_ids() if t != uid]
+            my_side = attacker["side"]
+            targets = [t for t in self._duel_alive_ids() if self.duel_participants[t]["side"] != my_side]
             if not targets:
                 continue
             target_uid = random.choice(targets)
@@ -762,20 +791,23 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         self.duel_actions = {}
 
         still_alive = self._duel_alive_ids()
-        if len(still_alive) <= 1:
+        alive_sides = {self.duel_participants[uid]["side"] for uid in still_alive}
+        if len(alive_sides) <= 1:
             self._finish_backstab_duel(still_alive)
         else:
             self.duel_round += 1
 
     def _finish_backstab_duel(self, still_alive: list):
-        """still_alive: 0 or 1 remaining duelist user_ids. A 0-alive mutual-KO is an edge
-        case (both/all sides land a final blow the same round) -- tiebreak randomly among
-        every original duelist rather than leave the Core Gu unclaimed."""
-        winner_id = still_alive[0] if still_alive else random.choice(list(self.duel_participants.keys()))
-        winner_name = self.duel_participants[winner_id]["name"]
-        gu_name = self.game.grant_inheritance_ground_bonus_gu(self.ground_key, winner_id, winner_name)
+        """still_alive: everyone left on the winning side (could be several sharers at once,
+        or a single backstabber) -- possibly empty on a mutual-KO edge case where the last
+        two blows land the same round, tiebroken randomly among every original duelist rather
+        than leave the Core Gu unclaimed. One random survivor claims the prize either way."""
+        winner_id = random.choice(still_alive) if still_alive else random.choice(list(self.duel_participants.keys()))
+        winner = self.duel_participants[winner_id]
+        gu_name = self.game.grant_inheritance_ground_bonus_gu(self.ground_key, winner_id, winner["name"])
         self.betrayal_result = {
-            "winner_user_id": winner_id, "winner_name": winner_name,
+            "winner_user_id": winner_id, "winner_name": winner["name"],
+            "winner_was_backstabber": winner["side"] != SHARER_SIDE,
             "duel": {"events": list(self.duel_log)}, "gu_name": gu_name,
         }
         self.game.finish_inheritance_ground_run([uid for uid, _ in self.team])
@@ -792,10 +824,10 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         if interaction.user.id in self.duel_actions:
             await interaction.response.send_message("You've already locked in your action for this round.", ephemeral=True)
             return
-        # defer() + background refresh, not an ephemeral confirmation -- mirrors
-        # TeamBattleEngine._on_attack (team_battle.py) exactly, since this is the same
-        # "collect one action per living participant, resolve once everyone's in" shape.
-        await interaction.response.defer()
+        # An ephemeral confirmation, not a silent defer() -- per explicit request, this fight
+        # should feel like a real private choice (mirrors the betrayal vote's own ephemeral
+        # confirmations just above), not the quiet background-refresh /raid's battle rounds use.
+        await interaction.response.send_message("⚔️ You attack!", ephemeral=True)
         await self._submit_duel_action(interaction.user.id, "attack")
 
     async def _on_duel_guard(self, interaction: discord.Interaction):
@@ -809,7 +841,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         if interaction.user.id in self.duel_actions:
             await interaction.response.send_message("You've already locked in your action for this round.", ephemeral=True)
             return
-        await interaction.response.defer()
+        await interaction.response.send_message("🛡️ You brace for the next blow.", ephemeral=True)
         await self._submit_duel_action(interaction.user.id, "guard")
 
     # -- display -----------------------------------------------------------------------------
@@ -871,11 +903,11 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
                 ),
                 color=discord.Color.dark_gold(),
             )
-            if self.board_log:
-                lines = []
-                for _name, kind, text in self.board_log[-6:]:
-                    lines.append(f"{'💰' if kind == 'treasure' else '⚔️'} {text}")
-                embed.add_field(name="So far", value="\n".join(lines)[:1024], inline=False)
+            if self.last_bubble_notice:
+                # Only the most recent result -- deliberately NOT a growing history, so it
+                # disappears again once the next bubble gets popped (see last_bubble_notice's
+                # own field comment in __init__).
+                embed.add_field(name="Just happened", value=self.last_bubble_notice[:1024], inline=False)
             embed.set_footer(text=f"{revealed_count}/{len(self.board)} bubbles popped.")
             return embed
 
@@ -889,7 +921,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
                 pct = int(100 * max(0, e.hp) / e.max_hp) if e.max_hp else 0
                 submerged_note = " 🌊 *Submerged*" if e.submerged_rounds_remaining > 0 else ""
                 enemy_lines.append(
-                    f"{'🛡️' if idx == 0 else '🔺'} **{e.monster.name}**{submerged_note} — {max(0, e.hp):,}/{e.max_hp:,} HP ({pct}%)\n`{render_bar(e.hp, e.max_hp)}`"
+                    f"{'🛡️' if idx == 0 else '🔺'} **{e.monster.name}**{submerged_note} — {max(0, e.hp):,.0f}/{e.max_hp:,.0f} HP ({pct}%)\n`{render_bar(e.hp, e.max_hp)}`"
                 )
             description = "\n".join(enemy_lines)
             if self.inspire_rounds_remaining > 0:
@@ -917,7 +949,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
                     if p.get("soul_projection_rounds_remaining", 0) > 0 else ""
                 )
                 lines.append(
-                    f"**{name}** — {max(0, p['hp']):,}/{p['max_hp']:,} HP ({pct}%) • {status}{empower_note}{soul_projection_note}\n"
+                    f"**{name}** — {max(0, p['hp']):,.0f}/{p['max_hp']:,.0f} HP ({pct}%) • {status}{empower_note}{soul_projection_note}\n"
                     f"`{render_bar(p['hp'], p['max_hp'])}`"
                 )
             embed.add_field(name=f"🧍 Team — Round {self.round}", value="\n".join(lines)[:1024], inline=False)
@@ -942,7 +974,8 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
                 description=(
                     f"The team breaks through {ground['guardian_name']}'s last defenses. The vault lies open.\n\n"
                     "Each member must now privately choose: **Share Loot Equally**, or **Backstab for Core Gu**.\n"
-                    "Choices are ephemeral — nobody sees anyone else's pick until it's resolved."
+                    "Choices are ephemeral — nobody sees anyone else's pick until it's resolved. If anyone backstabs, "
+                    "it comes to a real fight over the Core Gu — every backstabber alone against the sharers together."
                 ),
                 color=discord.Color.gold(),
             )
@@ -959,13 +992,14 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
                     status = "✅ locked in"
                 else:
                     status = "⏳ choosing..."
+                side_badge = "🤝" if p["side"] == SHARER_SIDE else "🗡️"
                 lines.append(
-                    f"**{p['name']}** — {max(0, p['hp']):,}/{p['max_hp']:,} HP ({pct}%) • {status}\n"
+                    f"{side_badge} **{p['name']}** — {max(0, p['hp']):,.0f}/{p['max_hp']:,.0f} HP ({pct}%) • {status}\n"
                     f"`{render_bar(p['hp'], p['max_hp'])}`"
                 )
             embed = discord.Embed(
                 title=f"🗡️ {ground['name']} — Backstab Duel!",
-                description="The backstabbers turn on each other — only one walks away with the Core Gu.",
+                description="The team turns on itself — 🗡️ each backstabber fights alone, 🤝 the sharers defend together. Only one side walks away with the Core Gu.",
                 color=discord.Color.dark_red(),
             )
             embed.add_field(name=f"⚔️ Duelists — Round {self.duel_round}", value="\n".join(lines)[:1024], inline=False)
@@ -986,13 +1020,13 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
 
         lines = [f"🤝 **{name}** shares equally: {reward}" for name, reward in self.share_grants]
         if self.betrayal_result:
-            if self.betrayal_result["duel"] is None:
-                lines.append(f"🗡️ **{self.betrayal_result['winner_name']}** was the only backstabber and claims the {self.betrayal_result['gu_name']} outright!")
+            if self.betrayal_result["winner_was_backstabber"]:
+                lines.append(f"🗡️ **{self.betrayal_result['winner_name']}** overcomes the defenders and claims the {self.betrayal_result['gu_name']}!")
             else:
-                lines.append(f"⚔️ The backstabbers turn on each other! **{self.betrayal_result['winner_name']}** wins the duel and claims the {self.betrayal_result['gu_name']}!")
-                events = self.betrayal_result["duel"]["events"]
-                if events:
-                    lines.append("\n".join(events[-5:]))
+                lines.append(f"🛡️ The defenders hold! **{self.betrayal_result['winner_name']}** survives the backstab and claims the {self.betrayal_result['gu_name']}!")
+            events = self.betrayal_result["duel"]["events"]
+            if events:
+                lines.append("\n".join(events[-5:]))
         embed = discord.Embed(
             title=f"🗺️ {ground['name']} — Run Complete!",
             description="\n".join(lines) if lines else "The run concludes.",
