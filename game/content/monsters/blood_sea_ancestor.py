@@ -16,11 +16,15 @@ hunter -- STR/DEF/ATK/SPD are UNCHANGED (only HP moved), per the request's own s
 checked against two realm-4 reference points in game/monsters.py: the generic solo hunt
 placeholder for that realm (_generate_hunt_monster(4), ~203k HP/~47k STR) and the realm-4
 raid boss (_generate_raid_group(4), ~187k HP) -- both already-established, if unvalidated,
-per-realm anchors. _BASELINE["hp"] is set well above the solo-hunt figure since FOUR real
-attackers deal roughly 4x a solo hunter's damage per round; the per-tier/per-archetype
-multipliers below then spread that baseline the same way they always did. This is a first-
-pass calibration (no live per-monster simulation run) -- same documented gap Dao Seeking/
-Ancient Realm content shipped with this session; expect to retune off real player results.
+per-realm anchors, plus the live-DB strongest-known Spirit Severing player figure
+(~96k STR/579k HP, see monsters.py's own REALM_SCALING_BOOST comment). _BASELINE["hp"] was
+bumped a second time, well past the solo-hunt-times-4 estimate, per explicit follow-up
+request ("buff the mobs hp to be even higher... take some time to kill them") -- at ~1M
+baseline, a 4-player team hitting for something on the order of ~250-300k combined damage/round
+(rough estimate off the live STR figure above) takes roughly 3-11 rounds depending on rarity/
+archetype, instead of the first pass's near-instant 1-2 rounds. This is still a first-pass
+calibration (no live per-monster simulation run) -- same documented gap Dao Seeking/Ancient
+Realm content shipped with this session; expect to retune off real player results.
 
 Each of these monsters' special mechanic is a small, real combat effect (see
 monsters.MonsterAbility/Monster's own added fields, team_battle.py's _resolve_round/
@@ -30,7 +34,7 @@ _resolve_enemy_hit) -- not flavor text with no mechanical backing.
 from ...monsters import DropEntry, Monster, MonsterAbility
 
 # -- Calibration (see module docstring) ---------------------------------------------------
-_BASELINE = dict(hp=300000, atk_stat=2200, str_stat=4800, def_stat=2600, spd_stat=2000, luck_stat=1)
+_BASELINE = dict(hp=1000000, atk_stat=2200, str_stat=4800, def_stat=2600, spd_stat=2000, luck_stat=1)
 _QI_BY_RARITY = {"Common": 5500, "Uncommon": 6200, "Rare": 7000, "Elite": 8000}
 _RARITY_MULTIPLIER = {"Common": 1.0, "Uncommon": 1.35, "Rare": 1.8, "Elite": 2.4}
 # (hp, str, def, spd, atk) -- same 5-archetype framework duskwraith_barrens.py established.
@@ -206,8 +210,8 @@ CRIMSON_FORMATION_NODE = Monster(
 # check: a DPS check (dps_check_first_turn/dps_check_interval_growth -- see
 # team_battle.py's Phase 3.5) force-kills one random alive team member 5 rounds in, then
 # again 6 rounds after that, then 7 more, etc. HP values are first-pass placeholders per
-# explicit request ("15m hp for now") -- expect to retune once real teams have actually
-# fought this. 99% of runs face the Demon Disciple; 1% face the true Ancestor's Blood Will
+# explicit request (Demon Disciple 10m, Blood Will 50m) -- expect to retune once real teams
+# have actually fought this. 99% of runs face the Demon Disciple; 1% face the true Ancestor's Blood Will
 # instead (see BLOOD_SEA_ANCESTOR_BLOOD_WILL_CHANCE below) -- same HP-defined-directly,
 # stats-derived-from-an-archetype-baseline approach the rest of this file uses, just with
 # an explicit multiplier on top since these two sit well above even the Elite tier.
@@ -223,7 +227,7 @@ BLOOD_SEA_DEMON_DISCIPLE = Monster(
         DropEntry(chance=1.00, item_name="Tier 5 Beast Material", quantity=2),
         DropEntry(chance=0.50, item_name="Primeval Essence Crystal", quantity=20),
     ],
-    hp=15_000_000, atk_stat=25000, str_stat=48000, def_stat=42000, spd_stat=18000, luck_stat=1, qi_stat=25000,
+    hp=10_000_000, atk_stat=25000, str_stat=48000, def_stat=42000, spd_stat=18000, luck_stat=1, qi_stat=25000,
     gu_rank=4,
     elite=True,
     dps_check_first_turn=5, dps_check_interval_growth=1,
