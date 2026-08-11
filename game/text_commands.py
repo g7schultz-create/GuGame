@@ -87,7 +87,7 @@ _NO_ARG_COMMANDS = [
     "battlefield", "raidboss", "raidboss_attack", "raidboss_spawn", "balance", "preset_list",
     "sect", "sect_list", "sect_leave", "sect_cancel_application", "avatar", "split_body", "tournament",
     "master", "sect_master", "dao_path", "transmute", "killer_move", "use_support_move", "verify",
-    "companion", "dc", "search_forgotten_blessed_land", "teach",
+    "companion", "dc", "search_forgotten_blessed_land", "teach", "essence_exchange",
 ]
 
 # Short aliases for the text-command interface (e.g. `i h` == `i hunt`) — every command gets

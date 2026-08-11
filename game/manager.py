@@ -4730,6 +4730,94 @@ class GameManager:
         self.db.set_timestamp_column(user_id, "last_dc_burst_ts", int(time.time()))
         return {"ok": True, "partner_name": partner_name, "qi_to_caller": qi_to_caller, "qi_to_partner": qi_to_partner}
 
+    # -- Essence Exchange (see /essence_exchange) -- unlike "i dc"'s instant/unilateral burst
+    # above, this is a mutual CONFIRMED action: the partner has ESSENCE_EXCHANGE_TIMEOUT_SECONDS
+    # to accept before it expires. A real DB-backed request + periodic sweep (not a pure
+    # in-memory View timeout like DaoCompanionRequestView's own 5-minute offer window) --
+    # 3 hours is far more likely to overlap a redeploy than 5 minutes, and this codebase
+    # already learned that exact lesson once from a live trade-timeout incident. Cooldown
+    # lives on the companion bond itself (last_essence_exchange_ts), not a per-player column,
+    # since it's a shared once-per-day-per-PAIR action regardless of who initiates -- deliberately
+    # flat (no cooldown_reduction_pct gear discount, unlike _check_cooldown's usual player-column
+    # model), since it's not clear whose gear would even apply to a joint pair action.
+
+    ESSENCE_EXCHANGE_TIMEOUT_SECONDS = 3 * 3600
+    ESSENCE_EXCHANGE_COOLDOWN_SECONDS = 24 * 3600
+    ESSENCE_EXCHANGE_PERCENT = 0.33
+
+    def essence_exchange_propose(self, user_id: int, name: str) -> dict:
+        self.db.get_or_create_player(user_id, name)
+        companion = self.db.get_dao_companion(user_id)
+        if companion is None:
+            return {"ok": False, "reason": "You don't have a Dao Companion yet — use `/offer_companion` to bond with someone."}
+        remaining = max(0, self.ESSENCE_EXCHANGE_COOLDOWN_SECONDS - (int(time.time()) - companion["last_essence_exchange_ts"]))
+        if remaining > 0:
+            return {"ok": False, "reason": f"You and your companion already exchanged essence recently — try again in {remaining}s.", "remaining_seconds": remaining}
+        if self.db.get_pending_essence_exchange_for_companion(companion["id"]):
+            return {"ok": False, "reason": "There's already a pending Essence Exchange request with your companion."}
+        partner_id = self._dao_companion_partner_id(companion, user_id)
+        partner_row = self.db.get_player_row(partner_id)
+        partner_name = partner_row["name"] if partner_row else "your companion"
+        request_id = self.db.create_essence_exchange_request(companion["id"], user_id, partner_id, int(time.time()))
+        return {"ok": True, "request_id": request_id, "companion_id": companion["id"], "partner_id": partner_id, "partner_name": partner_name}
+
+    def essence_exchange_accept(self, request_id: int, accepter_id: int) -> dict:
+        """Called once the partner accepts the request view. Re-validates everything fresh
+        (request still pending/not expired, accepter really is the invited partner, the bond
+        itself hasn't ended) in case anything changed while the request sat waiting -- same
+        re-validate-on-accept discipline dao_companion_accept already uses."""
+        request = self.db.get_essence_exchange_request(request_id)
+        if request is None:
+            return {"ok": False, "reason": "That Essence Exchange request no longer exists."}
+        if request["status"] != "pending":
+            return {"ok": False, "reason": f"That Essence Exchange request has already been {request['status']}."}
+        if accepter_id != request["partner_id"]:
+            return {"ok": False, "reason": "Only the invited companion can accept this."}
+        if int(time.time()) - request["created_ts"] > self.ESSENCE_EXCHANGE_TIMEOUT_SECONDS:
+            self.db.set_essence_exchange_status(request_id, "expired")
+            return {"ok": False, "reason": "This Essence Exchange request has expired."}
+        companion = self.db.get_dao_companion(request["proposer_id"])
+        if companion is None or companion["id"] != request["companion_id"]:
+            self.db.set_essence_exchange_status(request_id, "declined")
+            return {"ok": False, "reason": "That Dao Companion bond has ended — this request is no longer valid."}
+
+        proposer_id, partner_id = request["proposer_id"], request["partner_id"]
+        proposer_restored, proposer_essence, proposer_max = self.db.restore_essence_percent(proposer_id, self.ESSENCE_EXCHANGE_PERCENT)
+        partner_restored, partner_essence, partner_max = self.db.restore_essence_percent(partner_id, self.ESSENCE_EXCHANGE_PERCENT)
+        self.db.set_dao_companion_essence_exchange_ts(companion["id"], int(time.time()))
+        self.db.set_essence_exchange_status(request_id, "accepted")
+        proposer_row = self.db.get_player_row(proposer_id)
+        partner_row = self.db.get_player_row(partner_id)
+        return {
+            "ok": True,
+            "proposer_name": proposer_row["name"] if proposer_row else "?",
+            "partner_name": partner_row["name"] if partner_row else "?",
+            "proposer_restored": proposer_restored, "proposer_essence": proposer_essence, "proposer_max": proposer_max,
+            "partner_restored": partner_restored, "partner_essence": partner_essence, "partner_max": partner_max,
+        }
+
+    def essence_exchange_decline(self, request_id: int, user_id: int) -> dict:
+        request = self.db.get_essence_exchange_request(request_id)
+        if request is None:
+            return {"ok": False, "reason": "That Essence Exchange request no longer exists."}
+        if request["status"] != "pending":
+            return {"ok": False, "reason": f"That Essence Exchange request has already been {request['status']}."}
+        if user_id not in (request["proposer_id"], request["partner_id"]):
+            return {"ok": False, "reason": "This isn't your Essence Exchange request."}
+        self.db.set_essence_exchange_status(request_id, "declined")
+        return {"ok": True}
+
+    def expire_stale_essence_exchanges(self) -> list:
+        """Cancels every Essence Exchange request past ESSENCE_EXCHANGE_TIMEOUT_SECONDS with
+        no resolution. Returns the list of expired request rows so the caller can DM both
+        sides -- see GameCog.essence_exchange_timeout_tick. Mirrors expire_stale_trades'
+        own shape exactly."""
+        cutoff = int(time.time()) - self.ESSENCE_EXCHANGE_TIMEOUT_SECONDS
+        stale = self.db.get_stale_essence_exchange_requests(cutoff)
+        for request in stale:
+            self.db.set_essence_exchange_status(request["id"], "expired")
+        return stale
+
     def sect_promote(self, user_id: int, name: str, target_id: int, target_name: str):
         player = self.db.get_or_create_player(user_id, name)
         if not player["sect_id"]:

@@ -54,7 +54,7 @@ from .battlefield_view import BattlefieldView
 from .world_boss_view import WorldBossView
 from .manual_view import ManualView
 from .mentor_view import MentorRequestView
-from .dao_companion_view import DaoCompanionRequestView
+from .dao_companion_view import DaoCompanionRequestView, EssenceExchangeRequestView
 from .sect_view import SectView
 from .balance_view import BalanceView
 from .breakthrough_view import BreakthroughConfirmView
@@ -118,6 +118,7 @@ class GameCog(commands.Cog):
         self.tournament_tick.start()
         self.trade_timeout_tick.start()
         self.study_tick.start()
+        self.essence_exchange_timeout_tick.start()
 
     async def cog_unload(self):
         self.world_boss_tick.cancel()
@@ -125,6 +126,7 @@ class GameCog(commands.Cog):
         self.tournament_tick.cancel()
         self.trade_timeout_tick.cancel()
         self.study_tick.cancel()
+        self.essence_exchange_timeout_tick.cancel()
 
     # World Boss respawn scheduler (see world_boss.py's own module docstring) -- checks every
     # 5 minutes whether the current boss expired and/or a fresh one is due; GameManager.
@@ -328,6 +330,36 @@ class GameCog(commands.Cog):
             f"start a fresh one."
         )
         for user_id in (trade["initiator_id"], trade["target_id"]):
+            try:
+                user = self.bot.get_user(user_id) or await self.bot.fetch_user(user_id)
+                await user.send(message)
+            except discord.HTTPException:
+                pass
+
+    # Same 5-minute cadence as the other loops -- a 3-hour confirm window still gets swept
+    # well before it actually matters, and this is the loop that makes /essence_exchange safe
+    # against a redeploy mid-window (see GameManager's own comment on why this one needs a
+    # real DB-backed sweep instead of DaoCompanionRequestView's simpler in-memory timeout).
+    ESSENCE_EXCHANGE_TIMEOUT_TICK_INTERVAL_SECONDS = 300
+
+    @tasks.loop(seconds=ESSENCE_EXCHANGE_TIMEOUT_TICK_INTERVAL_SECONDS)
+    async def essence_exchange_timeout_tick(self):
+        for request in await asyncio.to_thread(self.game.expire_stale_essence_exchanges):
+            await self._dm_essence_exchange_timeout(request)
+
+    @essence_exchange_timeout_tick.before_loop
+    async def _before_essence_exchange_timeout_tick(self):
+        await self.bot.wait_until_ready()
+
+    async def _dm_essence_exchange_timeout(self, request):
+        """Best-effort, same shape as _dm_trade_timeout -- a player with DMs closed just
+        silently doesn't get one, and one failed DM must never stop the other side's or the
+        rest of the sweep."""
+        message = (
+            f"⏱️ Your Essence Exchange offer (request #{request['id']}) sat unconfirmed too "
+            f"long and expired — feel free to propose again with `/essence_exchange`."
+        )
+        for user_id in (request["proposer_id"], request["partner_id"]):
             try:
                 user = self.bot.get_user(user_id) or await self.bot.fetch_user(user_id)
                 await user.send(message)
@@ -2526,6 +2558,23 @@ class GameCog(commands.Cog):
             color=discord.Color.gold(),
         )
         await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="essence_exchange", description="Propose exchanging primeval essence with your Dao Companion (they must accept within 3h)")
+    @app_commands.guilds(GUILD)
+    async def essence_exchange(self, interaction: discord.Interaction):
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
+        if not player["character_confirmed"]:
+            await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
+            return
+        result = await asyncio.to_thread(self.game.essence_exchange_propose, interaction.user.id, interaction.user.display_name)
+        if not result["ok"]:
+            await interaction.response.send_message(result["reason"], ephemeral=True)
+            return
+        partner = self.bot.get_user(result["partner_id"]) or await self.bot.fetch_user(result["partner_id"])
+        view = EssenceExchangeRequestView(self.game, result["request_id"], interaction.user, partner)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view)
+        view.message = await interaction.original_response()
 
 
 async def setup(bot: commands.Bot):

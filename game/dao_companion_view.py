@@ -69,3 +69,81 @@ class DaoCompanionRequestView(GameView):
                 await self.message.edit(embed=embed, view=self)
             except discord.HTTPException:
                 pass
+
+
+class EssenceExchangeRequestView(GameView):
+    """Sent when a player proposes an Essence Exchange to their Dao Companion (see
+    /essence_exchange) -- target-only Accept, either-side Decline, same shape as
+    DaoCompanionRequestView above EXCEPT the pending request is a real DB row (see
+    GameManager.essence_exchange_propose/accept/decline), not purely in-memory: a 3-hour
+    confirm window is far more likely to overlap a redeploy than a 5-minute one, so
+    GameCog.essence_exchange_timeout_tick's periodic sweep is the actual expiry authority --
+    this view's own on_timeout is just a best-effort visual grey-out if the process happens
+    to survive the whole window uninterrupted, not something depended on for correctness."""
+
+    def __init__(self, game, request_id: int, proposer: discord.abc.User, partner: discord.abc.User):
+        super().__init__(timeout=game.ESSENCE_EXCHANGE_TIMEOUT_SECONDS)
+        self.game = game
+        self.request_id = request_id
+        self.proposer = proposer
+        self.partner = partner
+        self.message: discord.Message = None
+
+    def build_embed(self) -> discord.Embed:
+        embed = discord.Embed(
+            title="💧 Essence Exchange Offer",
+            description=(
+                f"{self.partner.mention} — **{self.proposer.display_name}** wants to exchange primeval "
+                f"essence with you! Accepting fills **both** of your essence by "
+                f"**{self.game.ESSENCE_EXCHANGE_PERCENT * 100:.0f}%** of your max."
+            ),
+            color=discord.Color.blue(),
+        )
+        embed.set_footer(text="Accept to exchange essence together. Expires in 3 hours.")
+        return embed
+
+    @discord.ui.button(label="Accept", emoji="✅", style=discord.ButtonStyle.success)
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.partner.id:
+            await interaction.response.send_message("Only the invited companion can accept this.", ephemeral=True)
+            return
+        result = await asyncio.to_thread(self.game.essence_exchange_accept, self.request_id, interaction.user.id)
+        for child in self.children:
+            child.disabled = True
+        if result["ok"]:
+            embed = discord.Embed(
+                title="💧 Essence Exchange Accepted!",
+                description=(
+                    f"**{result['proposer_name']}**: +{result['proposer_restored']:,} essence "
+                    f"({result['proposer_essence']:,}/{result['proposer_max']:,})\n"
+                    f"**{result['partner_name']}**: +{result['partner_restored']:,} essence "
+                    f"({result['partner_essence']:,}/{result['partner_max']:,})"
+                ),
+                color=discord.Color.green(),
+            )
+        else:
+            embed = discord.Embed(title="💧 Essence Exchange Failed", description=result["reason"], color=discord.Color.red())
+        await interaction.response.edit_message(embed=embed, view=self)
+        self.stop()
+
+    @discord.ui.button(label="Decline", emoji="❌", style=discord.ButtonStyle.danger)
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id not in (self.proposer.id, self.partner.id):
+            await interaction.response.send_message("This isn't your Essence Exchange offer.", ephemeral=True)
+            return
+        await asyncio.to_thread(self.game.essence_exchange_decline, self.request_id, interaction.user.id)
+        for child in self.children:
+            child.disabled = True
+        embed = discord.Embed(title="💧 Essence Exchange Declined", color=discord.Color.dark_grey())
+        await interaction.response.edit_message(embed=embed, view=self)
+        self.stop()
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if self.message is not None:
+            embed = discord.Embed(title="💧 Essence Exchange Expired", color=discord.Color.dark_grey())
+            try:
+                await self.message.edit(embed=embed, view=self)
+            except discord.HTTPException:
+                pass

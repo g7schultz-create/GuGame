@@ -473,7 +473,30 @@ class GameDatabase:
             partner_b_id INTEGER NOT NULL,
             formed_ts INTEGER NOT NULL,
             times_used INTEGER NOT NULL DEFAULT 0,
-            total_qi_granted REAL NOT NULL DEFAULT 0
+            total_qi_granted REAL NOT NULL DEFAULT 0,
+            last_essence_exchange_ts INTEGER NOT NULL DEFAULT 0
+        )
+        """)
+        dao_companions_columns = {row[1] for row in cur.execute("PRAGMA table_info(dao_companions)").fetchall()}
+        if "last_essence_exchange_ts" not in dao_companions_columns:
+            cur.execute("ALTER TABLE dao_companions ADD COLUMN last_essence_exchange_ts INTEGER NOT NULL DEFAULT 0")
+
+        # Essence Exchange (see /essence_exchange) -- a mutual, CONFIRMED action between Dao
+        # Companions (unlike "i dc"'s instant/unilateral burst), so a pending request needs a
+        # real DB row + periodic sweep to survive a redeploy mid-window -- a 3-hour confirm
+        # window is far more likely to overlap a restart than the 5-minute companion-offer
+        # window, which is why THAT one gets away with a pure in-memory View timeout and this
+        # one deliberately doesn't (see the trade-timeout incident this same lesson came from).
+        # Only one 'pending' row per companion_id at a time (enforced in GameManager before
+        # insert, same validate-before-insert style as dao_companions itself).
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS essence_exchange_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            companion_id INTEGER NOT NULL,
+            proposer_id INTEGER NOT NULL,
+            partner_id INTEGER NOT NULL,
+            created_ts INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending'
         )
         """)
 
@@ -3468,6 +3491,54 @@ class GameDatabase:
         )
         con.commit()
         con.close()
+
+    def set_dao_companion_essence_exchange_ts(self, companion_id: int, ts: int):
+        con = self.connect()
+        con.execute("UPDATE dao_companions SET last_essence_exchange_ts = ? WHERE id = ?", (ts, companion_id))
+        con.commit()
+        con.close()
+
+    # -- Essence Exchange (see /essence_exchange, GameManager.essence_exchange_*) -----------
+
+    def create_essence_exchange_request(self, companion_id: int, proposer_id: int, partner_id: int, created_ts: int) -> int:
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute(
+            "INSERT INTO essence_exchange_requests (companion_id, proposer_id, partner_id, created_ts) VALUES (?, ?, ?, ?)",
+            (companion_id, proposer_id, partner_id, created_ts),
+        )
+        con.commit()
+        request_id = cur.lastrowid
+        con.close()
+        return request_id
+
+    def get_pending_essence_exchange_for_companion(self, companion_id: int) -> Optional[dict]:
+        con = self.connect()
+        row = con.execute(
+            "SELECT * FROM essence_exchange_requests WHERE companion_id = ? AND status = 'pending'", (companion_id,),
+        ).fetchone()
+        con.close()
+        return dict(row) if row else None
+
+    def get_essence_exchange_request(self, request_id: int) -> Optional[dict]:
+        con = self.connect()
+        row = con.execute("SELECT * FROM essence_exchange_requests WHERE id = ?", (request_id,)).fetchone()
+        con.close()
+        return dict(row) if row else None
+
+    def set_essence_exchange_status(self, request_id: int, status: str):
+        con = self.connect()
+        con.execute("UPDATE essence_exchange_requests SET status = ? WHERE id = ?", (status, request_id))
+        con.commit()
+        con.close()
+
+    def get_stale_essence_exchange_requests(self, cutoff: int) -> list:
+        con = self.connect()
+        rows = con.execute(
+            "SELECT * FROM essence_exchange_requests WHERE status = 'pending' AND created_ts < ?", (cutoff,),
+        ).fetchall()
+        con.close()
+        return [dict(row) for row in rows]
 
     # -- Equipment -----------------------------------------------------------
 
