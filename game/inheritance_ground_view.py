@@ -21,13 +21,18 @@ Three views:
 import asyncio
 import os
 import random
+from typing import Optional
 
 import discord
 
-from . import avatar, combat, inheritance_ground_data
+from . import avatar, chargen, combat, inheritance_ground_data
 from .base_view import GameView
 from .content.monsters import blood_sea_ancestor
-from .team_battle import EMPOWER_QI_COST, GUARD_DAMAGE_REDUCTION, RaidEnemy, TeamBattleEngine
+from .team_battle import (
+    AllyPickerView, DEFEND_ALLY_DAMAGE_REDUCTION, EMPOWER_QI_COST, FREEZE_PROC_CHANCE,
+    FREEZE_STR_MULTIPLIER, GUARD_DAMAGE_REDUCTION, INSPIRE_DEF_BONUS_PCT, INSPIRE_DURATION_ROUNDS,
+    INSPIRE_STR_BONUS_PCT, RaidEnemy, TeamBattleEngine,
+)
 from .ui_utils import render_bar
 
 BETRAYAL_DECISION_SECONDS = 60
@@ -257,15 +262,21 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         self.share_grants: list = []
         self.betrayal_result: dict = None
 
-        # Backstab duel (1+ backstabbers) -- a real, live, turn-based Attack/Guard multi-way
-        # fight, resolved on the "backstab_duel" phase (see _start_backstab_duel). Every
-        # backstabber is their OWN side (solo); every sharer shares ONE side (SHARER_SIDE) --
-        # so a lone backstabber faces the whole sharer group, 2 backstabbers + sharers is a
-        # real 3-way, and so on. Empty/zeroed until (if ever) a duel actually starts.
-        self.duel_participants: dict = {}
-        self.duel_actions: dict = {}
-        self.duel_round = 1
-        self.duel_log: list = []
+        # Backstab duel (1+ backstabbers) -- a real, live, turn-based multi-way fight with the
+        # SAME full action set (Attack/Guard/Empower/Class Ability/Gu Ability/Killer Move/Soul
+        # Projection/Potion) and manual player targeting a battle bubble gets, resolved on the
+        # "backstab_duel" phase (see _start_backstab_duel). Deliberately reuses self.participants/
+        # self.actions/self.round/self.log (the SAME state a battle bubble fight uses) rather
+        # than a separate duel-only dict, so the whole TeamBattleEngine action-submission
+        # pipeline (_validate_actor/_submit_action/_attacker_stats/Empower/Potion menu/Defend
+        # Ally picker/etc.) Just Works here too -- see _resolve_duel_round/_resolve_duel_hit for
+        # the PvP-specific targeting/mitigation layered on top. Every backstabber is their OWN
+        # side (solo); every sharer shares ONE side (SHARER_SIDE) -- so a lone backstabber faces
+        # the whole sharer group, 2 backstabbers + sharers is a real 3-way, and so on.
+        # duel_inspire_rounds_remaining is side-scoped (Support's Inspire should only buff the
+        # caster's own side) -- see _duel_attacker_stats for why the SHARED self.
+        # inspire_rounds_remaining a normal battle uses is forced to 0 during a duel instead.
+        self.duel_inspire_rounds_remaining: dict = {}
         self._duel_round_epoch = 0
 
         self.message: discord.Message = None
@@ -366,15 +377,54 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             backstab_button.callback = self._make_betrayal_callback("backstab")
             self.add_item(backstab_button)
         elif self.phase == "backstab_duel":
-            # Attack/Guard only, auto-targeted at a random living duelist on a different side
-            # -- see _resolve_duel_round. No target-select: the request was "clicks
-            # Attack/Guard", not a full manual-targeting FFA.
-            attack_button = discord.ui.Button(label="Attack", emoji="⚔️", style=discord.ButtonStyle.danger)
+            # Full raid-parity action set (same as the "battle" phase above) plus manual player
+            # targeting -- per explicit request. Target-select is ALWAYS shown here (unlike the
+            # "battle" phase's own enemy select, which only appears for 2+ enemies) since
+            # picking WHO to fight is the whole point in a multi-way duel.
+            target_options = [
+                discord.SelectOption(
+                    label=f"{p['name']} — {max(0, p['hp']):,.0f}/{p['max_hp']:,.0f} HP", value=str(uid),
+                    emoji="🤝" if p["side"] == SHARER_SIDE else "🗡️",
+                )
+                for uid, p in self.participants.items() if not p["down"]
+            ]
+            target_select = discord.ui.Select(
+                placeholder="Choose your target (for Attack/Guard/Gu ability/Killer Move)..." if target_options else "No targets left",
+                options=target_options or [discord.SelectOption(label="None", value="none")],
+                disabled=not target_options,
+                row=2,
+            )
+            target_select.callback = self._on_duel_pick_target
+            self.add_item(target_select)
+
+            attack_button = discord.ui.Button(label="Attack", emoji="⚔️", style=discord.ButtonStyle.danger, row=0)
             attack_button.callback = self._on_duel_attack
             self.add_item(attack_button)
-            guard_button = discord.ui.Button(label="Guard", emoji="🛡️", style=discord.ButtonStyle.secondary)
+            guard_button = discord.ui.Button(label="Guard", emoji="🛡️", style=discord.ButtonStyle.secondary, row=0)
             guard_button.callback = self._on_duel_guard
             self.add_item(guard_button)
+            empower_button = discord.ui.Button(label=f"Empower ({EMPOWER_QI_COST})", emoji="✨", style=discord.ButtonStyle.success, row=0)
+            empower_button.callback = self._on_toggle_empower
+            self.add_item(empower_button)
+            class_button = discord.ui.Button(label="Class Ability", emoji="🎭", style=discord.ButtonStyle.success, row=0)
+            class_button.callback = self._on_duel_class_ability
+            self.add_item(class_button)
+
+            gu_button = discord.ui.Button(label="Use Gu Ability", emoji="🐛", style=discord.ButtonStyle.primary, row=1)
+            gu_button.callback = self._on_duel_gu_ability
+            self.add_item(gu_button)
+            killer_move_button = discord.ui.Button(label="Use Killer Move", emoji="🌀", style=discord.ButtonStyle.primary, row=1)
+            killer_move_button.callback = self._on_duel_killer_move
+            self.add_item(killer_move_button)
+            soul_projection_button = discord.ui.Button(
+                label=f"Soul Projection ({avatar.SOUL_PROJECTION_QI_COST:,})", emoji="🌀",
+                style=discord.ButtonStyle.success, row=1,
+            )
+            soul_projection_button.callback = self._on_duel_soul_projection
+            self.add_item(soul_projection_button)
+            potion_button = discord.ui.Button(label="Use Potion/Pill", emoji="🧪", style=discord.ButtonStyle.success, row=1)
+            potion_button.callback = self._on_open_potion_menu
+            self.add_item(potion_button)
         # "trial_result" and "resolved" phases have no buttons -- purely display states.
 
     # -- intro -----------------------------------------------------------------------------
@@ -517,13 +567,18 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         it's safe here the same way _start_battle_round_timer already relies on being called
         from a real async context, never from inside a to_thread-dispatched function."""
         phase_before = self.phase
-        await asyncio.to_thread(self._resolve_round)
+        if self.phase == "backstab_duel":
+            await asyncio.to_thread(self._resolve_duel_round)
+        else:
+            await asyncio.to_thread(self._resolve_round)
         await asyncio.to_thread(self._build_components)
         await self._refresh_message()
         if self.phase == "battle":
             self._start_battle_round_timer()
         elif self.phase == "betrayal" and phase_before != "betrayal":
             self._start_betrayal_timer()
+        elif self.phase == "backstab_duel":
+            self._start_duel_round_timer()
 
     async def _on_pick_target(self, interaction: discord.Interaction):
         """Only ever wired up when len(self.enemies) > 1 (see _build_components) -- mirrors
@@ -665,64 +720,93 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         self.game.finish_inheritance_ground_run([uid for uid, _ in self.team])
         self.phase = "resolved"
 
-    # -- backstab duel (anyone backstabs -- a real live multi-way Attack/Guard fight, not a
-    # simulation) -- every backstabber is their OWN side, every sharer shares SHARER_SIDE, so a
-    # lone backstabber faces the whole sharer group, 2 backstabbers + sharers is a real 3-way,
-    # and so on. asyncio.create_task (via _start_duel_round_timer) requires a running loop on
-    # the CURRENT thread, so it's always called directly on the main thread, never from inside
-    # a to_thread-dispatched function -- same discipline every other round timer in this view
-    # already established (see _start_battle_round_timer's own comment).
-
-    def _duel_combat_stats(self, user_id: int) -> dict:
-        """Base + equipped-gear stats only (no Empower/Gu Ability/physique traits/etc.) --
-        the duel's scope is deliberately just Attack/Guard, mirroring pvp_view.py's own
-        _player_combat_stats shape."""
-        player = self.game.get_player_stats(user_id, self.duel_participants[user_id]["name"])
-        bonuses = self.game.compute_equipment_bonuses(user_id)["stats"]
-        return {
-            "atk_stat": player["atk_stat"] + bonuses["atk_stat"],
-            "str_stat": player["str_stat"] + bonuses["str_stat"],
-            "def_stat": player["def_stat"] + bonuses["def_stat"],
-            "spd_stat": player["spd_stat"] + bonuses["spd_stat"],
-            "luck_stat": player["luck_stat"] + bonuses["luck_stat"],
-        }
-
-    def _duel_alive_ids(self):
-        return [uid for uid, p in self.duel_participants.items() if not p["down"]]
-
-    def _seed_duel_participant(self, uid: int, name: str, side: str):
-        """Seeds one duelist's HP from their real current HP (same equipment-overlay pattern
-        _build_participant_state/pvp_view use) -- this is a real fight with real stakes, not a
-        harmless /pvp-style duel, matching "back stab ... for the loot" being a genuine risk."""
-        equip_bonuses = self.game.compute_equipment_bonuses(uid)["stats"]
-        hp_bonus = equip_bonuses["hp"]
-        hp_settled = self.game.db.settle_hp_regen(uid)
-        self.duel_participants[uid] = {
-            "name": name, "hp": hp_settled["hp"] + hp_bonus, "max_hp": hp_settled["max_hp"] + hp_bonus,
-            "hp_bonus": hp_bonus, "down": False, "side": side,
-        }
+    # -- backstab duel (anyone backstabs -- a real live multi-way fight with the FULL raid-
+    # parity action set and manual targeting, not a simulation) -- every backstabber is their
+    # OWN side, every sharer shares SHARER_SIDE, so a lone backstabber faces the whole sharer
+    # group, 2 backstabbers + sharers is a real 3-way, and so on. Reuses self.participants/
+    # self.actions/self.round/self.log (see __init__'s own comment) so _validate_actor/
+    # _submit_action/_attacker_stats/_on_toggle_empower/_on_open_potion_menu/AllyPickerView/
+    # PotionPickerView (all from TeamBattleEngine, team_battle.py) work here unmodified --
+    # only targeting (a living PLAYER on a different side, never self.enemies) and round
+    # resolution (_resolve_duel_round/_resolve_duel_hit below) are duel-specific. Documented
+    # scope gap: the handful of niche physique quirks that only make sense against a fixed
+    # RaidEnemy (solar/lunar stack growth, Lunar's hit-everyone AOE, Swift Foot's dodge-
+    # momentum, Strong Bone's every-3rd-attack bonus, Fire/Sunfire burn DoTs) are NOT modeled
+    # here -- everything else a battle bubble supports (gear/manual/dao path bonuses, crit/
+    # lifesteal/armor-pen, Empower, execute-vs-injured, guard/guard-stacks/high-hp reduction,
+    # Defend Ally redirect, Frostbinder Freeze, side-scoped Inspire, Soul Projection, fatal-hit
+    # negation, ward/escape/death-penalty, Immovable Mountain retaliation) is. asyncio.
+    # create_task (via _start_duel_round_timer) requires a running loop on the CURRENT thread,
+    # so it's always called directly on the main thread, never from inside a to_thread-
+    # dispatched function -- same discipline every other round timer in this view established.
 
     def _start_backstab_duel(self, backstabbers: list, sharers: list):
         """Sync -- called from within _resolve_betrayal, itself always dispatched via
-        asyncio.to_thread."""
+        asyncio.to_thread. Seeds every duelist via the SAME _build_participant_state a battle
+        bubble uses (TeamBattleEngine, team_battle.py) -- full Empower/Gu/Killer Move/Soul
+        Projection/physique-trait state, not just base+gear -- this is a real fight with real
+        stakes, not a harmless /pvp-style duel, matching "back stab ... for the loot" being a
+        genuine risk. self.enemies is cleared (not just left stale) so _build_participant_
+        state's own Clear Mind-physique adaptive-stat comparison correctly finds no monster to
+        compare against, rather than silently comparing against whatever was last fought."""
         self.phase = "backstab_duel"
-        self.duel_participants = {}
+        self.enemies = []
+        self.participants = {}
         for uid, name in backstabbers:
-            self._seed_duel_participant(uid, name, side=uid)  # each backstabber is their own side
+            player = self.game.get_player_stats(uid, name)
+            state = self._build_participant_state(uid, name, player)
+            state["side"] = uid  # each backstabber is their own side
+            state["frozen_rounds"] = 0
+            self.participants[uid] = state
+            self.game.apply_encounter_start_bonuses(uid, name)
         for uid, name in sharers:
-            self._seed_duel_participant(uid, name, side=SHARER_SIDE)
-        self.duel_actions = {}
-        self.duel_round = 1
+            player = self.game.get_player_stats(uid, name)
+            state = self._build_participant_state(uid, name, player)
+            state["side"] = SHARER_SIDE
+            state["frozen_rounds"] = 0
+            self.participants[uid] = state
+            self.game.apply_encounter_start_bonuses(uid, name)
+        self.actions = {}
+        self.round = 1
+        self.inspire_rounds_remaining = 0  # the SHARED global buff must stay off in a duel --
+        self.duel_inspire_rounds_remaining = {}  # see _duel_attacker_stats for the real (side-scoped) version
         names_b = ", ".join(name for _, name in backstabbers)
         if sharers:
             names_s = ", ".join(name for _, name in sharers)
-            self.duel_log = [f"🗡️ {names_b} backstab the team! {names_s} fight back to defend the loot!"]
+            self.log = [f"🗡️ {names_b} backstab the team! {names_s} fight back to defend the loot!"]
         else:
-            self.duel_log = [f"🗡️ {names_b} turn on each other for the Core Gu!"]
+            self.log = [f"🗡️ {names_b} turn on each other for the Core Gu!"]
+
+    def _duel_attacker_stats(self, user_id: int, p: dict) -> tuple:
+        """_attacker_stats (TeamBattleEngine) with self.inspire_rounds_remaining forced to 0
+        during a duel (see _start_backstab_duel), plus this participant's SIDE-scoped Inspire
+        bonus (duel_inspire_rounds_remaining) layered on top -- a normal battle's single shared
+        flag would otherwise buff BOTH sides of a duel, which makes no sense for a PvP fight."""
+        stats, bonuses, sp = self._attacker_stats(user_id, p)
+        if self.duel_inspire_rounds_remaining.get(p["side"], 0) > 0:
+            stats["str_stat"] = round(stats["str_stat"] * (1 + INSPIRE_STR_BONUS_PCT))
+            stats["def_stat"] = round(stats["def_stat"] * (1 + INSPIRE_DEF_BONUS_PCT))
+        return stats, bonuses, sp
+
+    def _resolve_duel_target_uid(self, p: dict) -> Optional[int]:
+        """The player user_id a duelist's next action should hit -- their manually-picked
+        target if it's still alive and on a hostile side, otherwise the first living duelist
+        (by self.participants insertion order -- backstabbers, then sharers) on a different
+        side -- mirrors _resolve_target_index's own "preferred pick, else first alive" fallback
+        shape. None if nobody hostile is left."""
+        hostile = [uid for uid in self._alive_participant_ids() if self.participants[uid]["side"] != p["side"]]
+        if not hostile:
+            return None
+        target_uid = p.get("target_uid")
+        return target_uid if target_uid in hostile else hostile[0]
 
     def _apply_duel_afk_actions(self):
-        for uid in self._duel_alive_ids():
-            self.duel_actions.setdefault(uid, "attack")
+        for uid in self._alive_participant_ids():
+            if uid in self.actions:
+                continue
+            p = self.participants[uid]
+            self.actions[uid] = {"type": "attack", "target_uid": self._resolve_duel_target_uid(p), "guaranteed": False}
+            self._log(f"⏱️ **{p['name']}** ran out of time and attacks on reflex!")
 
     def _start_duel_round_timer(self):
         self._duel_round_epoch += 1
@@ -733,116 +817,387 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         if self.phase != "backstab_duel" or epoch != self._duel_round_epoch:
             return
         await asyncio.to_thread(self._apply_duel_afk_actions)
-        await self._finish_duel_round()
-
-    async def _submit_duel_action(self, user_id: int, action_type: str):
-        self.duel_actions[user_id] = action_type
-        if set(self._duel_alive_ids()).issubset(self.duel_actions.keys()):
-            await self._finish_duel_round()
-        else:
-            await asyncio.to_thread(self._build_components)
-            await self._refresh_message()
-
-    async def _finish_duel_round(self):
-        await asyncio.to_thread(self._resolve_duel_round)
-        await asyncio.to_thread(self._build_components)
-        await self._refresh_message()
-        if self.phase == "backstab_duel":
-            self._start_duel_round_timer()
+        await self._finish_round()
 
     def _resolve_duel_round(self):
-        """Sync -- dispatched via asyncio.to_thread by both callers above. Every duelist who
-        attacks targets a randomly-chosen living duelist on a DIFFERENT side (no manual
-        targeting -- the request scope is just Attack/Guard; same-side allies, i.e. fellow
-        sharers, are never attacked); guarding halves whatever damage lands on you this round.
-        Ends the round once at most one SIDE still has anyone alive -- not just one person,
-        since the sharer side can have several survivors."""
-        alive = self._duel_alive_ids()
-        attackers = [uid for uid in alive if self.duel_actions.get(uid, "attack") == "attack"]
-        random.shuffle(attackers)
-        for uid in attackers:
-            attacker = self.duel_participants[uid]
-            if attacker["down"]:
+        """Sync -- dispatched via asyncio.to_thread by _finish_round. Mirrors TeamBattleEngine.
+        _resolve_round's own Phase 0 (Inspire)/0.5 (Soul Projection)/1 (attack/gu/freeze/
+        soul_projection/killer_move) shape, but every target is a living PLAYER on a different
+        side (never self.enemies), resolved in SUBMISSION order (not randomized) to match a
+        normal battle's own "whoever locked in first resolves first" convention. Ends once at
+        most one SIDE still has anyone alive -- not just one person, since the sharer side can
+        have several survivors."""
+        # Phase 0: Support's Inspire -- side-scoped here (see _duel_attacker_stats), unlike a
+        # normal battle's single shared self.inspire_rounds_remaining.
+        for user_id, action in self.actions.items():
+            if action["type"] != "inspire":
                 continue
-            my_side = attacker["side"]
-            targets = [t for t in self._duel_alive_ids() if self.duel_participants[t]["side"] != my_side]
-            if not targets:
+            p = self.participants.get(user_id)
+            if p is None or p["down"]:
                 continue
-            target_uid = random.choice(targets)
-            target = self.duel_participants[target_uid]
-            guarding = self.duel_actions.get(target_uid) == "guard"
-            result = combat.resolve_attack(
-                self._duel_combat_stats(uid), self._duel_combat_stats(target_uid),
-                incoming_reduction=GUARD_DAMAGE_REDUCTION if guarding else 0.0,
-            )
-            if not result.hit:
-                self.duel_log.append(f"⚔️ **{attacker['name']}** attacks **{target['name']}** but misses!")
-            elif result.dodged:
-                self.duel_log.append(f"💨 **{target['name']}** dodges **{attacker['name']}**'s attack!")
-            else:
-                target["hp"] = max(0, target["hp"] - result.damage)
-                crit = " (Critical!)" if result.crit else ""
-                guard_note = " (guarded)" if guarding else ""
-                self.duel_log.append(f"⚔️ **{attacker['name']}** hits **{target['name']}** for {result.damage} damage{crit}{guard_note}.")
-                if target["hp"] <= 0:
-                    target["down"] = True
-                    self.duel_log.append(f"💀 **{target['name']}** is knocked out of the duel!")
-        self.duel_log = self.duel_log[-6:]
-        self.duel_actions = {}
+            self.duel_inspire_rounds_remaining[p["side"]] = INSPIRE_DURATION_ROUNDS
+            self._log(f"✨ **{p['name']}** inspires their side — STR and DEF surge!")
 
-        still_alive = self._duel_alive_ids()
-        alive_sides = {self.duel_participants[uid]["side"] for uid in still_alive}
+        # Phase 0.5: Soul Projection -- identical to a normal battle's own handling.
+        for user_id, action in self.actions.items():
+            if action["type"] != "soul_projection":
+                continue
+            p = self.participants.get(user_id)
+            if p is None or p["down"]:
+                continue
+            soul = avatar.get_avatar_soul(p.get("avatar_soul"))
+            if soul is None:
+                continue
+            p["soul_projection_rounds_remaining"] = avatar.soul_projection_duration(soul)
+            self._log(f"🌀 **{p['name']}** channels {avatar.SOUL_PROJECTION_NAME} — {soul.name}'s power surges through them!")
+
+        # Defend Ally redirect map (defended_user_id -> defender_user_id) -- mirrors
+        # _resolve_round's own Phase 3 defend_map construction.
+        defend_map = {}
+        for uid, action in self.actions.items():
+            if action["type"] != "defend_ally":
+                continue
+            defender = self.participants.get(uid)
+            if defender and not defender["down"]:
+                defend_map[action["defended"]] = uid
+
+        # Phase 1: every attack/gu/freeze/soul_projection/killer_move action, in submission order.
+        for user_id, action in list(self.actions.items()):
+            p = self.participants.get(user_id)
+            if p is None or p["down"] or action["type"] not in ("attack", "gu", "freeze", "soul_projection", "killer_move"):
+                continue
+            if p.get("frozen_rounds", 0) > 0:
+                p["frozen_rounds"] -= 1
+                self._log(f"🥶 **{p['name']}** is frozen and can't act this round!")
+                continue
+            target_uid = action.get("target_uid")
+            if target_uid is None or target_uid not in self._alive_participant_ids() or self.participants[target_uid]["side"] == p["side"]:
+                target_uid = self._resolve_duel_target_uid(p)
+            if target_uid is None:
+                continue  # nobody hostile left standing -- the round-end check below will catch this
+
+            attacker_stats, bonuses, sp = self._duel_attacker_stats(user_id, p)
+            is_gu = action["type"] == "gu"
+            is_freeze = action["type"] == "freeze"
+            is_soul_projection = action["type"] == "soul_projection"
+            is_killer_move = action["type"] == "killer_move"
+            if is_gu:
+                str_multiplier = action["ability"].str_multiplier
+                label = action["ability"].name
+            elif is_freeze:
+                str_multiplier = FREEZE_STR_MULTIPLIER
+                label = "Freeze"
+            elif is_soul_projection:
+                str_multiplier = 1.0
+                label = avatar.SOUL_PROJECTION_NAME
+            elif is_killer_move:
+                str_multiplier = action["move"]["effects"]["str_multiplier"]
+                label = action["move"]["name"]
+            else:
+                str_multiplier = 1.0
+                label = "Attack"
+
+            damage_pct_bonus = (
+                bonuses.get("technique_damage_pct", 0) if (is_gu or is_freeze or is_soul_projection or is_killer_move)
+                else bonuses.get("physical_damage_pct", 0)
+            ) + bonuses.get("total_damage_pct", 0)
+            root_spec = chargen.get_root_spec(p.get("root_name"))
+            if action.get("guaranteed"):
+                damage_pct_bonus += self._trait_bonus(p, "empower_damage_pct")
+            if p.get("fire_str_pending"):
+                damage_pct_bonus += root_spec.fire_battle_qi_str_bonus_pct
+                p["fire_str_pending"] = False
+            target_p = self.participants[target_uid]
+            if target_p["hp"] > 0 and target_p["hp"] < target_p["max_hp"] * 0.5:
+                damage_pct_bonus += bonuses.get("execute_damage_pct", 0) + sp.get("execute_damage_pct", 0)
+
+            self._resolve_duel_hit(
+                user_id, p, attacker_stats, bonuses, sp, target_uid, defend_map,
+                str_multiplier, label, damage_pct_bonus, action.get("guaranteed", False), is_freeze,
+            )
+
+        self.actions.clear()
+        for side in list(self.duel_inspire_rounds_remaining):
+            self.duel_inspire_rounds_remaining[side] -= 1
+            if self.duel_inspire_rounds_remaining[side] <= 0:
+                del self.duel_inspire_rounds_remaining[side]
+        for p in self.participants.values():
+            if p.get("soul_projection_rounds_remaining", 0) > 0:
+                p["soul_projection_rounds_remaining"] -= 1
+
+        still_alive = self._alive_participant_ids()
+        alive_sides = {self.participants[uid]["side"] for uid in still_alive}
         if len(alive_sides) <= 1:
             self._finish_backstab_duel(still_alive)
         else:
-            self.duel_round += 1
+            self.round += 1
+
+    def _apply_duel_knockout(self, user_id: int, p: dict):
+        """Ward/Worldly Escape/death-penalty pipeline on an actual duel knockout -- shared by
+        both a landed hit and a retaliation kill in _resolve_duel_hit, mirroring how a normal
+        battle's Phase 1.65 (bleed) reuses the exact same pipeline as its own Phase 3."""
+        p["down"] = True
+        self.game.db.set_hp(user_id, 1)
+        ward_name = self.game.check_and_consume_defeat_ward(user_id)
+        if ward_name:
+            self._log(f"✨ **{ward_name}** activates for **{p['name']}** — knocked out, but the Qi loss is warded away!")
+            return
+        if self.game.check_and_consume_worldly_escape(user_id):
+            self._log(f"✨ **Worldly Escape Gu** activates for **{p['name']}** — knocked out, but the Qi loss is escaped entirely!")
+            return
+        reduction = self.game.compute_equipment_bonuses(user_id).get("death_qi_loss_reduction_pct", 0)
+        qi_lost, _ = self.game.db.apply_death_penalty(user_id, reduction_pct=reduction)
+        self._log(f"💀 **{p['name']}** is knocked out, losing {qi_lost:,.2f} qi!")
+
+    def _resolve_duel_hit(
+        self, attacker_uid: int, attacker_p: dict, attacker_stats: dict, bonuses: dict, sp: dict,
+        target_uid: int, defend_map: dict, str_multiplier: float, label: str,
+        damage_pct_bonus: float, guaranteed_hit: bool, is_freeze: bool,
+    ):
+        """One player-vs-player strike -- mirrors TeamBattleEngine._resolve_enemy_hit's own
+        mitigation pipeline (Defend Ally redirect, Guard, race/physique reduction, guard-stack
+        reduction, high-HP reduction, fatal-hit negation, ward/escape/death-penalty,
+        retaliation) but symmetric: BOTH sides are real players with real gear, so the
+        DEFENDER's own dodge/ignore-attack bonuses apply here too (a normal battle's Phase 1
+        never needs that since a monster target has no gear)."""
+        target_p = self.participants[target_uid]
+        redirected_from = None
+        if target_uid in defend_map and defend_map[target_uid] in self._alive_participant_ids() and defend_map[target_uid] != target_uid:
+            redirected_from = target_uid
+            target_uid = defend_map[target_uid]
+            target_p = self.participants[target_uid]
+            self._log(f"🛡️ **{target_p['name']}** steps in to defend **{self.participants[redirected_from]['name']}** from **{attacker_p['name']}**'s {label}!")
+
+        action = self.actions.get(target_uid)
+        guard_reduction = DEFEND_ALLY_DAMAGE_REDUCTION if redirected_from is not None else 0.0
+        if action and action["type"] == "guard" and action.get("target_uid") == attacker_uid:
+            guard_reduction = max(guard_reduction, 1.0 if action.get("full_block") else GUARD_DAMAGE_REDUCTION)
+
+        race_physique_reduction = chargen.race_physique_damage_reduction(
+            target_p.get("race"), target_p.get("physique_tier"), target_p["hp"] / target_p["max_hp"],
+        )
+        total_reduction = 1 - (1 - guard_reduction) * (1 - race_physique_reduction) if race_physique_reduction else guard_reduction
+        guard_stack_reduction = self._trait_bonus(target_p, "guard_stack_def_pct") * target_p.get("guard_stacks", 0)
+        if guard_stack_reduction:
+            total_reduction = 1 - (1 - total_reduction) * (1 - guard_stack_reduction)
+        if target_p["hp"] > target_p["max_hp"] * 0.6:
+            high_hp_reduction = self._trait_bonus(target_p, "high_hp_damage_reduction_pct")
+            if high_hp_reduction:
+                total_reduction = 1 - (1 - total_reduction) * (1 - high_hp_reduction)
+        if total_reduction >= 1.0:
+            self._log(f"🛡️ **{target_p['name']}** fully blocks **{attacker_p['name']}**'s {label}!")
+            return
+
+        defender_stats, defender_bonuses, defender_sp = self._duel_attacker_stats(target_uid, target_p)
+        result = combat.resolve_attack(
+            attacker_stats, defender_stats, str_multiplier=str_multiplier, guaranteed_hit=guaranteed_hit,
+            incoming_reduction=total_reduction,
+            crit_chance_bonus=bonuses.get("crit_chance_pct", 0) + sp.get("crit_chance_pct", 0),
+            crit_damage_bonus=bonuses.get("crit_damage_pct", 0) + sp.get("crit_damage_pct", 0),
+            lifesteal_percent=bonuses.get("lifesteal_percent", 0) + sp.get("lifesteal_percent", 0),
+            damage_pct_bonus=damage_pct_bonus,
+            armor_penetration_pct=bonuses.get("armor_penetration_pct", 0) + sp.get("armor_penetration_pct", 0),
+            dodge_chance_bonus=defender_bonuses.get("dodge_chance_pct", 0) + defender_sp.get("dodge_chance_pct", 0),
+            ignore_chance=defender_bonuses.get("ignore_attack_chance", 0) + defender_sp.get("ignore_attack_chance", 0),
+        )
+        if not result.hit:
+            self._log(f"❌ **{attacker_p['name']}** uses {label} on **{target_p['name']}** but misses!")
+            return
+        if result.dodged:
+            self._log(f"💨 **{target_p['name']}** dodges **{attacker_p['name']}**'s {label}!")
+            return
+        if result.ignored:
+            self._log(f"🛡️ **{target_p['name']}**'s Gu shrugs off **{attacker_p['name']}**'s attack entirely!")
+            return
+        if target_p["hp"] - result.damage <= 0 and (self._try_negate_fatal_hit(target_uid, target_p) or self._try_avatar_fatal_block(target_uid, target_p)):
+            self._log(f"✨ **{attacker_p['name']}**'s {label} should have finished **{target_p['name']}** — their body refuses to fall!")
+            return
+
+        target_p["hp"] = max(0, target_p["hp"] - result.damage)
+        self._persist_hp(target_uid, target_p)
+        crit = " (Critical!)" if result.crit else ""
+        heal_text = ""
+        if result.heal:
+            attacker_p["hp"] = min(attacker_p["max_hp"], attacker_p["hp"] + result.heal)
+            self._persist_hp(attacker_uid, attacker_p)
+            heal_text = f" 💚 +{result.heal} HP"
+        self._log(f"⚔️ **{attacker_p['name']}** hits **{target_p['name']}** for {result.damage} damage{crit} with {label}.{heal_text}")
+
+        if target_p["hp"] <= 0:
+            self._apply_duel_knockout(target_uid, target_p)
+            return
+        if is_freeze and random.random() < FREEZE_PROC_CHANCE:
+            target_p["frozen_rounds"] = max(target_p.get("frozen_rounds", 0), 1)
+            self._log(f"❄️ **{target_p['name']}** is frozen solid and will miss their next action!")
+            return
+        retaliation_pct = self._trait_bonus(target_p, "retaliation_damage_pct")
+        if retaliation_pct > 0:
+            retaliation_damage = max(1, round(result.damage * retaliation_pct))
+            attacker_p["hp"] = max(0, attacker_p["hp"] - retaliation_damage)
+            self._persist_hp(attacker_uid, attacker_p)
+            self._log(f"🪨 **{target_p['name']}** retaliates for {retaliation_damage} damage!")
+            if attacker_p["hp"] <= 0:
+                self._apply_duel_knockout(attacker_uid, attacker_p)
 
     def _finish_backstab_duel(self, still_alive: list):
         """still_alive: everyone left on the winning side (could be several sharers at once,
         or a single backstabber) -- possibly empty on a mutual-KO edge case where the last
         two blows land the same round, tiebroken randomly among every original duelist rather
         than leave the Core Gu unclaimed. One random survivor claims the prize either way."""
-        winner_id = random.choice(still_alive) if still_alive else random.choice(list(self.duel_participants.keys()))
-        winner = self.duel_participants[winner_id]
+        winner_id = random.choice(still_alive) if still_alive else random.choice(list(self.participants.keys()))
+        winner = self.participants[winner_id]
         gu_name = self.game.grant_inheritance_ground_bonus_gu(self.ground_key, winner_id, winner["name"])
         self.betrayal_result = {
             "winner_user_id": winner_id, "winner_name": winner["name"],
             "winner_was_backstabber": winner["side"] != SHARER_SIDE,
-            "duel": {"events": list(self.duel_log)}, "gu_name": gu_name,
+            "duel": {"events": list(self.log)}, "gu_name": gu_name,
         }
         self.game.finish_inheritance_ground_run([uid for uid, _ in self.team])
         self.phase = "resolved"
 
-    async def _on_duel_attack(self, interaction: discord.Interaction):
-        p = self.duel_participants.get(interaction.user.id)
+    async def _on_duel_pick_target(self, interaction: discord.Interaction):
+        p = self.participants.get(interaction.user.id)
         if p is None:
             await interaction.response.send_message("You're not part of this duel.", ephemeral=True)
             return
-        if p["down"]:
-            await interaction.response.send_message("You've been knocked out of the duel.", ephemeral=True)
+        select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 2)
+        try:
+            target_uid = int(select.values[0])
+        except ValueError:
+            await interaction.response.defer()
             return
-        if interaction.user.id in self.duel_actions:
-            await interaction.response.send_message("You've already locked in your action for this round.", ephemeral=True)
+        p["target_uid"] = target_uid
+        await interaction.response.send_message(
+            f"🎯 Targeting **{self.participants[target_uid]['name']}** for your next Attack/Guard/Gu ability/Killer Move.", ephemeral=True,
+        )
+
+    async def _on_duel_attack(self, interaction: discord.Interaction):
+        p, error = self._validate_actor(interaction.user.id)
+        if error:
+            await interaction.response.send_message(error, ephemeral=True)
             return
+        empowered = await asyncio.to_thread(self._consume_empower_cost, interaction.user.id, p)
+        p["empowered"] = False
         # An ephemeral confirmation, not a silent defer() -- per explicit request, this fight
         # should feel like a real private choice (mirrors the betrayal vote's own ephemeral
         # confirmations just above), not the quiet background-refresh /raid's battle rounds use.
         await interaction.response.send_message("⚔️ You attack!", ephemeral=True)
-        await self._submit_duel_action(interaction.user.id, "attack")
+        await self._submit_action(interaction.user.id, {"type": "attack", "target_uid": self._resolve_duel_target_uid(p), "guaranteed": empowered})
 
     async def _on_duel_guard(self, interaction: discord.Interaction):
-        p = self.duel_participants.get(interaction.user.id)
-        if p is None:
-            await interaction.response.send_message("You're not part of this duel.", ephemeral=True)
+        p, error = self._validate_actor(interaction.user.id)
+        if error:
+            await interaction.response.send_message(error, ephemeral=True)
             return
-        if p["down"]:
-            await interaction.response.send_message("You've been knocked out of the duel.", ephemeral=True)
-            return
-        if interaction.user.id in self.duel_actions:
-            await interaction.response.send_message("You've already locked in your action for this round.", ephemeral=True)
-            return
+        empowered = await asyncio.to_thread(self._consume_empower_cost, interaction.user.id, p)
+        p["empowered"] = False
+        p["guard_stacks"] = min(2, p.get("guard_stacks", 0) + 1)
+        await asyncio.to_thread(self._apply_guard_or_potion_qi_restore, interaction.user.id, p)
+        target_uid = self._resolve_duel_target_uid(p)
         await interaction.response.send_message("🛡️ You brace for the next blow.", ephemeral=True)
-        await self._submit_duel_action(interaction.user.id, "guard")
+        await self._submit_action(interaction.user.id, {"type": "guard", "target_uid": target_uid, "full_block": empowered})
+
+    async def _on_duel_class_ability(self, interaction: discord.Interaction):
+        p, error = self._validate_actor(interaction.user.id)
+        if error:
+            await interaction.response.send_message(error, ephemeral=True)
+            return
+        class_name = p.get("character_class")
+
+        if class_name == "Tank":
+            alive_allies = [
+                (uid, ally) for uid, ally in self.participants.items()
+                if not ally["down"] and uid != interaction.user.id and ally["side"] == p["side"]
+            ]
+            if not alive_allies:
+                await interaction.response.send_message("There's no one else on your side alive to defend.", ephemeral=True)
+                return
+            picker = AllyPickerView(self, interaction.user.id, alive_allies)
+            await interaction.response.send_message("Choose who to Defend this round:", view=picker, ephemeral=True)
+            return
+
+        if class_name == "Support":
+            await interaction.response.send_message("✨ You inspire your side — STR/DEF surge!", ephemeral=True)
+            await self._submit_action(interaction.user.id, {"type": "inspire"})
+            return
+
+        if class_name == "Frostbinder":
+            await interaction.response.send_message("❄️ You attempt to freeze your target!", ephemeral=True)
+            await self._submit_action(interaction.user.id, {"type": "freeze", "target_uid": self._resolve_duel_target_uid(p)})
+            return
+
+        await interaction.response.send_message("You haven't chosen a class yet — run `/choose_class` to unlock a class ability.", ephemeral=True)
+
+    async def _on_duel_gu_ability(self, interaction: discord.Interaction):
+        p, error = self._validate_actor(interaction.user.id)
+        if error:
+            await interaction.response.send_message(error, ephemeral=True)
+            return
+        gu = await asyncio.to_thread(self._equipped_gu, interaction.user.id)
+        ability = gu.active_ability if gu else None
+        if not ability:
+            await interaction.response.send_message("You have no active Gu ability equipped.", ephemeral=True)
+            return
+        qi_cost = ability.qi_cost
+        if not p.get("first_gu_use_discounted"):
+            discount = self._trait_bonus(p, "first_gu_use_discount_flat")
+            if discount:
+                qi_cost = max(0, qi_cost - discount)
+                p["first_gu_use_discounted"] = True
+        if p["qi"] < qi_cost:
+            await interaction.response.send_message(f"Not enough Qi to use {ability.name} (needs {qi_cost}).", ephemeral=True)
+            return
+
+        def _resolve():
+            p["qi"] -= qi_cost
+            self._persist_qi(interaction.user.id, p)
+            self._track_battle_qi_spent(p, qi_cost)
+
+        await asyncio.to_thread(_resolve)
+        await interaction.response.send_message(f"🐛 You channel {ability.name}!", ephemeral=True)
+        await self._submit_action(interaction.user.id, {"type": "gu", "target_uid": self._resolve_duel_target_uid(p), "ability": ability})
+
+    async def _on_duel_killer_move(self, interaction: discord.Interaction):
+        p, error = self._validate_actor(interaction.user.id)
+        if error:
+            await interaction.response.send_message(error, ephemeral=True)
+            return
+        player_row = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, p["name"])
+        move = await asyncio.to_thread(self.game.get_equipped_killer_move, player_row, "combat")
+        if not move:
+            await interaction.response.send_message("You have no Killer Move equipped in your Combat slot.", ephemeral=True)
+            return
+        qi_cost = await asyncio.to_thread(self.game.killer_move_qi_cost, player_row, move)
+        if p["qi"] < qi_cost:
+            await interaction.response.send_message(f"Not enough Qi to use {move['name']} (needs {qi_cost:,}).", ephemeral=True)
+            return
+        p["qi"] -= qi_cost
+        await asyncio.to_thread(self._persist_qi, interaction.user.id, p)
+        if move["kind"] == "damage":
+            await interaction.response.send_message(f"🌀 You unleash {move['name']}!", ephemeral=True)
+            await self._submit_action(interaction.user.id, {"type": "killer_move", "target_uid": self._resolve_duel_target_uid(p), "move": move})
+        else:
+            await asyncio.to_thread(self.game.apply_killer_move_buff, interaction.user.id, player_row, move)
+            self._log(f"✨ **{p['name']}**'s {move['name']} surges through them!")
+            await interaction.response.send_message(f"✨ {move['name']} surges through you!", ephemeral=True)
+            await self._submit_action(interaction.user.id, {"type": "killer_move_buff"})
+
+    async def _on_duel_soul_projection(self, interaction: discord.Interaction):
+        p, error = self._validate_actor(interaction.user.id)
+        if error:
+            await interaction.response.send_message(error, ephemeral=True)
+            return
+        soul = avatar.get_avatar_soul(p.get("avatar_soul"))
+        if soul is None:
+            await interaction.response.send_message("Your avatar hasn't chosen a soul yet — run `/avatar` to awaken it.", ephemeral=True)
+            return
+        if p["qi"] < avatar.SOUL_PROJECTION_QI_COST:
+            await interaction.response.send_message(f"Not enough battle Qi for Soul Projection (needs {avatar.SOUL_PROJECTION_QI_COST:,}).", ephemeral=True)
+            return
+        p["qi"] -= avatar.SOUL_PROJECTION_QI_COST
+        await asyncio.to_thread(self._persist_qi, interaction.user.id, p)
+        await interaction.response.send_message(f"🌀 You channel {avatar.SOUL_PROJECTION_NAME}!", ephemeral=True)
+        await self._submit_action(interaction.user.id, {"type": "soul_projection", "target_uid": self._resolve_duel_target_uid(p)})
 
     # -- display -----------------------------------------------------------------------------
 
@@ -984,17 +1339,24 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
 
         if self.phase == "backstab_duel":
             lines = []
-            for uid, p in self.duel_participants.items():
+            for uid, p in self.participants.items():
                 pct = int(100 * max(0, p["hp"]) / p["max_hp"]) if p["max_hp"] else 0
                 if p["down"]:
                     status = "💀 knocked out"
-                elif uid in self.duel_actions:
+                elif uid in self.actions:
                     status = "✅ locked in"
                 else:
                     status = "⏳ choosing..."
                 side_badge = "🤝" if p["side"] == SHARER_SIDE else "🗡️"
+                empower_note = " • ✨ Empowered" if p.get("empowered") else ""
+                soul_projection_note = (
+                    f" • 🌀 Soul Projection ({p['soul_projection_rounds_remaining']})"
+                    if p.get("soul_projection_rounds_remaining", 0) > 0 else ""
+                )
+                frozen_note = f" • 🥶 Frozen ({p['frozen_rounds']})" if p.get("frozen_rounds", 0) > 0 else ""
+                inspired_note = " • 💪 Inspired" if self.duel_inspire_rounds_remaining.get(p["side"], 0) > 0 else ""
                 lines.append(
-                    f"{side_badge} **{p['name']}** — {max(0, p['hp']):,.0f}/{p['max_hp']:,.0f} HP ({pct}%) • {status}\n"
+                    f"{side_badge} **{p['name']}** — {max(0, p['hp']):,.0f}/{p['max_hp']:,.0f} HP ({pct}%) • {status}{empower_note}{soul_projection_note}{frozen_note}{inspired_note}\n"
                     f"`{render_bar(p['hp'], p['max_hp'])}`"
                 )
             embed = discord.Embed(
@@ -1002,9 +1364,9 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
                 description="The team turns on itself — 🗡️ each backstabber fights alone, 🤝 the sharers defend together. Only one side walks away with the Core Gu.",
                 color=discord.Color.dark_red(),
             )
-            embed.add_field(name=f"⚔️ Duelists — Round {self.duel_round}", value="\n".join(lines)[:1024], inline=False)
-            if self.duel_log:
-                embed.add_field(name="📜 Recent Combat", value="\n".join(self.duel_log)[:1024], inline=False)
+            embed.add_field(name=f"⚔️ Duelists — Round {self.round}", value="\n".join(lines)[:1024], inline=False)
+            if self.log:
+                embed.add_field(name="📜 Recent Combat", value="\n".join(self.log)[:1024], inline=False)
             embed.set_footer(text=f"Actions resolve once every standing duelist has chosen, or in {DUEL_ROUND_TIMEOUT_SECONDS}s.")
             return embed
 
