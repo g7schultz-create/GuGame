@@ -2226,6 +2226,7 @@ class GameManager:
         /meditate, /teach, /battlefield, /tournament, /search_forgotten_blessed_land, for /cd."""
         player = self.db.get_or_create_player(user_id, name)
         tournament_phase, tournament_row = self.get_tournament_status()
+        companion = self.db.get_dao_companion(user_id)
         return {
             "player": player,
             "mine_remaining": self._check_cooldown(player, "last_mine_ts", self.MINE_COOLDOWN_SECONDS),
@@ -2241,10 +2242,19 @@ class GameManager:
             # convention as has_dao_companion/sect_disciple_count/personal_disciple_count below.
             "treasure_hunt_eligible": realms.STAGES[player["realm_index"]].great_realm_index >= self.TREASURE_HUNT_REALM_GATE,
             "treasure_hunt_remaining": self._check_cooldown(player, "treasure_hunt_last_ts", self.TREASURE_HUNT_COOLDOWN_SECONDS),
-            # Only meaningful with an active Dao Companion -- /cd only shows this line when
-            # has_dao_companion is true (see dao_companion_burst / /dc).
-            "has_dao_companion": self.db.get_dao_companion(user_id) is not None,
+            # Only meaningful with an active Dao Companion -- /cd only shows these lines when
+            # has_dao_companion is true (see dao_companion_burst / /dc and
+            # essence_exchange_propose / /essence_exchange). The Essence Exchange cooldown
+            # lives on the dao_companions row itself (last_essence_exchange_ts, PER PAIR, not
+            # per player -- see project_essence_exchange), so it can't go through
+            # _check_cooldown (which reads a column off the player row); computed the same
+            # way essence_exchange_propose itself does.
+            "has_dao_companion": companion is not None,
             "dc_burst_remaining": self._check_cooldown(player, "last_dc_burst_ts", dao_companion.DAO_COMPANION_BURST_COOLDOWN_SECONDS),
+            "essence_exchange_remaining": (
+                max(0, self.ESSENCE_EXCHANGE_COOLDOWN_SECONDS - (int(time.time()) - companion["last_essence_exchange_ts"]))
+                if companion is not None else 0
+            ),
             # Tournament isn't a per-player last_x_ts cooldown -- it's the shared global
             # signup/cooldown cycle from GameManager.get_tournament_status (same source of
             # truth TournamentView itself renders from), so /cd shows phase + row instead of a
@@ -2871,6 +2881,14 @@ class GameManager:
             "gear_id": gear_id, "item_name": blacksmith.crafted_gear_display_name(gear_type, tier, gear_id),
             "stat_bonuses": stat_bonuses, "power_score": power_score,
         }
+
+    def grant_manual_page(self, user_id: int, name: str, page_id: str, quantity: int = 1) -> dict:
+        """/grant_manual_page (admin) -- adds page_id straight to the player's player_pages
+        table, same "just give them the item, no roll/gate involved" shape as /grant_item's
+        own db.add_item call. Returns {"page": manual_data.ManualPage}."""
+        self.db.get_or_create_player(user_id, name)
+        self.db.add_player_page(user_id, page_id, quantity)
+        return {"page": manual_data.PAGES[page_id]}
 
     def get_player_crafted_gear(self, user_id: int) -> list:
         """Every rolled Weapon/Head/Body instance the player owns (equipped or not),

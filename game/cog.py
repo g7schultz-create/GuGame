@@ -7,7 +7,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from config import GUILD_ID, TOURNAMENT_ANNOUNCE_CHANNEL_ID, WORLD_BOSS_ANNOUNCE_CHANNEL_ID, WORLD_BOSS_DAMAGE_RANKING_CHANNEL_ID
-from . import blacksmith, chargen, equipment, professions, realms, sects, tournament, world_boss
+from . import blacksmith, chargen, equipment, manual_data, professions, realms, sects, tournament, world_boss
 from .character_class import CLASSES
 from .character_data import PATHS
 from .database import GameDatabase
@@ -1405,7 +1405,14 @@ class GameCog(commands.Cog):
             embed.add_field(name="Mentorship Cooldowns", value="\n".join(mentor_lines), inline=False)
 
         if cooldowns["has_dao_companion"]:
-            embed.add_field(name="Dao Companion", value=cd_line("Burst (i dc)", "💞", cooldowns["dc_burst_remaining"]), inline=False)
+            embed.add_field(
+                name="Dao Companion",
+                value="\n".join([
+                    cd_line("Burst (i dc)", "💞", cooldowns["dc_burst_remaining"]),
+                    cd_line("Essence Exchange", "💧", cooldowns["essence_exchange_remaining"]),
+                ]),
+                inline=False,
+            )
 
         if p["studying_profession"]:
             rank_index = p[professions.RANK_COLUMN[p["studying_profession"]]]
@@ -1955,6 +1962,48 @@ class GameCog(commands.Cog):
         await asyncio.to_thread(_do_grant)
         await interaction.response.send_message(
             f"Granted **{quantity}x {item_name}** to {target.display_name}.", ephemeral=True
+        )
+
+    async def _manual_page_name_autocomplete(self, interaction: discord.Interaction, current: str):
+        # Keyed by each page's own display NAME (manual_data.PAGES_BY_NAME), not its internal
+        # pg_... slug id -- same "type what you'd actually see in-game" convention
+        # _item_name_autocomplete already follows for ITEMS/EQUIPMENT.
+        return [
+            app_commands.Choice(name=f"{page.name} (Rank {page.rank}, {page.category})"[:100], value=page.name)
+            for page in manual_data.PAGES_BY_NAME.values()
+            if current.lower() in page.name.lower()
+        ][:25]
+
+    @app_commands.command(name="grant_manual_page", description="[Admin] Grant a manual page to a player for testing")
+    @app_commands.guilds(GUILD)
+    @app_commands.describe(page_name="Manual page to grant", quantity="How many copies to grant", member="Player to grant it to (defaults to you)")
+    @app_commands.autocomplete(page_name=_manual_page_name_autocomplete)
+    async def grant_manual_page(self, interaction: discord.Interaction, page_name: str, quantity: int = 1, member: Optional[discord.Member] = None):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+            return
+        page = manual_data.PAGES_BY_NAME.get(page_name)
+        if page is None:
+            await interaction.response.send_message(f"Unknown manual page `{page_name}`. Start typing to see valid pages.", ephemeral=True)
+            return
+        if quantity < 1:
+            await interaction.response.send_message("Quantity must be at least 1.", ephemeral=True)
+            return
+
+        target = member or interaction.user
+
+        def _do_grant():
+            self.game.grant_manual_page(target.id, target.display_name, page.page_id, quantity)
+            self.db.log_admin_action(
+                interaction.user.id, interaction.user.display_name,
+                target.id, target.display_name,
+                "grant_manual_page", f"{quantity}x {page.name} (Rank {page.rank})",
+            )
+
+        await asyncio.to_thread(_do_grant)
+        await interaction.response.send_message(
+            f"Granted **{quantity}x {page.name}** (Rank {page.rank}, {page.category}) to {target.display_name}.",
+            ephemeral=True,
         )
 
     @app_commands.command(name="grant_stones", description="[Admin] Grant spirit stones to a player for testing")

@@ -431,6 +431,12 @@ NAME_CORE_IMAGES = ["River", "Furnace", "Cicada", "Moon", "Mountain", "Mirror", 
 NAME_METHOD_WORDS = ["Scripture", "Canon", "Art", "Sutra", "Record", "Method", "Manual", "True Inheritance"]
 
 
+# Every page's display name is unique across the whole catalog (verified in
+# test_manual_pages_by_name.py) -- used by cog.py's /grant_manual_page so admins can look a
+# page up by the name they'd actually see in-game, not its internal pg_... slug id.
+PAGES_BY_NAME: Dict[str, ManualPage] = {page.name: page for page in PAGES.values()}
+
+
 def pages_by_category(rank_max: Optional[int] = None) -> Dict[str, List[ManualPage]]:
     grouped: Dict[str, List[ManualPage]] = {cat: [] for cat in PAGE_CATEGORIES}
     for page in PAGES.values():
