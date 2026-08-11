@@ -73,8 +73,9 @@ WORLD_BOSS_ATTACKS_PER_COOLDOWN = 5
 # request) as the playerbase's top end has grown since the 10,000,000 calibration above --
 # back to the original first-tried value this constant was once walked back from (20,000,000
 # -> 2,500,000 -> 1,500,000 -> 10,000,000). Raised again to 100,000,000 (2026-08-09, user's
-# explicit request) -- ongoing live-ops tuning either way, not a one-time number.
-WORLD_BOSS_MAX_HP = 100_000_000
+# explicit request), then to 500,000,000 (2026-08-11, user's explicit request) -- ongoing
+# live-ops tuning either way, not a one-time number.
+WORLD_BOSS_MAX_HP = 500_000_000
 # Low on purpose -- a real fight's monster would scale DEF/SPD to be dangerous, but "every
 # cultivation realm" being able to meaningfully participate (the doc's own stated goal) means
 # even a fresh character's attack needs to land and deal more than the MIN_DAMAGE=1 floor.
