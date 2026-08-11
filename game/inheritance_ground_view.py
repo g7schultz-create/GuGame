@@ -23,6 +23,7 @@ import discord
 from . import avatar, inheritance_ground_data
 from .base_view import GameView
 from .team_battle import EMPOWER_QI_COST, RaidEnemy, TeamBattleEngine
+from .ui_utils import render_bar
 
 BETRAYAL_DECISION_SECONDS = 60
 BATTLE_ROUND_TIMEOUT_SECONDS = 30  # matches raid.ROUND_TIMEOUT_SECONDS's own pacing
@@ -614,7 +615,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             monster_hp = max(0, self.enemies[0].hp)
             monster_max_hp = self.enemies[0].max_hp
             monster_pct = int(100 * monster_hp / monster_max_hp) if monster_max_hp else 0
-            description = f"{monster.name}: {monster_hp:,}/{monster_max_hp:,} HP ({monster_pct}%)"
+            description = f"{monster.name}: {monster_hp:,}/{monster_max_hp:,} HP ({monster_pct}%)\n`{render_bar(monster_hp, monster_max_hp)}`"
             if self.inspire_rounds_remaining > 0:
                 description += f"\n✨ **Inspire active** — party STR/DEF boosted ({self.inspire_rounds_remaining} round(s) left)."
             embed = discord.Embed(
@@ -639,7 +640,10 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
                     f" • 🌀 Soul Projection ({p['soul_projection_rounds_remaining']})"
                     if p.get("soul_projection_rounds_remaining", 0) > 0 else ""
                 )
-                lines.append(f"**{name}** — {max(0, p['hp']):,}/{p['max_hp']:,} HP ({pct}%) • {status}{empower_note}{soul_projection_note}")
+                lines.append(
+                    f"**{name}** — {max(0, p['hp']):,}/{p['max_hp']:,} HP ({pct}%) • {status}{empower_note}{soul_projection_note}\n"
+                    f"`{render_bar(p['hp'], p['max_hp'])}`"
+                )
             embed.add_field(name=f"🧍 Team — Round {self.round}", value="\n".join(lines)[:1024], inline=False)
             if self.log:
                 embed.add_field(name="📜 Recent Combat", value="\n".join(self.log)[:1024], inline=False)
