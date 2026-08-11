@@ -438,9 +438,14 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
     def _on_victory(self):
         """Called by TeamBattleEngine._resolve_round (team_battle.py) once the guardian's HP
         hits 0 -- the "💥 ... is defeated!" log line is already added there, so this only
-        handles ground-specific wrap-up: advancing the bubble-board turn and returning to it
-        (or moving on to the Final Trial if the board's fully cleared)."""
-        self.board_log.append((None, "battle", f"The team defeats {self.enemies[0].monster.name}!"))
+        handles ground-specific wrap-up: granting battle loot (see GameManager.
+        grant_inheritance_ground_battle_loot -- rarity-scaled for this ground's own monster
+        pool, a no-op bonus roll for anything else), then advancing the bubble-board turn and
+        returning to it (or moving on to the Final Trial if the board's fully cleared)."""
+        monster = self.enemies[0].monster
+        loot_results = self.game.grant_inheritance_ground_battle_loot(self.ground_key, self.team, monster)
+        loot_summary = "; ".join(f"**{name}**: {text}" for name, text in loot_results)
+        self.board_log.append((None, "battle", f"The team defeats {monster.name}! {loot_summary}"))
         self._advance_turn()
         self.phase = "pre_trial" if all(self.revealed) else "bubble_board"
 

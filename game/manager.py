@@ -11,6 +11,7 @@ from . import (
     inheritance_ground_data, items, killer_move_gen, manual_data, manual_gen, monsters, professions, realms,
     search_data, sects, split_body, tournament, treasure_hunt, world_boss, world_regions,
 )
+from .content.monsters import blood_sea_ancestor
 from .character_data import PATHS, PHYSIQUE_TIER_ORDER, RACES, ROOT_TIER_ORDER
 from .database import GameDatabase
 from .items import ITEMS, roll_essence_restoration_pill_drop
@@ -977,16 +978,33 @@ class GameManager:
         random.shuffle(board)
         return board
 
+    # Blood Sea Ancestor's own dedicated battle-bubble roster (see content/monsters/
+    # blood_sea_ancestor.py) -- weighted by TIER (individual monsters within a tier are
+    # equal-weight), each rarer tier both tougher (that file's own RARITY_MULTIPLIER) and
+    # better-rewarding (BLOOD_SEA_RARITY_LOOT_SOURCE/BLOOD_SEA_RARITY_CANON_GU_ENCOUNTER
+    # below, used by grant_inheritance_ground_battle_loot). "Only one ground exists so far"
+    # (see cog.py's own hardcoded ground_key) -- a second ground would need this keyed by
+    # ground_key instead of a flat pool.
+    BLOOD_SEA_RARITY_TIER_WEIGHT = {"Common": 45, "Uncommon": 27, "Rare": 12, "Elite": 4}
+    # accessories_data.LOOT_SOURCE_TABLE keys reused purely for their existing ODDS numbers
+    # (no narrative connection intended) -- gives a real 4-step escalating ladder without
+    # inventing a 5th/6th source_key just for this one ground.
+    BLOOD_SEA_RARITY_LOOT_SOURCE = {"Common": "hunt_kill", "Uncommon": "split_body", "Rare": "raid_boss", "Elite": "world_boss"}
+    BLOOD_SEA_RARITY_CANON_GU_ENCOUNTER = {"Common": "normal", "Uncommon": "elite", "Rare": "mini_boss", "Elite": "world_boss"}
+
     def roll_inheritance_ground_battle_monster(self, ground_key: str, battle_number: int):
-        """battle_number is 1-indexed (the Nth battle bubble revealed this run). Picks a base
-        monster from the SAME per-realm hunt pool /hunt itself draws from (no new monster
-        content needed) keyed off the ground's own gu_rank, then scales it up progressively via
-        dataclasses.replace -- mirrors battlefield_view.py's own _roll_wave_monster exactly,
-        just keyed by battle_number instead of a wave counter."""
+        """battle_number is 1-indexed (the Nth battle bubble revealed this run), scaled up
+        progressively via dataclasses.replace -- mirrors battlefield_view.py's own
+        _roll_wave_monster exactly, just keyed by battle_number instead of a wave counter."""
         ground = inheritance_ground_data.GROUNDS[ground_key]
-        great_realm_index = max(0, min(6, ground["gu_rank"] - 1))
-        name = monsters.hunt_monster_name_for_realm(great_realm_index)
-        base = monsters.MONSTERS[name]
+        if ground_key == "blood_sea_ancestor":
+            rarities = list(blood_sea_ancestor.ALL_MONSTERS_BY_RARITY)
+            rarity = random.choices(rarities, weights=[self.BLOOD_SEA_RARITY_TIER_WEIGHT[r] for r in rarities])[0]
+            base = random.choice(blood_sea_ancestor.ALL_MONSTERS_BY_RARITY[rarity])
+        else:
+            great_realm_index = max(0, min(6, ground["gu_rank"] - 1))
+            name = monsters.hunt_monster_name_for_realm(great_realm_index)
+            base = monsters.MONSTERS[name]
         multiplier = 1.0 + self.BATTLE_STAT_MULTIPLIER_PER_BATTLE * (battle_number - 1)
         if multiplier == 1.0:
             return base
@@ -996,6 +1014,34 @@ class GameManager:
             str_stat=max(1, round(base.str_stat * multiplier)), def_stat=max(1, round(base.def_stat * multiplier)),
             spd_stat=max(1, round(base.spd_stat * multiplier)),
         )
+
+    def grant_inheritance_ground_battle_loot(self, ground_key: str, team: list, monster) -> list:
+        """Called once a battle bubble's guardian is actually defeated (see
+        InheritanceGroundView._on_victory) -- one independent roll per team member: the
+        monster's own beast-material drops (monsters.roll_loot, same as /hunt) plus a
+        rarity-scaled shot at an accessory/artifact and a canon Gu, the "loot gets better as
+        it gets more elite" half of the brief. A ground/monster with no rarity mapping (i.e.
+        not this ground, or Formation Node) just grants the material roll with no bonus shot.
+        Returns [(name, summary_text), ...]."""
+        ground = inheritance_ground_data.GROUNDS[ground_key]
+        rarity = blood_sea_ancestor.RARITY_BY_NAME.get(monster.name)
+        results = []
+        for user_id, name in team:
+            material_loot = monsters.roll_loot(monster)
+            for item_name, qty in material_loot.items():
+                self.db.add_item(user_id, item_name, qty)
+            parts = [f"{qty}x {item_name}" for item_name, qty in material_loot.items()]
+            if rarity:
+                source_key = self.BLOOD_SEA_RARITY_LOOT_SOURCE[rarity]
+                granted = self.roll_and_grant_accessory_artifact(user_id, name, source_key, ground["gu_rank"], ground.get("tags", []))
+                if granted:
+                    parts.append(f"✨ {granted['affix'].name}")
+                canon_drop = canon_gu.roll_canon_gu_drop(ground["gu_rank"], self.BLOOD_SEA_RARITY_CANON_GU_ENCOUNTER[rarity])
+                if canon_drop:
+                    self.db.add_item(user_id, canon_drop, 1)
+                    parts.append(f"🐛 {canon_drop}")
+            results.append((name, ", ".join(parts) if parts else "nothing this time"))
+        return results
 
     def grant_inheritance_ground_treasure_reward(self, ground_key: str, team: list) -> list:
         """One independent, reduced-magnitude roll per team member -- same discovery_gen.

@@ -26,8 +26,19 @@ class MonsterAbility:
     # Regenerator-archetype self-heal (see the content brief's section 6.2) — fraction of
     # damage dealt healed back to the monster on a landed hit, same mechanic
     # combat.resolve_attack already gives the player via lifesteal_percent, just applied to
-    # the monster's own HP by whichever view resolves its turn (see hunt.py's _monster_turn).
+    # the monster's own HP by whichever view resolves its turn (see hunt.py's _monster_turn,
+    # team_battle.py's _resolve_enemy_hit).
     lifesteal_percent: float = 0.0
+    # Blood Sea Ancestor's Inheritance Ground monster pool (see content/monsters/
+    # blood_sea_ancestor.py) -- a small, cohesive set of team-battle-only mechanics (see
+    # team_battle.py's _resolve_enemy_hit), each zero/off by default so no pre-existing
+    # monster's behavior changes. Only ever read by TeamBattleEngine (raid.py's own group
+    # fights AND /inheritance_ground's battle bubbles both funnel through it) -- hunt.py's
+    # solo _monster_turn doesn't read any of these.
+    execute_damage_pct: float = 0.0  # bonus damage_pct_bonus vs a target already below 50% HP
+    bleed_damage_pct: float = 0.0  # fraction of THIS landed hit's damage, reapplied each of the next BLEED_TICKS rounds
+    debuff_spd_pct: float = 0.0  # target's SPD reduced by this fraction for THIS hit's own dodge roll only (no lingering state)
+    debuff_dodge_pct: float = 0.0  # target's dodge_chance_bonus reduced by this flat amount for THIS hit only
 
 
 @dataclass
@@ -72,6 +83,16 @@ class Monster:
     # Cosmetic/organizational tag only (content brief section 5.2) — doesn't itself change
     # combat; a monster's actual difficulty comes entirely from its rolled stats/ability.
     elite: bool = False
+    # Blood Sea Ancestor's Inheritance Ground monster pool (see content/monsters/
+    # blood_sea_ancestor.py / team_battle.py's _resolve_round, _resolve_enemy_hit) -- same
+    # "zero/off by default, existing content unaffected" convention as MonsterAbility's own
+    # additions just above.
+    enrage_atk_pct_per_stack: float = 0.0  # this monster's own ATK grows by this % per stack, gained whenever EITHER side loses HP to it
+    enrage_stack_cap: int = 0
+    submerge_every_rounds: int = 0  # every Nth round this monster becomes untargetable (player attacks auto-miss) for submerge_duration_rounds
+    submerge_duration_rounds: int = 0
+    random_blood_gu: bool = False  # each of this monster's own attacks re-rolls a random mechanic (execute/bleed/debuff) instead of a fixed one
+    shield_while_ally_alive_pct: float = 0.0  # damage taken is reduced by this fraction while any OTHER living enemy remains in the same fight
 
     def stats(self) -> dict:
         return {

@@ -49,6 +49,17 @@ INSPIRE_DURATION_ROUNDS = 3  # includes the round Inspire is cast in
 FREEZE_STR_MULTIPLIER = 0.8
 FREEZE_PROC_CHANCE = 0.5
 
+# Blood Sea Ancestor's Inheritance Ground monster pool (see content/monsters/
+# blood_sea_ancestor.py, monsters.py's own added MonsterAbility/Monster fields) -- shared
+# tuning constants for the mechanics those monsters use.
+BLEED_TICKS = 3  # matches dao_paths.FIRE_BURN_TICKS's own convention
+# Blood Gu Abomination (monsters.Monster.random_blood_gu) re-picks one of these three modes,
+# at these fixed magnitudes, on every one of its own attacks instead of using a fixed ability.
+RANDOM_BLOOD_GU_EXECUTE_PCT = 0.30
+RANDOM_BLOOD_GU_BLEED_PCT = 0.15
+RANDOM_BLOOD_GU_DEBUFF_SPD_PCT = 0.30
+RANDOM_BLOOD_GU_DEBUFF_DODGE_PCT = 0.40
+
 
 class RaidEnemy:
     def __init__(self, monster):
@@ -65,6 +76,16 @@ class RaidEnemy:
         # doesn't stack" shape as Fire Dao Path's above, ticked alongside it in Phase 1.5.
         self.sunfire_burn_damage_per_tick = 0
         self.sunfire_burn_ticks_remaining = 0
+        # Blood Fang Wolf-style enrage (monster.enrage_atk_pct_per_stack/enrage_stack_cap) --
+        # grows whenever EITHER side loses HP to this specific enemy (see Phase 1 and
+        # _resolve_enemy_hit), boosts this enemy's own str_multiplier in Phase 3.
+        self.enrage_stacks = 0
+        # Blood River Python-style submerge (monster.submerge_every_rounds/
+        # submerge_duration_rounds) -- ticked once per round at the very top of _resolve_round
+        # (see _tick_submerge), read by Phase 1 to skip player attacks against this enemy
+        # while submerged.
+        self.submerge_round_counter = 0
+        self.submerged_rounds_remaining = 0
 
     @property
     def alive(self) -> bool:
@@ -272,6 +293,9 @@ class TeamBattleEngine:
             # other participant's own cached sect_id, no per-round DB calls).
             "avatar_soul": player["avatar_soul"], "avatar_level": player["avatar_level"], "sect_id": player["sect_id"],
             "soul_projection_rounds_remaining": 0,
+            # Bloodscale Serpent-style Bleed (see Phase 1.65 / _resolve_enemy_hit) -- seeded on
+            # a landed enemy hit, ticked once per round independent of who queued the round.
+            "bleed_damage_per_tick": 0, "bleed_ticks_remaining": 0,
         }
         # Clear Mind-family physique's encounter-start adaptive stat — compared against the
         # opponent (self.enemies[0]), same one-time-at-join computation hunt.py's own
@@ -380,7 +404,25 @@ class TeamBattleEngine:
 
     # -- round resolution -----------------------------------------------------------------
 
+    def _tick_submerge(self):
+        """Advances every alive enemy's submerge cycle (monster.submerge_every_rounds/
+        submerge_duration_rounds -- see Blood River Python) BEFORE Phase 1 resolves this
+        round's player attacks, so a fresh submerge takes effect the same round it triggers."""
+        for enemy in self.enemies:
+            if not enemy.alive or not enemy.monster.submerge_every_rounds:
+                continue
+            if enemy.submerged_rounds_remaining > 0:
+                enemy.submerged_rounds_remaining -= 1
+                continue
+            enemy.submerge_round_counter += 1
+            if enemy.submerge_round_counter >= enemy.monster.submerge_every_rounds:
+                enemy.submerge_round_counter = 0
+                enemy.submerged_rounds_remaining = enemy.monster.submerge_duration_rounds
+                self._log(f"🌊 {enemy.monster.name} submerges beneath the blood pool — untargetable!")
+
     def _resolve_round(self):
+        self._tick_submerge()
+
         # Phase 0: Support's Inspire — resolved before damage so this round's own attacks
         # already benefit. Doesn't stack in magnitude (multiple Supports just refresh the
         # same duration), and costs the caster their attack that round.
@@ -490,6 +532,12 @@ class TeamBattleEngine:
             for target in attack_targets:
                 if not target.alive:
                     continue
+                # Blood River Python-style submerge (see _tick_submerge) -- untargetable while
+                # submerged, the attack simply finds nothing (no roll, no cost refund logic
+                # beyond what a normal miss already grants).
+                if target.submerged_rounds_remaining > 0:
+                    self._log(f"🌊 **{p['name']}**'s {label} finds nothing — {target.monster.name} is submerged!")
+                    continue
                 damage_pct_bonus = base_damage_pct_bonus
                 # A Strength-family root's beast_damage_pct only applies against Beast-type
                 # enemies — the offensive counterpart to Gu's existing beast_damage_reduction_pct.
@@ -500,6 +548,13 @@ class TeamBattleEngine:
                 # identical caller-side pattern.
                 if target.hp > 0 and target.hp < target.max_hp * 0.5:
                     damage_pct_bonus += bonuses.get("execute_damage_pct", 0) + sp.get("execute_damage_pct", 0)
+                # Crimson Formation Guardian-style shield -- damage taken is reduced while any
+                # OTHER enemy in this same fight is still alive (see monsters.Monster.
+                # shield_while_ally_alive_pct); encoded as a negative damage_pct_bonus since
+                # resolve_attack's own incoming_reduction is the DEFENDER's kwarg, not
+                # available from the attacker's own call here.
+                if target.monster.shield_while_ally_alive_pct > 0 and any(other is not target and other.alive for other in self.enemies):
+                    damage_pct_bonus -= target.monster.shield_while_ally_alive_pct
                 result = combat.resolve_attack(
                     attacker_stats, target.stats(), str_multiplier=str_multiplier,
                     guaranteed_hit=action.get("guaranteed", False),
@@ -528,6 +583,10 @@ class TeamBattleEngine:
                 else:
                     any_hit_landed = True
                     target.hp = max(0, target.hp - result.damage)
+                    # Blood Fang Wolf-style enrage -- grows whenever EITHER side loses HP to
+                    # this enemy (see _resolve_enemy_hit for the other direction).
+                    if target.monster.enrage_stack_cap > 0:
+                        target.enrage_stacks = min(target.monster.enrage_stack_cap, target.enrage_stacks + 1)
                     # Paradise Earth Inheritor Root's Merit needs to know who DIDN'T deal the
                     # most damage this raid — see RaidView._on_victory.
                     p["damage_dealt"] = p.get("damage_dealt", 0) + result.damage
@@ -610,6 +669,34 @@ class TeamBattleEngine:
                 self._log(f"💥 {enemy.monster.name} is defeated!")
                 self._on_enemy_defeated(enemy)
 
+        # Phase 1.65: Bloodscale Serpent-style Bleed ticks -- once per round, for every alive
+        # participant with an active bleed (seeded on a landed enemy hit -- see
+        # _resolve_enemy_hit), independent of whose turn queued this round. Mirrors the
+        # enemy-burn ticks above but on the player side, so a bleed can finish someone off on
+        # its own -- goes through the same defeat handling _resolve_enemy_hit's landed-hit
+        # branch uses (ward/escape/death-penalty), since a normal enemy attack isn't involved.
+        for user_id, p in self.participants.items():
+            if p.get("bleed_ticks_remaining", 0) <= 0 or p["down"]:
+                continue
+            bleed_damage = min(p["hp"], p["bleed_damage_per_tick"])
+            p["hp"] -= bleed_damage
+            p["bleed_ticks_remaining"] -= 1
+            self._persist_hp(user_id, p)
+            self._log(f"🩸 **{p['name']}** bleeds for {bleed_damage} damage!")
+            if p["hp"] <= 0:
+                p["down"] = True
+                self.game.db.set_hp(user_id, 1)
+                ward_name = self.game.check_and_consume_defeat_ward(user_id)
+                if ward_name:
+                    self._log(f"✨ **{ward_name}** activates for **{p['name']}** — knocked out, but the Qi loss is warded away!")
+                elif self.game.check_and_consume_worldly_escape(user_id):
+                    self._log(f"✨ **Worldly Escape Gu** activates for **{p['name']}** — knocked out, but the Qi loss is escaped entirely!")
+                else:
+                    bonuses = self.game.compute_equipment_bonuses(user_id)
+                    reduction = bonuses.get("death_qi_loss_reduction_pct", 0)
+                    qi_lost, _ = self.game.db.apply_death_penalty(user_id, reduction_pct=reduction)
+                    self._log(f"💀 **{p['name']}** is knocked out, losing {qi_lost:,.2f} qi!")
+
         # Phase 2: flee attempts (RaidView-only — see _resolve_flee_phase's default no-op).
         self._resolve_flee_phase()
 
@@ -643,7 +730,10 @@ class TeamBattleEngine:
             if self._maybe_handle_boss_charge(enemy, idx, alive_ids, defend_map):
                 continue  # this round's "turn" was spent charging/releasing a special, not a normal attack
             target_id = random.choice(alive_ids)
-            self._resolve_enemy_hit(enemy, idx, target_id, defend_map, enemy.monster.ability.str_multiplier)
+            # Blood Fang Wolf-style enrage boosts this enemy's own str_multiplier -- see
+            # RaidEnemy.enrage_stacks (grown in Phase 1 and _resolve_enemy_hit above).
+            enrage_multiplier = 1 + enemy.monster.enrage_atk_pct_per_stack * enemy.enrage_stacks
+            self._resolve_enemy_hit(enemy, idx, target_id, defend_map, enemy.monster.ability.str_multiplier * enrage_multiplier)
 
         self.actions.clear()
         self.round += 1
@@ -709,10 +799,30 @@ class TeamBattleEngine:
         # (incoming-attack) call — never a player's own Phase 1 attack, which doesn't read
         # either kwarg at all.
         attacker_stats, _, sp = self._attacker_stats(target_id, p)
+
+        # Blood Sea Ancestor monster mechanics (see monsters.MonsterAbility's own added
+        # fields) -- execute/bleed/debuff apply to THIS hit only; Blood Gu Abomination
+        # (monster.random_blood_gu) re-picks a random mode every attack instead of reading a
+        # fixed ability, at the module's own fixed RANDOM_BLOOD_GU_* magnitudes.
+        execute_pct = enemy.monster.ability.execute_damage_pct
+        bleed_pct = enemy.monster.ability.bleed_damage_pct
+        debuff_spd_pct = enemy.monster.ability.debuff_spd_pct
+        debuff_dodge_pct = enemy.monster.ability.debuff_dodge_pct
+        if enemy.monster.random_blood_gu:
+            mode = random.choice(("execute", "bleed", "debuff"))
+            execute_pct = RANDOM_BLOOD_GU_EXECUTE_PCT if mode == "execute" else 0.0
+            bleed_pct = RANDOM_BLOOD_GU_BLEED_PCT if mode == "bleed" else 0.0
+            debuff_spd_pct = RANDOM_BLOOD_GU_DEBUFF_SPD_PCT if mode == "debuff" else 0.0
+            debuff_dodge_pct = RANDOM_BLOOD_GU_DEBUFF_DODGE_PCT if mode == "debuff" else 0.0
+        if debuff_spd_pct:
+            attacker_stats = {**attacker_stats, "spd_stat": round(attacker_stats["spd_stat"] * (1 - debuff_spd_pct))}
+        damage_pct_bonus = execute_pct if (p["hp"] > 0 and p["hp"] < p["max_hp"] * 0.5) else 0.0
+
         result = combat.resolve_attack(
             enemy.stats(), attacker_stats, str_multiplier=str_multiplier, incoming_reduction=total_reduction,
             guaranteed_hit=guaranteed_hit, ignore_chance=bonuses.get("ignore_attack_chance", 0) + sp.get("ignore_attack_chance", 0),
-            dodge_chance_bonus=bonuses.get("dodge_chance_pct", 0) + sp.get("dodge_chance_pct", 0),
+            dodge_chance_bonus=bonuses.get("dodge_chance_pct", 0) + sp.get("dodge_chance_pct", 0) - debuff_dodge_pct,
+            lifesteal_percent=enemy.monster.ability.lifesteal_percent, damage_pct_bonus=damage_pct_bonus,
         )
         if not result.hit:
             self._log(f"❌ {enemy.monster.name} attacks **{p['name']}** but misses!")
@@ -731,7 +841,20 @@ class TeamBattleEngine:
             p["hp"] = max(0, p["hp"] - result.damage)
             self._persist_hp(target_id, p)
             crit = " (Critical!)" if result.crit else ""
-            self._log(f"🩸 {enemy.monster.name} hits **{p['name']}** for {result.damage} damage{crit} with {ability_label}." if label else f"🩸 {enemy.monster.name} hits **{p['name']}** for {result.damage} damage{crit}.")
+            heal_text = ""
+            if result.heal:
+                enemy.hp = min(enemy.max_hp, enemy.hp + result.heal)
+                heal_text = f" It recovers {result.heal} HP."
+            self._log(
+                (f"🩸 {enemy.monster.name} hits **{p['name']}** for {result.damage} damage{crit} with {ability_label}.{heal_text}" if label
+                 else f"🩸 {enemy.monster.name} hits **{p['name']}** for {result.damage} damage{crit}.{heal_text}")
+            )
+            if bleed_pct > 0 and p["hp"] > 0:
+                p["bleed_damage_per_tick"] = max(1, round(result.damage * bleed_pct))
+                p["bleed_ticks_remaining"] = BLEED_TICKS
+                self._log(f"🩸 **{p['name']}** begins bleeding!")
+            if enemy.monster.enrage_stack_cap > 0:
+                enemy.enrage_stacks = min(enemy.monster.enrage_stack_cap, enemy.enrage_stacks + 1)
             if p["hp"] <= 0:
                 p["down"] = True
                 self.game.db.set_hp(target_id, 1)
