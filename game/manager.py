@@ -875,6 +875,14 @@ class GameManager:
     def start_active_hunt(self, user_id: int):
         self.db.start_active_hunt(user_id, int(time.time()))
 
+    def abandon_active_hunt(self, user_id: int):
+        """Self-service escape hatch for a player whose active_hunt_started_ts flag is stuck
+        (e.g. their original HuntView message scrolled away, or a round-resolution error left
+        the view unresponsive without ever clearing their flag) -- mirrors abandon_active_raid.
+        Safe to call even if they were never really stuck (a no-op UPDATE against a user_id not
+        currently flagged)."""
+        self.db.clear_active_hunt(user_id)
+
     # -- /raid's own "finish the one you've got before starting/joining another" gate ----------
     # Same reasoning as ACTIVE_HUNT_STALE_SECONDS above, but per-PARTICIPANT rather than
     # per-creator -- a raid is a shared multi-player encounter, so both starting a NEW raid and

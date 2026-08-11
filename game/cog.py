@@ -19,7 +19,7 @@ from .trading import TradeRequestView
 from .equipment_view import EquipmentView
 from .avatar_view import AvatarView
 from .split_body_view import SplitBodyView
-from .hunt import HuntView
+from .hunt import AbandonHuntView, HuntView
 from .pvp_view import PvPView
 from .leaderboard_view import LeaderboardView
 from .monsters import hunt_monster_name_for_realm, raid_boss_name_for_realm
@@ -973,7 +973,8 @@ class GameCog(commands.Cog):
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
         if self.game.has_active_hunt(player):
-            await interaction.response.send_message("🐾 Finish your current hunt first!", ephemeral=True)
+            abandon_view = AbandonHuntView(interaction.user.id, self.game)
+            await interaction.response.send_message("🐾 Finish your current hunt first!", view=abandon_view, ephemeral=True)
             return
         great_realm_index = int(realm.value) if realm else _default_great_realm_index(player)
         monster_name = hunt_monster_name_for_realm(great_realm_index)

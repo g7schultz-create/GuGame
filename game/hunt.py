@@ -1086,3 +1086,33 @@ class HuntView(GameView):
             if self.status == "fighting" else "This hunt has ended."
         )
         return embed
+
+
+class AbandonHuntView(GameView):
+    """Self-service escape hatch attached to the "finish your current hunt first" refusal
+    (see cog.py's /hunt command) -- mirrors raid.py's AbandonRaidView. A player's
+    active_hunt_started_ts flag has no dependency on any specific HuntView instance still
+    existing, so if their original hunt message scrolled away, got deleted, or a round-
+    resolution error left the view unresponsive before HuntView.on_timeout/_clear_active_hunt
+    ever got a chance to run, they'd otherwise be stuck until GameManager.
+    ACTIVE_HUNT_STALE_SECONDS (2h) self-heals it with no way to act sooner."""
+
+    def __init__(self, user_id: int, game):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.game = game
+        button = discord.ui.Button(label="Abandon Stuck Hunt", emoji="🗑️", style=discord.ButtonStyle.danger)
+        button.callback = self._on_abandon
+        self.add_item(button)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This isn't your hunt slot to clear.", ephemeral=True)
+            return False
+        return True
+
+    async def _on_abandon(self, interaction: discord.Interaction):
+        await asyncio.to_thread(self.game.abandon_active_hunt, self.user_id)
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(content="🗑️ Cleared — you can `/hunt` again now.", view=self)
