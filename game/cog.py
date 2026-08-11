@@ -1165,13 +1165,12 @@ class GameCog(commands.Cog):
                 abandon_view = AbandonInheritanceGroundView(leader.id, self.game)
                 await interaction.response.send_message("🗺️ Finish your current inheritance ground run first!", view=abandon_view, ephemeral=True)
                 return
-            remaining = self.game.inheritance_ground_cooldown_remaining(leader_player)
-            if remaining > 0:
-                await interaction.response.send_message(
-                    f"You're still recovering from your last inheritance ground run — try again in **{format_duration(remaining)}**.",
-                    ephemeral=True,
-                )
-                return
+            # No leader cooldown check here (unlike most other gated commands) -- the whole
+            # /inheritance_ground command already requires administrator (see the guard at the
+            # top), so this only ever runs for admins testing the feature; gating repeat runs
+            # behind an 8h cooldown would just slow down that testing for no real benefit.
+            # GameManager.inheritance_ground_cooldown_remaining still exists and still gets set
+            # by finish_inheritance_ground_run -- only this command's own refusal is removed.
 
             ground_key = "blood_sea_ancestor"  # only one ground exists so far -- see inheritance_ground_data.GROUNDS
             team = [(leader.id, leader.display_name)]
@@ -1212,13 +1211,9 @@ class GameCog(commands.Cog):
             abandon_view = AbandonInheritanceGroundView(leader.id, self.game)
             await interaction.response.send_message("🗺️ Finish your current inheritance ground run first!", view=abandon_view, ephemeral=True)
             return
-        remaining = self.game.inheritance_ground_cooldown_remaining(leader_player)
-        if remaining > 0:
-            await interaction.response.send_message(
-                f"You're still recovering from your last inheritance ground run — try again in **{format_duration(remaining)}**.",
-                ephemeral=True,
-            )
-            return
+        # No leader cooldown check here -- same reasoning as the solo-test branch above: this
+        # whole command already requires administrator, so gating it behind an 8h cooldown
+        # would just slow down testing.
 
         # Third-person here (about each invitee), unlike InheritanceGroundLobbyView's own
         # accept-time re-check of this exact same eligibility, which is "you"-phrased since
