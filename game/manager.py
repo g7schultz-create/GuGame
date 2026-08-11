@@ -3099,6 +3099,36 @@ class GameManager:
         self.db.delete_accessory_instance(instance_id)
         return True, f"Salvaged **{affix.name}** for {stones:,} 🪙 spirit stones."
 
+    def salvage_all_accessory_artifact_duplicates(self, user_id: int, name: str, item_id: str) -> dict:
+        """/accessories' 'Salvage All' -- salvages every owned instance sharing the same
+        item_id (e.g. every extra 'Dew-Gathering Jade Ring'), skipping whichever ones are
+        currently equipped, using the exact same per-item rules/math as
+        salvage_accessory_artifact (Unique rarity is never salvageable at all, so a Unique
+        item_id simply has nothing eligible)."""
+        self.db.get_or_create_player(user_id, name)
+        equipped_ids = set(self.db.get_equipped_accessory_ids(user_id).values())
+        owned = [e for e in self.get_player_accessories_artifacts(user_id) if e["affix"].item_id == item_id]
+        if not owned:
+            return {"ok": False, "reason": "You don't own that item."}
+        affix = owned[0]["affix"]
+        eligible = [e for e in owned if e["instance_id"] not in equipped_ids and affix.rarity != "Unique"]
+        skipped_equipped = sum(1 for e in owned if e["instance_id"] in equipped_ids)
+        if not eligible:
+            reason = "Unique items can't normally be salvaged." if affix.rarity == "Unique" else "That's currently equipped — unequip it first before salvaging it."
+            return {"ok": False, "reason": reason}
+        rarity_star = accessories_data.RARITY_ORDER.index(affix.rarity) + 1
+        stones_each = affix.rank * rarity_star * self.SALVAGE_STONES_PER_RANK_RARITY_STAR
+        for entry in eligible:
+            instance = self.db.get_accessory_instance(entry["instance_id"])
+            self._release_attunement(user_id, instance)
+            self.db.delete_accessory_instance(entry["instance_id"])
+        total_stones = stones_each * len(eligible)
+        self.db.add_spirit_stones(user_id, total_stones)
+        return {
+            "ok": True, "name": affix.name, "count": len(eligible),
+            "stones": total_stones, "skipped_equipped": skipped_equipped,
+        }
+
     def _accessory_cooldown_ready(self, instance: dict, weekly: bool = False) -> int:
         """Seconds remaining before this instance's daily/weekly-gated mechanic is ready
         again — rolling window from last_activation_ts (see the module's daily/weekly

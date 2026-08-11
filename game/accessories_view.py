@@ -6,6 +6,7 @@ from .base_view import GameView
 from .equipment import SLOT_TYPE_EMOJI, describe_stat_bonuses
 
 SLOT_TYPE_ORDER = ["Ring", "Earring", "Necklace", "Bracelet", "Artifact"]
+PAGE_SIZE = 10  # keeps both the Select (Discord's 25-option cap) and the embed text well clear of any limit
 
 
 def _item_line(entry: dict, equipped_ids: set) -> str:
@@ -29,6 +30,7 @@ class AccessoriesView(GameView):
         self.display_name = display_name
         self.slot_type_filter: str = None  # None == "All Types"
         self.selected_instance_id: int = None
+        self.page: int = 0
         self.last_result: str = None
         self._build_components()
 
@@ -46,6 +48,17 @@ class AccessoriesView(GameView):
         if self.slot_type_filter is None:
             return owned
         return [e for e in owned if e["affix"].slot_type == self.slot_type_filter]
+
+    def _total_pages(self) -> int:
+        return max(1, -(-len(self._filtered_owned()) // PAGE_SIZE))  # ceil div
+
+    def _clamp_page(self):
+        self.page = max(0, min(self.page, self._total_pages() - 1))
+
+    def _paged_owned(self) -> list:
+        self._clamp_page()
+        start = self.page * PAGE_SIZE
+        return self._filtered_owned()[start:start + PAGE_SIZE]
 
     def _equipped_ids(self) -> set:
         return set(self.game.db.get_equipped_accessory_ids(self.user_id).values())
@@ -73,7 +86,8 @@ class AccessoriesView(GameView):
         filter_select.callback = self._on_pick_type
         self.add_item(filter_select)
 
-        owned = self._filtered_owned()
+        self._clamp_page()
+        paged = self._paged_owned()
         options = [
             discord.SelectOption(
                 label=f"{e['affix'].name} #{e['instance_id']}"[:100],
@@ -81,7 +95,7 @@ class AccessoriesView(GameView):
                 description=f"Rank {e['affix'].rank} {e['affix'].rarity} • {e['affix'].effect_key.replace('_', ' ')}"[:100],
                 default=(e["instance_id"] == self.selected_instance_id),
             )
-            for e in owned[:25]
+            for e in paged
         ]
         no_items_text = "Nothing owned in this type yet" if self.slot_type_filter else "Nothing owned yet — try /hunt, /raid, or /search"
         select = discord.ui.Select(
@@ -93,6 +107,18 @@ class AccessoriesView(GameView):
         select.callback = self._on_pick_item
         self.add_item(select)
 
+        total_pages = self._total_pages()
+        prev_button = discord.ui.Button(label="◀ Prev", style=discord.ButtonStyle.secondary, row=2, disabled=self.page <= 0)
+        prev_button.callback = self._on_prev_page
+        self.add_item(prev_button)
+
+        page_label = discord.ui.Button(label=f"Page {self.page + 1}/{total_pages}", style=discord.ButtonStyle.secondary, row=2, disabled=True)
+        self.add_item(page_label)
+
+        next_button = discord.ui.Button(label="Next ▶", style=discord.ButtonStyle.secondary, row=2, disabled=self.page >= total_pages - 1)
+        next_button.callback = self._on_next_page
+        self.add_item(next_button)
+
         entry = self._selected_entry()
         equipped_ids = self._equipped_ids()
         can_attune = bool(entry) and entry["affix"].rarity in accessories_data.ATTUNEMENT_REQUIRED_RARITIES and not entry["attuned"]
@@ -101,28 +127,43 @@ class AccessoriesView(GameView):
         can_activate = bool(entry) and entry["instance_id"] in equipped_ids and entry["affix"].effect_key not in (
             "stat", "encounter_shield", "post_action_buff", "extra_loot_roll_daily", "loot_duplicate_daily", "defeat_ward_daily",
         )
+        duplicate_salvageable_count = 0
+        if entry:
+            duplicate_salvageable_count = sum(
+                1 for e in self._owned()
+                if e["affix"].item_id == entry["affix"].item_id and e["instance_id"] not in equipped_ids
+            ) if entry["affix"].rarity != "Unique" else 0
+        can_salvage_all = duplicate_salvageable_count > 0
 
-        attune_button = discord.ui.Button(label="Attune", emoji="🔓", style=discord.ButtonStyle.primary, row=2, disabled=not can_attune)
+        attune_button = discord.ui.Button(label="Attune", emoji="🔓", style=discord.ButtonStyle.primary, row=3, disabled=not can_attune)
         attune_button.callback = self._on_attune
         self.add_item(attune_button)
 
-        unattune_button = discord.ui.Button(label="Unattune", emoji="🔒", style=discord.ButtonStyle.secondary, row=2, disabled=not can_unattune)
+        unattune_button = discord.ui.Button(label="Unattune", emoji="🔒", style=discord.ButtonStyle.secondary, row=3, disabled=not can_unattune)
         unattune_button.callback = self._on_unattune
         self.add_item(unattune_button)
 
-        activate_button = discord.ui.Button(label="Activate", emoji="✨", style=discord.ButtonStyle.success, row=2, disabled=not can_activate)
+        activate_button = discord.ui.Button(label="Activate", emoji="✨", style=discord.ButtonStyle.success, row=3, disabled=not can_activate)
         activate_button.callback = self._on_activate
         self.add_item(activate_button)
 
-        salvage_button = discord.ui.Button(label="Salvage", emoji="🔨", style=discord.ButtonStyle.danger, row=2, disabled=not can_salvage)
+        salvage_button = discord.ui.Button(label="Salvage", emoji="🔨", style=discord.ButtonStyle.danger, row=3, disabled=not can_salvage)
         salvage_button.callback = self._on_salvage
         self.add_item(salvage_button)
+
+        salvage_all_button = discord.ui.Button(
+            label=f"Salvage All ({duplicate_salvageable_count})" if duplicate_salvageable_count else "Salvage All",
+            emoji="🧺", style=discord.ButtonStyle.danger, row=3, disabled=not can_salvage_all,
+        )
+        salvage_all_button.callback = self._on_salvage_all
+        self.add_item(salvage_all_button)
 
     async def _on_pick_type(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 0)
         value = select.values[0]
         self.slot_type_filter = None if value == "all" else value
         self.selected_instance_id = None
+        self.page = 0
         self.last_result = None
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
@@ -133,6 +174,18 @@ class AccessoriesView(GameView):
         value = select.values[0]
         self.selected_instance_id = int(value) if value != "none" else None
         self.last_result = None
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _on_prev_page(self, interaction: discord.Interaction):
+        self.page -= 1
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _on_next_page(self, interaction: discord.Interaction):
+        self.page += 1
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -160,6 +213,20 @@ class AccessoriesView(GameView):
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
 
+    async def _on_salvage_all(self, interaction: discord.Interaction):
+        entry = self._selected_entry()
+        item_id = entry["affix"].item_id if entry else None
+        result = await asyncio.to_thread(self.game.salvage_all_accessory_artifact_duplicates, self.user_id, self.display_name, item_id)
+        if result["ok"]:
+            note = f" ({result['skipped_equipped']} equipped copy skipped)" if result["skipped_equipped"] else ""
+            self.last_result = f"Salvaged {result['count']}x **{result['name']}** for {result['stones']:,} 🪙 spirit stones total.{note}"
+            self.selected_instance_id = None
+        else:
+            self.last_result = result["reason"]
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
     async def _on_activate(self, interaction: discord.Interaction):
         ok, message = await asyncio.to_thread(self.game.activate_accessory_artifact, self.user_id, self.display_name, self.selected_instance_id)
         self.last_result = message
@@ -168,7 +235,8 @@ class AccessoriesView(GameView):
         await interaction.response.edit_message(embed=embed, view=self)
 
     def build_embed(self) -> discord.Embed:
-        owned = self._filtered_owned()
+        total_owned = self._filtered_owned()
+        paged = self._paged_owned()  # clamps self.page as a side effect
         equipped_ids = self._equipped_ids()
         player = self.game.get_player_stats(self.user_id, self.display_name)
 
@@ -181,7 +249,7 @@ class AccessoriesView(GameView):
             inline=False,
         )
 
-        if not owned:
+        if not total_owned:
             embed.description = (
                 f"You don't own any {self.slot_type_filter} accessories/artifacts yet."
                 if self.slot_type_filter else
@@ -190,7 +258,7 @@ class AccessoriesView(GameView):
         else:
             slot_types_shown = [self.slot_type_filter] if self.slot_type_filter else SLOT_TYPE_ORDER
             by_slot = {slot_type: [] for slot_type in slot_types_shown}
-            for entry in owned:
+            for entry in paged:
                 by_slot.setdefault(entry["affix"].slot_type, []).append(entry)
 
             sections = []
@@ -203,6 +271,13 @@ class AccessoriesView(GameView):
                 lines.extend(_item_line(e, equipped_ids) for e in entries)
                 sections.append("\n".join(lines))
             embed.description = "\n\n".join(sections)[:4000]
+
+            start = self.page * PAGE_SIZE
+            embed.add_field(
+                name="Showing",
+                value=f"{start + 1}–{start + len(paged)} of {len(total_owned)}",
+                inline=False,
+            )
 
         if self.last_result:
             embed.add_field(name="Result", value=self.last_result, inline=False)
