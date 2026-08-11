@@ -1100,24 +1100,6 @@ class GameManager:
         self.db.add_item(user_id, gu_name, 1)
         return gu_name
 
-    def resolve_inheritance_ground_betrayal(self, backstabbers: list) -> dict:
-        """backstabbers: [(user_id, name), ...], already confirmed len >= 1 by the caller. A
-        solo backstabber just wins outright (no opponent to duel); 2+ fight an FFA via
-        tournament.run_battle_royale, the exact same frozen-snapshot "last one standing"
-        simulator /tournament itself uses -- no new combat logic needed. Returns
-        {"winner_user_id", "winner_name", "duel": run_battle_royale's own result dict, or None
-        for the solo case}."""
-        if len(backstabbers) == 1:
-            user_id, name = backstabbers[0]
-            return {"winner_user_id": user_id, "winner_name": name, "duel": None}
-        participants = [
-            {"user_id": user_id, "name": name, "snapshot": self._tournament_combat_snapshot(user_id, name)}
-            for user_id, name in backstabbers
-        ]
-        result = tournament.run_battle_royale(participants)
-        winner = next(p for p in result["placements"] if p["rank"] == 1)
-        return {"winner_user_id": winner["user_id"], "winner_name": winner["name"], "duel": result}
-
     # -- /search_forgotten_blessed_land treasure-hunt board (see game/treasure_hunt.py) --------
     TREASURE_HUNT_REALM_GATE = 2  # Core Formation's great_realm_index
     TREASURE_HUNT_COOLDOWN_SECONDS = 1 * 3600  # 1 hour between boards, no stone/item cost

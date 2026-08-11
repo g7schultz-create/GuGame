@@ -9,7 +9,9 @@ Three views:
   InheritanceGroundLobbyView   -- invite/accept flow (leader + up to 3 invitees).
   InheritanceGroundView        -- the run itself: intro -> bubble board -> trial -> betrayal ->
                                    resolution, with a real multi-round team fight embedded as its
-                                   own "battle" phase whenever a battle bubble is popped.
+                                   own "battle" phase whenever a battle bubble is popped, and (if
+                                   2+ team members backstab) a real live Attack/Guard FFA duel
+                                   among just the backstabbers as its own "backstab_duel" phase.
   AbandonInheritanceGroundView -- self-service escape hatch, same shape as AbandonRaidView/
                                    AbandonDiscoveryView, shipped from day one rather than added
                                    reactively (see the raid flee bug fixed in commit 0b6b712).
@@ -17,17 +19,19 @@ Three views:
 
 import asyncio
 import os
+import random
 
 import discord
 
-from . import avatar, inheritance_ground_data
+from . import avatar, combat, inheritance_ground_data
 from .base_view import GameView
 from .content.monsters import blood_sea_ancestor
-from .team_battle import EMPOWER_QI_COST, RaidEnemy, TeamBattleEngine
+from .team_battle import EMPOWER_QI_COST, GUARD_DAMAGE_REDUCTION, RaidEnemy, TeamBattleEngine
 from .ui_utils import render_bar
 
 BETRAYAL_DECISION_SECONDS = 60
 BATTLE_ROUND_TIMEOUT_SECONDS = 30  # matches raid.ROUND_TIMEOUT_SECONDS's own pacing
+DUEL_ROUND_TIMEOUT_SECONDS = 30  # matches BATTLE_ROUND_TIMEOUT_SECONDS's own pacing
 
 
 def build_intro_image_file(ground_key: str) -> discord.File:
@@ -246,6 +250,16 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         self.betrayal_epoch = 0
         self.share_grants: list = []
         self.betrayal_result: dict = None
+
+        # Backstab duel (2+ backstabbers) -- a real, live, turn-based Attack/Guard FFA among
+        # just the backstabbers, resolved on the "backstab_duel" phase (see
+        # _start_backstab_duel). Empty/zeroed until (if ever) a duel actually starts.
+        self.duel_participants: dict = {}
+        self.duel_actions: dict = {}
+        self.duel_round = 1
+        self.duel_log: list = []
+        self._duel_round_epoch = 0
+
         self.message: discord.Message = None
         self._build_components()
 
@@ -344,6 +358,16 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             backstab_button = discord.ui.Button(label="Backstab for Core Gu", emoji="🗡️", style=discord.ButtonStyle.danger)
             backstab_button.callback = self._make_betrayal_callback("backstab")
             self.add_item(backstab_button)
+        elif self.phase == "backstab_duel":
+            # Attack/Guard only, auto-targeted at a random other living duelist -- see
+            # _resolve_duel_round. No target-select: the request was "clicks Attack/Guard",
+            # not a full manual-targeting FFA.
+            attack_button = discord.ui.Button(label="Attack", emoji="⚔️", style=discord.ButtonStyle.danger)
+            attack_button.callback = self._on_duel_attack
+            self.add_item(attack_button)
+            guard_button = discord.ui.Button(label="Guard", emoji="🛡️", style=discord.ButtonStyle.secondary)
+            guard_button.callback = self._on_duel_guard
+            self.add_item(guard_button)
         # "trial_result" and "resolved" phases have no buttons -- purely display states.
 
     # -- intro -----------------------------------------------------------------------------
@@ -560,14 +584,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         await asyncio.sleep(BETRAYAL_DECISION_SECONDS)
         if self.phase != "betrayal" or epoch != self.betrayal_epoch:
             return
-        await asyncio.to_thread(self._resolve_betrayal)
-        await asyncio.to_thread(self._build_components)
-        if self.message is not None:
-            try:
-                embed = await asyncio.to_thread(self.build_embed)
-                await self.message.edit(embed=embed, view=self)
-            except discord.HTTPException:
-                pass
+        await self._finish_betrayal_resolution()
 
     def _make_betrayal_callback(self, choice: str):
         async def callback(interaction: discord.Interaction):
@@ -582,20 +599,35 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             )
             await interaction.response.send_message(confirm_text, ephemeral=True)
             if len(self.betrayal_choices) >= len(self.team):
-                await asyncio.to_thread(self._resolve_betrayal)
-                await asyncio.to_thread(self._build_components)
-                if self.message is not None:
-                    try:
-                        embed = await asyncio.to_thread(self.build_embed)
-                        await self.message.edit(embed=embed, view=self)
-                    except discord.HTTPException:
-                        pass
+                await self._finish_betrayal_resolution()
 
         return callback
 
+    async def _finish_betrayal_resolution(self):
+        """Shared by both race paths that can conclude the betrayal vote (everyone clicked,
+        or the timer ran out) -- resolves, rebuilds, refreshes, and -- since resolving can
+        land the phase on "backstab_duel" instead of "resolved" (2+ backstabbers) -- starts
+        that duel's own round timer. asyncio.create_task (via _start_duel_round_timer) needs
+        a running loop on the CURRENT thread, so that check has to happen here in real async
+        context, never inside the to_thread-dispatched _resolve_betrayal itself -- same
+        discipline _finish_round already established for the betrayal timer itself."""
+        await asyncio.to_thread(self._resolve_betrayal)
+        await asyncio.to_thread(self._build_components)
+        if self.message is not None:
+            try:
+                embed = await asyncio.to_thread(self.build_embed)
+                await self.message.edit(embed=embed, view=self)
+            except discord.HTTPException:
+                pass
+        if self.phase == "backstab_duel":
+            self._start_duel_round_timer()
+
     def _resolve_betrayal(self):
-        """Sync -- always dispatched via asyncio.to_thread by its two callers above, never
-        called directly from an async context. Anyone who never clicked defaults to Share."""
+        """Sync -- always dispatched via asyncio.to_thread by _finish_betrayal_resolution,
+        never called directly from an async context. Anyone who never clicked defaults to
+        Share. 0 or 1 backstabbers resolve (and finish the run) immediately; 2+ instead kick
+        off a real live duel among just the backstabbers (see _start_backstab_duel) -- the
+        run doesn't finish until THAT concludes (see _finish_backstab_duel)."""
         if self.phase != "betrayal":
             return  # already resolved by the other race path (click-triggered vs timeout)
         for uid, _name in self.team:
@@ -607,15 +639,178 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             (name, self.game.grant_inheritance_ground_share_reward(self.ground_key, uid, name))
             for uid, name in sharers
         ]
+        if len(backstabbers) >= 2:
+            self._start_backstab_duel(backstabbers)
+            return
         if backstabbers:
-            self.betrayal_result = self.game.resolve_inheritance_ground_betrayal(backstabbers)
-            gu_name = self.game.grant_inheritance_ground_bonus_gu(
-                self.ground_key, self.betrayal_result["winner_user_id"], self.betrayal_result["winner_name"],
-            )
-            self.betrayal_result["gu_name"] = gu_name
+            uid, name = backstabbers[0]
+            gu_name = self.game.grant_inheritance_ground_bonus_gu(self.ground_key, uid, name)
+            self.betrayal_result = {"winner_user_id": uid, "winner_name": name, "duel": None, "gu_name": gu_name}
 
         self.game.finish_inheritance_ground_run([uid for uid, _ in self.team])
         self.phase = "resolved"
+
+    # -- backstab duel (2+ backstabbers -- a real live Attack/Guard FFA, not a simulation) ----
+    # asyncio.create_task (via _start_duel_round_timer) requires a running loop on the CURRENT
+    # thread, so it's always called directly on the main thread, never from inside a
+    # to_thread-dispatched function -- same discipline every other round timer in this view
+    # already established (see _start_battle_round_timer's own comment).
+
+    def _duel_combat_stats(self, user_id: int) -> dict:
+        """Base + equipped-gear stats only (no Empower/Gu Ability/physique traits/etc.) --
+        the duel's scope is deliberately just Attack/Guard, mirroring pvp_view.py's own
+        _player_combat_stats shape."""
+        player = self.game.get_player_stats(user_id, self.duel_participants[user_id]["name"])
+        bonuses = self.game.compute_equipment_bonuses(user_id)["stats"]
+        return {
+            "atk_stat": player["atk_stat"] + bonuses["atk_stat"],
+            "str_stat": player["str_stat"] + bonuses["str_stat"],
+            "def_stat": player["def_stat"] + bonuses["def_stat"],
+            "spd_stat": player["spd_stat"] + bonuses["spd_stat"],
+            "luck_stat": player["luck_stat"] + bonuses["luck_stat"],
+        }
+
+    def _duel_alive_ids(self):
+        return [uid for uid, p in self.duel_participants.items() if not p["down"]]
+
+    def _start_backstab_duel(self, backstabbers: list):
+        """Sync -- called from within _resolve_betrayal, itself always dispatched via
+        asyncio.to_thread. Seeds each backstabber's duel HP from their real current HP (same
+        equipment-overlay pattern _build_participant_state/pvp_view use) -- this is a real
+        fight with real stakes, not a harmless /pvp-style duel, matching "back stab ... for
+        the loot" being a genuine risk."""
+        self.phase = "backstab_duel"
+        self.duel_participants = {}
+        for uid, name in backstabbers:
+            equip_bonuses = self.game.compute_equipment_bonuses(uid)["stats"]
+            hp_bonus = equip_bonuses["hp"]
+            hp_settled = self.game.db.settle_hp_regen(uid)
+            self.duel_participants[uid] = {
+                "name": name, "hp": hp_settled["hp"] + hp_bonus, "max_hp": hp_settled["max_hp"] + hp_bonus,
+                "hp_bonus": hp_bonus, "down": False,
+            }
+        self.duel_actions = {}
+        self.duel_round = 1
+        names = ", ".join(name for _, name in backstabbers)
+        self.duel_log = [f"🗡️ {names} turn on each other for the Core Gu!"]
+
+    def _apply_duel_afk_actions(self):
+        for uid in self._duel_alive_ids():
+            self.duel_actions.setdefault(uid, "attack")
+
+    def _start_duel_round_timer(self):
+        self._duel_round_epoch += 1
+        asyncio.create_task(self._duel_round_timeout(self._duel_round_epoch))
+
+    async def _duel_round_timeout(self, epoch: int):
+        await asyncio.sleep(DUEL_ROUND_TIMEOUT_SECONDS)
+        if self.phase != "backstab_duel" or epoch != self._duel_round_epoch:
+            return
+        await asyncio.to_thread(self._apply_duel_afk_actions)
+        await self._finish_duel_round()
+
+    async def _submit_duel_action(self, user_id: int, action_type: str):
+        self.duel_actions[user_id] = action_type
+        if set(self._duel_alive_ids()).issubset(self.duel_actions.keys()):
+            await self._finish_duel_round()
+        else:
+            await asyncio.to_thread(self._build_components)
+            await self._refresh_message()
+
+    async def _finish_duel_round(self):
+        await asyncio.to_thread(self._resolve_duel_round)
+        await asyncio.to_thread(self._build_components)
+        await self._refresh_message()
+        if self.phase == "backstab_duel":
+            self._start_duel_round_timer()
+
+    def _resolve_duel_round(self):
+        """Sync -- dispatched via asyncio.to_thread by both callers above. Every duelist who
+        attacks targets a randomly-chosen other living duelist (no manual targeting -- the
+        request scope is just Attack/Guard); guarding halves whatever damage lands on you
+        this round. Ends the round at <=1 duelist left standing."""
+        alive = self._duel_alive_ids()
+        attackers = [uid for uid in alive if self.duel_actions.get(uid, "attack") == "attack"]
+        random.shuffle(attackers)
+        for uid in attackers:
+            attacker = self.duel_participants[uid]
+            if attacker["down"]:
+                continue
+            targets = [t for t in self._duel_alive_ids() if t != uid]
+            if not targets:
+                continue
+            target_uid = random.choice(targets)
+            target = self.duel_participants[target_uid]
+            guarding = self.duel_actions.get(target_uid) == "guard"
+            result = combat.resolve_attack(
+                self._duel_combat_stats(uid), self._duel_combat_stats(target_uid),
+                incoming_reduction=GUARD_DAMAGE_REDUCTION if guarding else 0.0,
+            )
+            if not result.hit:
+                self.duel_log.append(f"⚔️ **{attacker['name']}** attacks **{target['name']}** but misses!")
+            elif result.dodged:
+                self.duel_log.append(f"💨 **{target['name']}** dodges **{attacker['name']}**'s attack!")
+            else:
+                target["hp"] = max(0, target["hp"] - result.damage)
+                crit = " (Critical!)" if result.crit else ""
+                guard_note = " (guarded)" if guarding else ""
+                self.duel_log.append(f"⚔️ **{attacker['name']}** hits **{target['name']}** for {result.damage} damage{crit}{guard_note}.")
+                if target["hp"] <= 0:
+                    target["down"] = True
+                    self.duel_log.append(f"💀 **{target['name']}** is knocked out of the duel!")
+        self.duel_log = self.duel_log[-6:]
+        self.duel_actions = {}
+
+        still_alive = self._duel_alive_ids()
+        if len(still_alive) <= 1:
+            self._finish_backstab_duel(still_alive)
+        else:
+            self.duel_round += 1
+
+    def _finish_backstab_duel(self, still_alive: list):
+        """still_alive: 0 or 1 remaining duelist user_ids. A 0-alive mutual-KO is an edge
+        case (both/all sides land a final blow the same round) -- tiebreak randomly among
+        every original duelist rather than leave the Core Gu unclaimed."""
+        winner_id = still_alive[0] if still_alive else random.choice(list(self.duel_participants.keys()))
+        winner_name = self.duel_participants[winner_id]["name"]
+        gu_name = self.game.grant_inheritance_ground_bonus_gu(self.ground_key, winner_id, winner_name)
+        self.betrayal_result = {
+            "winner_user_id": winner_id, "winner_name": winner_name,
+            "duel": {"events": list(self.duel_log)}, "gu_name": gu_name,
+        }
+        self.game.finish_inheritance_ground_run([uid for uid, _ in self.team])
+        self.phase = "resolved"
+
+    async def _on_duel_attack(self, interaction: discord.Interaction):
+        p = self.duel_participants.get(interaction.user.id)
+        if p is None:
+            await interaction.response.send_message("You're not part of this duel.", ephemeral=True)
+            return
+        if p["down"]:
+            await interaction.response.send_message("You've been knocked out of the duel.", ephemeral=True)
+            return
+        if interaction.user.id in self.duel_actions:
+            await interaction.response.send_message("You've already locked in your action for this round.", ephemeral=True)
+            return
+        # defer() + background refresh, not an ephemeral confirmation -- mirrors
+        # TeamBattleEngine._on_attack (team_battle.py) exactly, since this is the same
+        # "collect one action per living participant, resolve once everyone's in" shape.
+        await interaction.response.defer()
+        await self._submit_duel_action(interaction.user.id, "attack")
+
+    async def _on_duel_guard(self, interaction: discord.Interaction):
+        p = self.duel_participants.get(interaction.user.id)
+        if p is None:
+            await interaction.response.send_message("You're not part of this duel.", ephemeral=True)
+            return
+        if p["down"]:
+            await interaction.response.send_message("You've been knocked out of the duel.", ephemeral=True)
+            return
+        if interaction.user.id in self.duel_actions:
+            await interaction.response.send_message("You've already locked in your action for this round.", ephemeral=True)
+            return
+        await interaction.response.defer()
+        await self._submit_duel_action(interaction.user.id, "guard")
 
     # -- display -----------------------------------------------------------------------------
 
@@ -752,6 +947,31 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
                 color=discord.Color.gold(),
             )
             embed.set_footer(text=f"{responded}/{len(self.team)} have decided — resolves once everyone has, or in {BETRAYAL_DECISION_SECONDS}s.")
+            return embed
+
+        if self.phase == "backstab_duel":
+            lines = []
+            for uid, p in self.duel_participants.items():
+                pct = int(100 * max(0, p["hp"]) / p["max_hp"]) if p["max_hp"] else 0
+                if p["down"]:
+                    status = "💀 knocked out"
+                elif uid in self.duel_actions:
+                    status = "✅ locked in"
+                else:
+                    status = "⏳ choosing..."
+                lines.append(
+                    f"**{p['name']}** — {max(0, p['hp']):,}/{p['max_hp']:,} HP ({pct}%) • {status}\n"
+                    f"`{render_bar(p['hp'], p['max_hp'])}`"
+                )
+            embed = discord.Embed(
+                title=f"🗡️ {ground['name']} — Backstab Duel!",
+                description="The backstabbers turn on each other — only one walks away with the Core Gu.",
+                color=discord.Color.dark_red(),
+            )
+            embed.add_field(name=f"⚔️ Duelists — Round {self.duel_round}", value="\n".join(lines)[:1024], inline=False)
+            if self.duel_log:
+                embed.add_field(name="📜 Recent Combat", value="\n".join(self.duel_log)[:1024], inline=False)
+            embed.set_footer(text=f"Actions resolve once every standing duelist has chosen, or in {DUEL_ROUND_TIMEOUT_SECONDS}s.")
             return embed
 
         # "resolved"
