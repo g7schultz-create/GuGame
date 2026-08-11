@@ -17,16 +17,15 @@ Three views:
 
 import asyncio
 import os
-import random
 
 import discord
 
-from . import combat, inheritance_ground_data
+from . import avatar, inheritance_ground_data
 from .base_view import GameView
+from .team_battle import EMPOWER_QI_COST, RaidEnemy, TeamBattleEngine
 
 BETRAYAL_DECISION_SECONDS = 60
 BATTLE_ROUND_TIMEOUT_SECONDS = 30  # matches raid.ROUND_TIMEOUT_SECONDS's own pacing
-GUARD_DAMAGE_REDUCTION = 0.5  # matches hunt.py/raid.py/battlefield_view.py's own constant
 
 
 def build_intro_image_file(ground_key: str) -> discord.File:
@@ -204,7 +203,7 @@ class InheritanceGroundLobbyView(GameView):
         return embed
 
 
-class InheritanceGroundView(GameView):
+class InheritanceGroundView(TeamBattleEngine, GameView):
     def __init__(self, game, ground_key: str, team: list):
         super().__init__(timeout=600)
         self.game = game
@@ -223,17 +222,17 @@ class InheritanceGroundView(GameView):
         self.bubble_resolving = False  # re-entrancy guard, mirrors raid.py's own click guards
         self.battles_fought = 0  # feeds roll_inheritance_ground_battle_monster's own scaling
 
-        # "battle" phase state -- populated by _start_battle when a battle bubble is popped,
-        # left in place afterward (harmless, just stale) until the next battle overwrites it.
-        self.battle_monster = None
-        self.battle_monster_hp = 0
-        self.battle_monster_max_hp = 0
-        self.battle_hp: dict = {}       # user_id -> current HP this fight
-        self.battle_max_hp: dict = {}   # user_id -> max HP this fight
-        self.battle_hp_bonus: dict = {}  # user_id -> equipped gear's flat HP overlay, for persisting back
-        self.battle_actions: dict = {}  # user_id -> "attack"/"guard", this round only
-        self.battle_round = 1
-        self.battle_log: list = []
+        # "battle" phase state -- populated by _start_battle when a battle bubble is popped
+        # (see TeamBattleEngine, team_battle.py, for the full Attack/Guard/Empower/Gu Ability/
+        # Class Ability/Killer Move/Soul Projection/Potion-menu combat engine this now shares
+        # with /raid). Left in place afterward (harmless, just stale) until the next battle
+        # overwrites it.
+        self.enemies: list = []
+        self.participants: dict = {}
+        self.actions: dict = {}
+        self.round = 1
+        self.log: list = []
+        self.inspire_rounds_remaining = 0
         self.battle_wipe = False  # True once a battle ends the run early (team wiped)
         self._battle_round_epoch = 0
 
@@ -279,12 +278,37 @@ class InheritanceGroundView(GameView):
                     button.callback = self._make_bubble_callback(index)
                 self.add_item(button)
         elif self.phase == "battle":
-            attack_button = discord.ui.Button(label="Attack", emoji="⚔️", style=discord.ButtonStyle.danger)
-            attack_button.callback = self._make_battle_action_callback("attack")
+            # Full TeamBattleEngine action set (team_battle.py) -- same combat loop /raid
+            # runs, just against a single guardian instead of a boss group, so there's no
+            # target-select row to build (every action always targets self.enemies[0]).
+            attack_button = discord.ui.Button(label="Attack", emoji="⚔️", style=discord.ButtonStyle.danger, row=0)
+            attack_button.callback = self._on_attack
             self.add_item(attack_button)
-            guard_button = discord.ui.Button(label="Guard", emoji="🛡️", style=discord.ButtonStyle.secondary)
-            guard_button.callback = self._make_battle_action_callback("guard")
+            guard_button = discord.ui.Button(label="Guard", emoji="🛡️", style=discord.ButtonStyle.secondary, row=0)
+            guard_button.callback = self._on_guard
             self.add_item(guard_button)
+            empower_button = discord.ui.Button(label=f"Empower ({EMPOWER_QI_COST})", emoji="✨", style=discord.ButtonStyle.success, row=0)
+            empower_button.callback = self._on_toggle_empower
+            self.add_item(empower_button)
+            class_button = discord.ui.Button(label="Class Ability", emoji="🎭", style=discord.ButtonStyle.success, row=0)
+            class_button.callback = self._on_class_ability
+            self.add_item(class_button)
+
+            gu_button = discord.ui.Button(label="Use Gu Ability", emoji="🐛", style=discord.ButtonStyle.primary, row=1)
+            gu_button.callback = self._on_gu_ability
+            self.add_item(gu_button)
+            killer_move_button = discord.ui.Button(label="Use Killer Move", emoji="🌀", style=discord.ButtonStyle.primary, row=1)
+            killer_move_button.callback = self._on_killer_move
+            self.add_item(killer_move_button)
+            soul_projection_button = discord.ui.Button(
+                label=f"Soul Projection ({avatar.SOUL_PROJECTION_QI_COST:,})", emoji="🌀",
+                style=discord.ButtonStyle.success, row=1,
+            )
+            soul_projection_button.callback = self._on_soul_projection
+            self.add_item(soul_projection_button)
+            potion_button = discord.ui.Button(label="Use Potion/Pill", emoji="🧪", style=discord.ButtonStyle.success, row=1)
+            potion_button.callback = self._on_open_potion_menu
+            self.add_item(potion_button)
         elif self.phase == "pre_trial":
             button = discord.ui.Button(label="Face the Trial", emoji="⚔️", style=discord.ButtonStyle.danger)
             button.callback = self._on_face_trial
@@ -356,45 +380,36 @@ class InheritanceGroundView(GameView):
     def _start_battle(self):
         """Sync -- dispatched via asyncio.to_thread by its one caller above. Seeds the
         monster (scaled by battles_fought, see roll_inheritance_ground_battle_monster) and
-        every team member's live HP for the fight, same equipment-bonus overlay pattern
-        hunt.py's own HuntView.__init__ uses for player_hp/player_max_hp."""
+        every team member's full combat state via TeamBattleEngine._build_participant_state
+        (team_battle.py) -- the exact same seeding /raid uses, so Empower/Gu Ability/Class
+        Ability/Killer Move/Soul Projection all Just Work here too. inspire_rounds_remaining
+        resets per battle bubble (unlike /raid, one inheritance-ground run can fight several
+        battle bubbles back to back, and a buff from a PRIOR fight shouldn't leak into the
+        next one)."""
         self.phase = "battle"
-        self.battle_monster = self.game.roll_inheritance_ground_battle_monster(self.ground_key, self.battles_fought)
-        self.battle_monster_hp = self.battle_monster.hp
-        self.battle_monster_max_hp = self.battle_monster.hp
-        self.battle_hp = {}
-        self.battle_max_hp = {}
-        self.battle_hp_bonus = {}
-        for uid, _name in self.team:
-            equip_bonuses = self.game.compute_equipment_bonuses(uid)["stats"]
-            hp_bonus = equip_bonuses["hp"]
-            hp_settled = self.game.db.settle_hp_regen(uid)
-            self.battle_hp[uid] = hp_settled["hp"] + hp_bonus
-            self.battle_max_hp[uid] = hp_settled["max_hp"] + hp_bonus
-            self.battle_hp_bonus[uid] = hp_bonus
-        self.battle_actions = {}
-        self.battle_round = 1
-        self.battle_log = [f"⚔️ {self.battle_monster.name} blocks the way!"]
+        monster = self.game.roll_inheritance_ground_battle_monster(self.ground_key, self.battles_fought)
+        self.enemies = [RaidEnemy(monster)]
+        self.participants = {}
+        for uid, name in self.team:
+            player = self.game.get_player_stats(uid, name)
+            self.participants[uid] = self._build_participant_state(uid, name, player)
+            self.game.apply_encounter_start_bonuses(uid, name)
+        self.actions = {}
+        self.round = 1
+        self.inspire_rounds_remaining = 0
+        self.log = [f"⚔️ {monster.name} blocks the way!"]
 
-    def _battle_attacker_stats(self, user_id: int) -> dict:
-        """Base + equipped-gear bonuses only -- deliberately NOT the fuller physique/root
-        special-trait stacking (guard-stacks, solar-stacks, low-HP bonuses, etc.) hunt.py/
-        raid.py layer on top, keeping this a small, self-contained addition rather than a
-        second full copy of that machinery."""
-        name = next(n for uid, n in self.team if uid == user_id)
-        player = self.game.get_player_stats(user_id, name)
-        bonuses = self.game.compute_equipment_bonuses(user_id)["stats"]
-        return {
-            "str_stat": player["str_stat"] + bonuses["str_stat"], "atk_stat": player["atk_stat"] + bonuses["atk_stat"],
-            "def_stat": player["def_stat"] + bonuses["def_stat"], "spd_stat": player["spd_stat"] + bonuses["spd_stat"],
-            "luck_stat": player["luck_stat"] + bonuses["luck_stat"],
-        }
-
-    def _persist_battle_hp(self, user_id: int):
-        """Mirrors hunt.py's own _persist_hp -- subtracts the gear-bonus overlay before
-        writing back, since the stored hp/max_hp columns stay gear-independent."""
-        hp_bonus = self.battle_hp_bonus.get(user_id, 0)
-        self.game.db.set_hp(user_id, max(1, self.battle_hp[user_id] - hp_bonus))
+    def _apply_afk_actions(self):
+        """Auto-submits a plain Attack for anyone who didn't act before the round's clock
+        ran out -- mirrors raid.py's own _apply_afk_actions, minus its reward-multiplier
+        penalty (inheritance ground's battle bubbles don't have their own separate loot
+        multiplier concept to dock)."""
+        for user_id in self._alive_participant_ids():
+            if user_id in self.actions:
+                continue
+            p = self.participants[user_id]
+            self.actions[user_id] = {"type": "attack", "target": 0, "guaranteed": False}
+            self._log(f"⏱️ **{p['name']}** ran out of time and auto-attacks {self.enemies[0].monster.name}!")
 
     def _start_battle_round_timer(self):
         self._battle_round_epoch += 1
@@ -404,115 +419,34 @@ class InheritanceGroundView(GameView):
         await asyncio.sleep(BATTLE_ROUND_TIMEOUT_SECONDS)
         if self.phase != "battle" or epoch != self._battle_round_epoch:
             return  # this round already resolved on its own (or the run ended) before this fired
-        await asyncio.to_thread(self._resolve_battle_round)
+        await asyncio.to_thread(self._apply_afk_actions)
+        await self._finish_round()
+
+    async def _finish_round(self):
+        """Called by TeamBattleEngine._submit_action (team_battle.py) once every alive
+        participant has locked in an action, and directly by _battle_round_timeout above --
+        mirrors raid.py's own _finish_round shape (resolve -> rebuild -> refresh -> restart
+        the round timer if the fight is still ongoing), keyed on self.phase instead of
+        raid's self.status."""
+        await asyncio.to_thread(self._resolve_round)
         await asyncio.to_thread(self._build_components)
-        if self.message is not None:
-            try:
-                embed = await asyncio.to_thread(self.build_embed)
-                await self.message.edit(embed=embed, view=self)
-            except discord.HTTPException:
-                pass
+        await self._refresh_message()
+        if self.phase == "battle":
+            self._start_battle_round_timer()
 
-    def _make_battle_action_callback(self, action: str):
-        def callback(interaction: discord.Interaction):
-            return self._on_battle_action(interaction, action)
-
-        return callback
-
-    async def _on_battle_action(self, interaction: discord.Interaction, action: str):
-        user_id = interaction.user.id
-        if self.battle_hp.get(user_id, 0) <= 0:
-            await interaction.response.send_message("You've been knocked out this fight and can't act.", ephemeral=True)
-            return
-        if user_id in self.battle_actions:
-            await interaction.response.send_message("You've already chosen your action this round.", ephemeral=True)
-            return
-        self.battle_actions[user_id] = action
-        confirm_text = "⚔️ You ready an attack." if action == "attack" else "🛡️ You brace for the next blow."
-        await interaction.response.send_message(confirm_text, ephemeral=True)
-        alive_ids = [uid for uid, _ in self.team if self.battle_hp.get(uid, 0) > 0]
-        if not all(uid in self.battle_actions for uid in alive_ids):
-            return
-        await asyncio.to_thread(self._resolve_battle_round)
-        await asyncio.to_thread(self._build_components)
-        if self.message is not None:
-            try:
-                embed = await asyncio.to_thread(self.build_embed)
-                await self.message.edit(embed=embed, view=self)
-            except discord.HTTPException:
-                pass
-
-    def _resolve_battle_round(self):
-        """Sync -- always dispatched via asyncio.to_thread by its two callers above. Non-
-        responders default to Attack (mirrors raid.py's own _apply_afk_actions). Player phase
-        (every alive member attacks or guards) then a monster phase (one counter-attack at a
-        random alive, non-guarded-reduced member) -- same "player phase, then monster phase"
-        shape hunt.py's _do_attack/_monster_turn already use, just N attackers instead of 1."""
-        if self.phase != "battle":
-            return  # already resolved by the other race path (click-triggered vs timeout)
-        alive_ids = [uid for uid, _ in self.team if self.battle_hp.get(uid, 0) > 0]
-        for uid in alive_ids:
-            self.battle_actions.setdefault(uid, "attack")
-
-        guarding_ids = set()
-        for uid, name in self.team:
-            if uid not in alive_ids:
-                continue
-            if self.battle_actions.get(uid) == "guard":
-                guarding_ids.add(uid)
-                self.battle_log.append(f"🛡️ **{name}** braces for the next blow.")
-                continue
-            if self.battle_monster_hp <= 0:
-                continue
-            result = combat.resolve_attack(
-                self._battle_attacker_stats(uid), self.battle_monster.stats(),
-                max_dodge_chance=combat.MONSTER_MAX_DODGE_CHANCE,
-            )
-            if not result.hit:
-                self.battle_log.append(f"❌ **{name}** attacks {self.battle_monster.name} but misses!")
-            elif result.dodged:
-                self.battle_log.append(f"💨 {self.battle_monster.name} dodges **{name}**'s attack!")
-            else:
-                self.battle_monster_hp = max(0, self.battle_monster_hp - result.damage)
-                self.battle_log.append(f"⚔️ **{name}** hits {self.battle_monster.name} for {result.damage} damage.")
-
-        if self.battle_monster_hp <= 0:
-            self._finish_battle_victory()
-            self.battle_log = self.battle_log[-8:]
-            return
-
-        still_alive_ids = [uid for uid in alive_ids if self.battle_hp.get(uid, 0) > 0]
-        if still_alive_ids:
-            target_uid = random.choice(still_alive_ids)
-            target_name = next(name for uid, name in self.team if uid == target_uid)
-            incoming_reduction = GUARD_DAMAGE_REDUCTION if target_uid in guarding_ids else 0.0
-            result = combat.resolve_attack(
-                self.battle_monster.stats(), self._battle_attacker_stats(target_uid), incoming_reduction=incoming_reduction,
-            )
-            if not result.hit:
-                self.battle_log.append(f"❌ {self.battle_monster.name} attacks **{target_name}** but misses!")
-            elif result.dodged:
-                self.battle_log.append(f"💨 **{target_name}** dodges {self.battle_monster.name}'s attack!")
-            else:
-                self.battle_hp[target_uid] = max(0, self.battle_hp[target_uid] - result.damage)
-                self._persist_battle_hp(target_uid)
-                self.battle_log.append(f"🩸 {self.battle_monster.name} hits **{target_name}** for {result.damage} damage.")
-
-        self.battle_actions = {}
-        if all(self.battle_hp.get(uid, 0) <= 0 for uid, _ in self.team):
-            self._finish_battle_wipe()
-        else:
-            self.battle_round += 1
-        self.battle_log = self.battle_log[-8:]
-
-    def _finish_battle_victory(self):
-        self.battle_log.append(f"💥 {self.battle_monster.name} is defeated!")
-        self.board_log.append((None, "battle", f"The team defeats {self.battle_monster.name}!"))
+    def _on_victory(self):
+        """Called by TeamBattleEngine._resolve_round (team_battle.py) once the guardian's HP
+        hits 0 -- the "💥 ... is defeated!" log line is already added there, so this only
+        handles ground-specific wrap-up: advancing the bubble-board turn and returning to it
+        (or moving on to the Final Trial if the board's fully cleared)."""
+        self.board_log.append((None, "battle", f"The team defeats {self.enemies[0].monster.name}!"))
         self._advance_turn()
         self.phase = "pre_trial" if all(self.revealed) else "bubble_board"
 
-    def _finish_battle_wipe(self):
-        self.battle_log.append("💀 The team is overwhelmed and forced to retreat!")
+    def _on_wipe(self):
+        """Called by TeamBattleEngine._resolve_round (team_battle.py) once every participant
+        is down -- ends the run immediately, same stakes as a failed Final Trial, no betrayal."""
+        self._log("💀 The team is overwhelmed and forced to retreat!")
         self.game.finish_inheritance_ground_run([uid for uid, _ in self.team])
         self.battle_wipe = True
         self.phase = "resolved"
@@ -628,6 +562,21 @@ class InheritanceGroundView(GameView):
                 pass
 
     def build_embed(self) -> discord.Embed:
+        """Builds this phase's embed, then points it at the run's intro image (if the ground
+        has one and the file exists) so it stays visible below every phase's own content, not
+        just the intro -- the actual discord.File is only ATTACHED once, at send time (see
+        InheritanceGroundLobbyView._resolve/build_intro_image_file), but it physically stays
+        on the message across every subsequent edit that doesn't explicitly clear attachments
+        (none of this view's edit_message/message.edit calls pass attachments=), so every
+        later embed just needs to keep pointing its own image at that same attachment to
+        render it."""
+        embed = self._build_phase_embed()
+        image_path = self._ground().get("intro_image")
+        if image_path and os.path.exists(image_path):
+            embed.set_image(url=f"attachment://{os.path.basename(image_path)}")
+        return embed
+
+    def _build_phase_embed(self) -> discord.Embed:
         ground = self._ground()
         team_names = ", ".join(name for _, name in self.team)
 
@@ -637,11 +586,6 @@ class InheritanceGroundView(GameView):
                 description=f"_{ground['flavor']}_\n\n**Team:** {team_names}",
                 color=discord.Color.dark_gold(),
             )
-            # The actual file only gets attached at SEND time (see
-            # InheritanceGroundLobbyView._resolve) -- this just points the embed at it.
-            image_path = ground.get("intro_image")
-            if image_path and os.path.exists(image_path):
-                embed.set_image(url=f"attachment://{os.path.basename(image_path)}")
             embed.set_footer(text="Click Continue when the team is ready to head in.")
             return embed
 
@@ -666,25 +610,40 @@ class InheritanceGroundView(GameView):
             return embed
 
         if self.phase == "battle":
-            monster_hp = max(0, self.battle_monster_hp)
-            monster_pct = int(100 * monster_hp / self.battle_monster_max_hp) if self.battle_monster_max_hp else 0
-            hp_lines = []
-            for uid, name in self.team:
-                hp = max(0, self.battle_hp.get(uid, 0))
-                max_hp = max(1, self.battle_max_hp.get(uid, 1))
-                status = "💀 down" if hp <= 0 else f"{hp:,}/{max_hp:,} HP"
-                hp_lines.append(f"**{name}**: {status}")
+            monster = self.enemies[0].monster
+            monster_hp = max(0, self.enemies[0].hp)
+            monster_max_hp = self.enemies[0].max_hp
+            monster_pct = int(100 * monster_hp / monster_max_hp) if monster_max_hp else 0
+            description = f"{monster.name}: {monster_hp:,}/{monster_max_hp:,} HP ({monster_pct}%)"
+            if self.inspire_rounds_remaining > 0:
+                description += f"\n✨ **Inspire active** — party STR/DEF boosted ({self.inspire_rounds_remaining} round(s) left)."
             embed = discord.Embed(
-                title=f"⚔️ Battle {self.battles_fought} — {self.battle_monster.name}",
-                description=(
-                    f"{self.battle_monster.name}: {monster_hp:,}/{self.battle_monster_max_hp:,} HP ({monster_pct}%)\n\n"
-                    + "\n".join(hp_lines)
-                ),
+                title=f"⚔️ Battle {self.battles_fought} — {monster.name}",
+                description=description,
                 color=discord.Color.dark_red(),
             )
-            if self.battle_log:
-                embed.add_field(name=f"Round {self.battle_round}", value="\n".join(self.battle_log)[:1024], inline=False)
-            embed.set_footer(text=f"Attack or Guard — resolves once every standing member has chosen, or in {BATTLE_ROUND_TIMEOUT_SECONDS}s.")
+            lines = []
+            for uid, name in self.team:
+                p = self.participants.get(uid)
+                if p is None:
+                    continue
+                pct = int(100 * max(0, p["hp"]) / p["max_hp"]) if p["max_hp"] else 0
+                if p["down"]:
+                    status = "💀 knocked out"
+                elif uid in self.actions:
+                    status = "✅ locked in"
+                else:
+                    status = "⏳ choosing..."
+                empower_note = " • ✨ Empowered" if p.get("empowered") else ""
+                soul_projection_note = (
+                    f" • 🌀 Soul Projection ({p['soul_projection_rounds_remaining']})"
+                    if p.get("soul_projection_rounds_remaining", 0) > 0 else ""
+                )
+                lines.append(f"**{name}** — {max(0, p['hp']):,}/{p['max_hp']:,} HP ({pct}%) • {status}{empower_note}{soul_projection_note}")
+            embed.add_field(name=f"🧍 Team — Round {self.round}", value="\n".join(lines)[:1024], inline=False)
+            if self.log:
+                embed.add_field(name="📜 Recent Combat", value="\n".join(self.log)[:1024], inline=False)
+            embed.set_footer(text=f"Actions resolve once every standing member has chosen, or in {BATTLE_ROUND_TIMEOUT_SECONDS}s.")
             return embed
 
         if self.phase == "pre_trial":
@@ -712,7 +671,7 @@ class InheritanceGroundView(GameView):
 
         # "resolved"
         if self.battle_wipe:
-            monster_name = self.battle_monster.name if self.battle_monster else "a guardian"
+            monster_name = self.enemies[0].monster.name if self.enemies else "a guardian"
             embed = discord.Embed(
                 title=f"🗺️ {ground['name']} — Overwhelmed",
                 description=(
