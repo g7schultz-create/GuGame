@@ -93,6 +93,13 @@ class Monster:
     submerge_duration_rounds: int = 0
     random_blood_gu: bool = False  # each of this monster's own attacks re-rolls a random mechanic (execute/bleed/debuff) instead of a fixed one
     shield_while_ally_alive_pct: float = 0.0  # damage taken is reduced by this fraction while any OTHER living enemy remains in the same fight
+    # DPS-check timer (Blood Sea Demon Disciple / Blood Sea Ancestor's Blood Will) -- if this
+    # enemy is still alive once dps_check_first_turn rounds have passed, it force-kills one
+    # random alive participant; the gap before the NEXT forced kill grows by
+    # dps_check_interval_growth each time (5, 6, 7, 8... rounds apart) rather than repeating a
+    # fixed interval, so stalling only gets more punishing. 0 disables the mechanic entirely.
+    dps_check_first_turn: int = 0
+    dps_check_interval_growth: int = 0
 
     def stats(self) -> dict:
         return {

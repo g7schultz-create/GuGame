@@ -909,11 +909,6 @@ class GameManager:
     # Bigger commitment than solo Battlefield (BATTLEFIELD_COOLDOWN_SECONDS, 6h) since it needs
     # 2-3 other willing players' time too -- tunable.
     INHERITANCE_GROUND_COOLDOWN_SECONDS = 8 * 3600
-    # Team power (see _inheritance_ground_team_power) needed per member, scaled by the ground's
-    # own gu_rank. First-pass estimate, NOT checked against live player power the way
-    # WORLD_BOSS_MAX_HP was (no real teams have attempted this yet) -- likely needs tuning once
-    # they do, same caveat this session's Dao Seeking region content shipped with.
-    INHERITANCE_GROUND_POWER_PER_MEMBER_PER_RANK = 300
 
     def has_active_inheritance_ground(self, player: dict) -> bool:
         started = player["active_inheritance_ground_started_ts"]
@@ -1015,6 +1010,20 @@ class GameManager:
             spd_stat=max(1, round(base.spd_stat * multiplier)),
         )
 
+    def roll_inheritance_ground_final_boss(self, ground_key: str):
+        """The Final Trial's own boss (see InheritanceGroundView._on_face_trial) --
+        BLOOD_SEA_ANCESTORS_BLOOD_WILL_CHANCE (1/100) of the true Ancestor's Blood Will,
+        otherwise the Blood Sea Demon Disciple. Only "blood_sea_ancestor" has dedicated
+        bosses defined so far -- see roll_inheritance_ground_battle_monster's identical
+        "only one ground exists so far" caveat for what a second ground would need."""
+        if ground_key != "blood_sea_ancestor":
+            ground = inheritance_ground_data.GROUNDS[ground_key]
+            great_realm_index = max(0, min(6, ground["gu_rank"] - 1))
+            return monsters.MONSTERS[monsters.hunt_monster_name_for_realm(great_realm_index)]
+        if random.random() < blood_sea_ancestor.BLOOD_SEA_ANCESTORS_BLOOD_WILL_CHANCE:
+            return blood_sea_ancestor.BLOOD_SEA_ANCESTORS_BLOOD_WILL
+        return blood_sea_ancestor.BLOOD_SEA_DEMON_DISCIPLE
+
     def grant_inheritance_ground_battle_loot(self, ground_key: str, team: list, monster) -> list:
         """Called once a battle bubble's guardian is actually defeated (see
         InheritanceGroundView._on_victory) -- one independent roll per team member: the
@@ -1057,34 +1066,6 @@ class GameManager:
             reward = discovery_gen.generate_loot(category, "inheritance_ground", ground["gu_rank"], "Safe", ground.get("tags", []), rng)
             results.append((name, self.grant_reward(user_id, name, reward)))
         return results
-
-    def _inheritance_ground_team_power(self, team: list) -> float:
-        """Sums each member's full (base + gear) combat stats, weighted the same way
-        equipment.gear_power_score_from_stats already scores a gear PIECE's stat_bonuses --
-        reused here against a full player's combined stats rather than just a delta, since it's
-        already a reasonable relative per-stat weighting and inventing a second one would be
-        pure duplication."""
-        total = 0.0
-        for user_id, name in team:
-            player = self.db.get_or_create_player(user_id, name)
-            bonuses = self.compute_equipment_bonuses(user_id)["stats"]
-            stats = {
-                "str_stat": player["str_stat"] + bonuses["str_stat"], "atk_stat": player["atk_stat"] + bonuses["atk_stat"],
-                "def_stat": player["def_stat"] + bonuses["def_stat"], "spd_stat": player["spd_stat"] + bonuses["spd_stat"],
-                "luck_stat": player["luck_stat"] + bonuses["luck_stat"], "hp": player["max_hp"] + bonuses["hp"],
-                "qi_stat": player["qi_stat"] + bonuses["qi_stat"],
-            }
-            total += equipment.gear_power_score_from_stats(stats)
-        return total
-
-    def resolve_inheritance_ground_trial(self, ground_key: str, team: list, trial_power_modifier: float) -> dict:
-        """team: [(user_id, name), ...]. trial_power_modifier is the running sum of every
-        stage's power_delta so far -- real branching choices actually swing this roll, not
-        just flavor. Returns {"success", "team_power", "threshold"}."""
-        ground = inheritance_ground_data.GROUNDS[ground_key]
-        team_power = self._inheritance_ground_team_power(team) + trial_power_modifier
-        threshold = self.INHERITANCE_GROUND_POWER_PER_MEMBER_PER_RANK * ground["gu_rank"] * len(team)
-        return {"success": team_power >= threshold, "team_power": team_power, "threshold": threshold}
 
     def grant_inheritance_ground_share_reward(self, ground_key: str, user_id: int, name: str) -> str:
         """One independent reward roll per Share-choosing member -- same "roll once per

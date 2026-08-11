@@ -86,6 +86,13 @@ class RaidEnemy:
         # while submerged.
         self.submerge_round_counter = 0
         self.submerged_rounds_remaining = 0
+        # DPS-check timer (monster.dps_check_first_turn/dps_check_interval_growth -- see
+        # Blood Sea Demon Disciple / Blood Sea Ancestor's Blood Will) -- dps_check_interval
+        # is the CURRENT gap being counted down, growing by dps_check_interval_growth after
+        # each forced kill; dps_check_next_kill_round is the absolute round number the next
+        # kill fires on. Both stay at their initial values (irrelevant) if the mechanic is off.
+        self.dps_check_interval = monster.dps_check_first_turn
+        self.dps_check_next_kill_round = monster.dps_check_first_turn
 
     @property
     def alive(self) -> bool:
@@ -734,6 +741,31 @@ class TeamBattleEngine:
             # RaidEnemy.enrage_stacks (grown in Phase 1 and _resolve_enemy_hit above).
             enrage_multiplier = 1 + enemy.monster.enrage_atk_pct_per_stack * enemy.enrage_stacks
             self._resolve_enemy_hit(enemy, idx, target_id, defend_map, enemy.monster.ability.str_multiplier * enrage_multiplier)
+
+        # Phase 3.5: DPS-check timer (Blood Sea Demon Disciple / Blood Sea Ancestor's Blood
+        # Will) -- force-kills one random alive participant once dps_check_first_turn rounds
+        # have passed, and again after an ever-growing gap (5, 6, 7, 8... rounds apart) if
+        # the fight is still going. A guaranteed kill, not an attack roll -- no dodge/block/
+        # fatal-hit-negation applies, same as the fight simply being un-winnable in time.
+        for enemy in self.enemies:
+            if not enemy.alive or not enemy.monster.dps_check_first_turn:
+                continue
+            if self.round < enemy.dps_check_next_kill_round:
+                continue
+            alive_ids = self._alive_participant_ids()
+            if not alive_ids:
+                break
+            target_id = random.choice(alive_ids)
+            p = self.participants[target_id]
+            p["hp"] = 0
+            p["down"] = True
+            self.game.db.set_hp(target_id, 1)
+            self._log(f"☠️ {enemy.monster.name}'s pressure claims **{p['name']}**'s life!")
+            reduction = self.game.compute_equipment_bonuses(target_id).get("death_qi_loss_reduction_pct", 0)
+            qi_lost, _ = self.game.db.apply_death_penalty(target_id, reduction_pct=reduction)
+            self._log(f"💀 **{p['name']}** is knocked out, losing {qi_lost:,.2f} qi!")
+            enemy.dps_check_interval += enemy.monster.dps_check_interval_growth
+            enemy.dps_check_next_kill_round += enemy.dps_check_interval
 
         self.actions.clear()
         self.round += 1

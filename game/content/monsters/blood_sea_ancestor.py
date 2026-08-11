@@ -196,6 +196,53 @@ CRIMSON_FORMATION_NODE = Monster(
     gu_rank=4,
 )
 
+# -- Final Trial boss (see manager.py's roll_inheritance_ground_final_boss,
+# InheritanceGroundView._on_face_trial) -- a real fight now, not a pure power-vs-threshold
+# check: a DPS check (dps_check_first_turn/dps_check_interval_growth -- see
+# team_battle.py's Phase 3.5) force-kills one random alive team member 5 rounds in, then
+# again 6 rounds after that, then 7 more, etc. HP values are first-pass placeholders per
+# explicit request ("15m hp for now") -- expect to retune once real teams have actually
+# fought this. 99% of runs face the Demon Disciple; 1% face the true Ancestor's Blood Will
+# instead (see BLOOD_SEA_ANCESTOR_BLOOD_WILL_CHANCE below) -- same HP-defined-directly,
+# stats-derived-from-an-archetype-baseline approach the rest of this file uses, just with
+# an explicit multiplier on top since these two sit well above even the Elite tier.
+BLOOD_SEA_DEMON_DISCIPLE = Monster(
+    name="Blood Sea Demon Disciple",
+    realm="Rank 4 Blood Sea (Boss)",
+    monster_type="Spirit",
+    habitat="The Inner Sanctum",
+    description="The Ancestor's last disciple, kept half-alive by the blood sea itself -- what's left of its will is entirely bent on making sure no one leaves with what they came for.",
+    ability=MonsterAbility(name="Sanctum-Ending Strike", description="A relentless, sanctum-shaking strike.", str_multiplier=1.15),
+    drops=[
+        DropEntry(chance=1.00, item_name="Tier 4 Beast Core", quantity=3),
+        DropEntry(chance=1.00, item_name="Tier 5 Beast Material", quantity=2),
+        DropEntry(chance=0.50, item_name="Primeval Essence Crystal", quantity=20),
+    ],
+    hp=15_000_000, atk_stat=25000, str_stat=48000, def_stat=42000, spd_stat=18000, luck_stat=1, qi_stat=25000,
+    gu_rank=4,
+    elite=True,
+    dps_check_first_turn=5, dps_check_interval_growth=1,
+)
+
+BLOOD_SEA_ANCESTORS_BLOOD_WILL = Monster(
+    name="Blood Sea Ancestor's Blood Will",
+    realm="Rank 4 Blood Sea (True Boss)",
+    monster_type="Spirit",
+    habitat="The Inner Sanctum",
+    description="Not an echo, not a disciple -- a fragment of the Ancestor's own unbroken will, drawn up from the deepest blood pool by a team it's decided is worth the effort.",
+    ability=MonsterAbility(name="Ancestor's Undivided Will", description="A single, world-narrowing strike of pure will.", str_multiplier=1.15),
+    drops=[
+        DropEntry(chance=1.00, item_name="Tier 4 Beast Core", quantity=5),
+        DropEntry(chance=1.00, item_name="Tier 5 Beast Material", quantity=4),
+        DropEntry(chance=1.00, item_name="Primeval Essence Crystal", quantity=30),
+    ],
+    hp=50_000_000, atk_stat=38000, str_stat=72000, def_stat=64000, spd_stat=27000, luck_stat=1, qi_stat=38000,
+    gu_rank=4,
+    elite=True,
+    dps_check_first_turn=5, dps_check_interval_growth=1,
+)
+BLOOD_SEA_ANCESTORS_BLOOD_WILL_CHANCE = 0.01
+
 # -- Rarity-tagged pools (see manager.py's roll_inheritance_ground_battle_monster) -----------
 COMMON = [BLOOD_MOSQUITO_SWARM, CRIMSON_BLOOD_BAT, BLOODSKIN_CORPSE]
 UNCOMMON = [BLOODSCALE_SERPENT, BLOOD_POOL_LEECH, CRIMSON_BONE_SPIDER]
@@ -210,4 +257,9 @@ ALL_MONSTERS_BY_RARITY = {"Common": COMMON, "Uncommon": UNCOMMON, "Rare": RARE, 
 # tier a just-defeated monster's name maps to (dataclasses.replace-scaled copies keep the same
 # .name, so this lookup works whether or not battle_number scaling was applied). Formation
 # Node deliberately excluded -- it's a shield-battery sub-target, not a loot-granting kill.
+# Both Final Trial bosses map to "Elite" odds for their bonus accessory/canon-Gu roll -- their
+# OWN drops list is already richer than a normal Elite's, and the betrayal stage's
+# share/backstab reward remains the actual "big" prize for clearing the trial at all.
 RARITY_BY_NAME = {m.name: rarity for rarity, roster in ALL_MONSTERS_BY_RARITY.items() for m in roster}
+RARITY_BY_NAME[BLOOD_SEA_DEMON_DISCIPLE.name] = "Elite"
+RARITY_BY_NAME[BLOOD_SEA_ANCESTORS_BLOOD_WILL.name] = "Elite"

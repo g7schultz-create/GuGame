@@ -237,8 +237,11 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         self.inspire_rounds_remaining = 0
         self.battle_wipe = False  # True once a battle ends the run early (team wiped)
         self._battle_round_epoch = 0
+        # True only while the CURRENT battle is the Final Trial's own boss fight (see
+        # _start_final_boss_battle/_on_face_trial) rather than a bubble-board battle bubble --
+        # _on_victory branches on this to decide what winning actually leads to.
+        self.is_final_boss_battle = False
 
-        self.trial_result: dict = None
         self.betrayal_choices: dict = {}
         self.betrayal_epoch = 0
         self.share_grants: list = []
@@ -398,17 +401,15 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
     # to_thread-dispatched function -- same discipline every other round timer in this
     # codebase already established (see commit 45e239a).
 
-    def _start_battle(self):
-        """Sync -- dispatched via asyncio.to_thread by its one caller above. Seeds the
-        monster (scaled by battles_fought, see roll_inheritance_ground_battle_monster) and
-        every team member's full combat state via TeamBattleEngine._build_participant_state
-        (team_battle.py) -- the exact same seeding /raid uses, so Empower/Gu Ability/Class
-        Ability/Killer Move/Soul Projection all Just Work here too. inspire_rounds_remaining
-        resets per battle bubble (unlike /raid, one inheritance-ground run can fight several
-        battle bubbles back to back, and a buff from a PRIOR fight shouldn't leak into the
-        next one)."""
+    def _begin_battle(self, monster):
+        """Sync -- dispatched via asyncio.to_thread by its two callers below (a bubble-board
+        battle bubble, or the Final Trial's own boss fight). Seeds every team member's full
+        combat state via TeamBattleEngine._build_participant_state (team_battle.py) -- the
+        exact same seeding /raid uses, so Empower/Gu Ability/Class Ability/Killer Move/Soul
+        Projection all Just Work here too. inspire_rounds_remaining resets per battle (one
+        inheritance-ground run can fight several battles back to back, and a buff from a
+        PRIOR one shouldn't leak into the next)."""
         self.phase = "battle"
-        monster = self.game.roll_inheritance_ground_battle_monster(self.ground_key, self.battles_fought)
         self.enemies = [RaidEnemy(monster)]
         if monster.name == blood_sea_ancestor.CRIMSON_FORMATION_GUARDIAN.name:
             # Crimson Formation Guardian's own shield_while_ally_alive_pct only means anything
@@ -425,6 +426,21 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         self.round = 1
         self.inspire_rounds_remaining = 0
         self.log = [f"⚔️ {monster.name} blocks the way!"]
+
+    def _start_battle(self):
+        """A bubble-board battle bubble (see _make_bubble_callback)."""
+        self.is_final_boss_battle = False
+        monster = self.game.roll_inheritance_ground_battle_monster(self.ground_key, self.battles_fought)
+        self._begin_battle(monster)
+
+    def _start_final_boss_battle(self):
+        """The Final Trial's own boss fight (see _on_face_trial) -- replaces the old pure
+        power-vs-threshold check with a real fight against the Blood Sea Demon Disciple (99%)
+        or the true Blood Sea Ancestor's Blood Will (1%, see GameManager.
+        roll_inheritance_ground_final_boss)."""
+        self.is_final_boss_battle = True
+        monster = self.game.roll_inheritance_ground_final_boss(self.ground_key)
+        self._begin_battle(monster)
 
     def _apply_afk_actions(self):
         """Auto-submits a plain Attack for anyone who didn't act before the round's clock
@@ -454,12 +470,20 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         participant has locked in an action, and directly by _battle_round_timeout above --
         mirrors raid.py's own _finish_round shape (resolve -> rebuild -> refresh -> restart
         the round timer if the fight is still ongoing), keyed on self.phase instead of
-        raid's self.status."""
+        raid's self.status. Also the ONE place that notices a Final Trial boss victory just
+        moved the phase straight to "betrayal" (see _on_victory) and starts its timer --
+        asyncio.create_task needs a running loop on the CURRENT (main) thread, and this
+        method's own to_thread calls have already returned by the time this check runs, so
+        it's safe here the same way _start_battle_round_timer already relies on being called
+        from a real async context, never from inside a to_thread-dispatched function."""
+        phase_before = self.phase
         await asyncio.to_thread(self._resolve_round)
         await asyncio.to_thread(self._build_components)
         await self._refresh_message()
         if self.phase == "battle":
             self._start_battle_round_timer()
+        elif self.phase == "betrayal" and phase_before != "betrayal":
+            self._start_betrayal_timer()
 
     async def _on_pick_target(self, interaction: discord.Interaction):
         """Only ever wired up when len(self.enemies) > 1 (see _build_components) -- mirrors
@@ -478,15 +502,24 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         await interaction.response.send_message(f"🎯 Targeting **{self.enemies[idx].monster.name}** for your next Attack/Guard/Gu ability.", ephemeral=True)
 
     def _on_victory(self):
-        """Called by TeamBattleEngine._resolve_round (team_battle.py) once the guardian's HP
+        """Called by TeamBattleEngine._resolve_round (team_battle.py) once every enemy's HP
         hits 0 -- the "💥 ... is defeated!" log line is already added there, so this only
-        handles ground-specific wrap-up: granting battle loot (see GameManager.
+        handles ground-specific wrap-up. Battle loot (GameManager.
         grant_inheritance_ground_battle_loot -- rarity-scaled for this ground's own monster
-        pool, a no-op bonus roll for anything else), then advancing the bubble-board turn and
-        returning to it (or moving on to the Final Trial if the board's fully cleared)."""
+        pool) is granted either way; what happens AFTER differs:
+          - a bubble-board battle bubble: advance the turn and return to the board (or move
+            on to the Final Trial if the board's fully cleared).
+          - the Final Trial's own boss fight (self.is_final_boss_battle): go straight to the
+            betrayal stage -- there's no separate math check anymore, beating the boss IS
+            clearing the trial. _finish_round (the only caller reachable from a real async
+            context) notices this phase land on "betrayal" and starts its timer."""
         monster = self.enemies[0].monster
         loot_results = self.game.grant_inheritance_ground_battle_loot(self.ground_key, self.team, monster)
         loot_summary = "; ".join(f"**{name}**: {text}" for name, text in loot_results)
+        if self.is_final_boss_battle:
+            self._log(f"🏆 The team brings down {monster.name}! {loot_summary}")
+            self.phase = "betrayal"
+            return
         self.board_log.append((None, "battle", f"The team defeats {monster.name}! {loot_summary}"))
         self._advance_turn()
         self.phase = "pre_trial" if all(self.revealed) else "bubble_board"
@@ -502,22 +535,16 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
     # -- final trial -------------------------------------------------------------------------
 
     async def _on_face_trial(self, interaction: discord.Interaction):
+        """Starts a real fight against the Final Trial's boss (see
+        _start_final_boss_battle) instead of the old pure power-vs-threshold check --
+        beating it moves straight to betrayal (see _on_victory), losing the whole team ends
+        the run immediately (see _on_wipe), exactly like a bubble-board battle bubble."""
         await interaction.response.defer()
-        self.trial_result = await asyncio.to_thread(
-            self.game.resolve_inheritance_ground_trial, self.ground_key, self.team, 0.0,
-        )
-        if self.trial_result["success"]:
-            self.phase = "betrayal"
-            await asyncio.to_thread(self._build_components)
-            embed = await asyncio.to_thread(self.build_embed)
-            await interaction.edit_original_response(embed=embed, view=self)
-            self._start_betrayal_timer()
-        else:
-            await asyncio.to_thread(self.game.finish_inheritance_ground_run, [uid for uid, _ in self.team])
-            self.phase = "resolved"
-            await asyncio.to_thread(self._build_components)
-            embed = await asyncio.to_thread(self.build_embed)
-            await interaction.edit_original_response(embed=embed, view=self)
+        await asyncio.to_thread(self._start_final_boss_battle)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.edit_original_response(embed=embed, view=self)
+        self._start_battle_round_timer()
 
     # -- betrayal ----------------------------------------------------------------------------
     # asyncio.create_task (via _start_betrayal_timer) requires a running loop on the CURRENT
@@ -730,26 +757,11 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         # "resolved"
         if self.battle_wipe:
             monster_name = self.enemies[0].monster.name if self.enemies else "a guardian"
-            embed = discord.Embed(
-                title=f"🗺️ {ground['name']} — Overwhelmed",
-                description=(
-                    f"{monster_name} proves too much — the team is beaten back and forced to retreat "
-                    "before ever reaching the Trial."
-                ),
-                color=discord.Color.dark_red(),
-            )
-            return embed
-
-        if self.trial_result is not None and not self.trial_result["success"]:
-            embed = discord.Embed(
-                title=f"🗺️ {ground['name']} — Trial Failed",
-                description=(
-                    f"{ground['guardian_name']} proves too strong. The team retreats with nothing but bruises "
-                    f"and a few scavenged scraps.\n\n(Team Power {self.trial_result['team_power']:.0f} vs. "
-                    f"required {self.trial_result['threshold']:.0f}.)"
-                ),
-                color=discord.Color.dark_red(),
-            )
+            if self.is_final_boss_battle:
+                description = f"{monster_name} proves too much — the team is overwhelmed during the Final Trial itself and forced to retreat."
+            else:
+                description = f"{monster_name} proves too much — the team is beaten back and forced to retreat before ever reaching the Trial."
+            embed = discord.Embed(title=f"🗺️ {ground['name']} — Overwhelmed", description=description, color=discord.Color.dark_red())
             return embed
 
         lines = [f"🤝 **{name}** shares equally: {reward}" for name, reward in self.share_grants]
