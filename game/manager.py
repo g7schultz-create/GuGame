@@ -951,13 +951,16 @@ class GameManager:
         """Self-service escape hatch, same reasoning as abandon_active_raid above."""
         self.db.clear_active_inheritance_ground_bulk([user_id])
 
-    def finish_inheritance_ground_run(self, user_ids: list):
+    def finish_inheritance_ground_run(self, user_ids: list, leader_id: int):
         """Called at every terminal state (lobby cancelled/timed out before starting, Final
-        Trial failed, or the betrayal stage resolves) -- releases the active flag AND starts
-        the shared cooldown for every team member together, one call covering both."""
+        Trial failed, or the betrayal stage resolves) -- releases the active flag for the
+        WHOLE team (user_ids), but only starts the cooldown for leader_id. Per explicit
+        request, invited teammates who just joined someone else's run shouldn't have their
+        own next run gated behind it -- only the leader who actually spent their own
+        /inheritance_ground use should be on cooldown afterward."""
         now = int(time.time())
         self.db.clear_active_inheritance_ground_bulk(user_ids)
-        self.db.set_inheritance_ground_cooldown_bulk(user_ids, now)
+        self.db.set_inheritance_ground_cooldown_bulk([leader_id], now)
 
     # Bubble board (replaces the old branching-choice stages) -- team takes turns revealing
     # bubbles that are either an immediate shared treasure or a real, multi-round interactive

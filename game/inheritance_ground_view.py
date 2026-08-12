@@ -227,6 +227,12 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         self.game = game
         self.ground_key = ground_key
         self.team = team  # [(user_id, name), ...]
+        # team[0] is always the leader -- either the solo team of exactly one (cog.py) or
+        # InheritanceGroundLobbyView._resolve's own [self.leader] + accepted invitees, leader
+        # always first. Only the leader's own cooldown starts when the run finishes (see
+        # GameManager.finish_inheritance_ground_run) -- invited teammates shouldn't have their
+        # own next run gated behind someone else's.
+        self.leader_id = team[0][0]
         self.phase = "intro"
         # Bubble board (replaces the old branching-choice stages) -- see manager.
         # generate_inheritance_ground_board for how it's built. turn_index cycles through
@@ -688,7 +694,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         """Called by TeamBattleEngine._resolve_round (team_battle.py) once every participant
         is down -- ends the run immediately, same stakes as a failed Final Trial, no betrayal."""
         self._log("💀 The team is overwhelmed and forced to retreat!")
-        self.game.finish_inheritance_ground_run([uid for uid, _ in self.team])
+        self.game.finish_inheritance_ground_run([uid for uid, _ in self.team], self.leader_id)
         self.battle_wipe = True
         self.phase = "resolved"
 
@@ -782,7 +788,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             self._start_backstab_duel(backstabbers, sharers)
             return
 
-        self.game.finish_inheritance_ground_run([uid for uid, _ in self.team])
+        self.game.finish_inheritance_ground_run([uid for uid, _ in self.team], self.leader_id)
         self.phase = "resolved"
 
     # -- backstab duel (anyone backstabs -- a real live multi-way fight with the FULL raid-
@@ -1126,7 +1132,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             "winner_was_backstabber": winner["side"] != SHARER_SIDE,
             "duel": {"events": list(self.log)}, "gu_name": gu_name,
         }
-        self.game.finish_inheritance_ground_run([uid for uid, _ in self.team])
+        self.game.finish_inheritance_ground_run([uid for uid, _ in self.team], self.leader_id)
         self.phase = "resolved"
 
     async def _on_duel_pick_target(self, interaction: discord.Interaction):
@@ -1140,9 +1146,23 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         except ValueError:
             await interaction.response.defer()
             return
+        target_p = self.participants.get(target_uid)
+        if target_p is None or target_p["side"] == p["side"]:
+            # The target-select's options list is shared across the whole team (one render,
+            # not personalized per viewer), so it still lists everyone including your own
+            # side -- this is the actual gate that matters. Sharers are all one shared side
+            # and can never fight each other or themselves; a backstabber's own side is just
+            # themselves, so this only ever blocks a fellow sharer or self -- other
+            # backstabbers stay fair game (see the class docstring's own "2 backstabbers +
+            # sharers is a real 3-way" design). _resolve_duel_round already silently
+            # redirects a same-side pick away at resolution time regardless, but rejecting it
+            # here means a player is never falsely told "Targeting X" for a hit that was
+            # never actually going to land on X.
+            await interaction.response.send_message("You can't target your own side.", ephemeral=True)
+            return
         p["target_uid"] = target_uid
         await interaction.response.send_message(
-            f"🎯 Targeting **{self.participants[target_uid]['name']}** for your next Attack/Guard/Gu ability/Killer Move.", ephemeral=True,
+            f"🎯 Targeting **{target_p['name']}** for your next Attack/Guard/Gu ability/Killer Move.", ephemeral=True,
         )
 
     async def _on_duel_attack(self, interaction: discord.Interaction):
@@ -1281,7 +1301,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         # Safety net -- the same "clear everyone's flag" call the betrayal path already makes,
         # covering the case where the view's own 600s idle timeout fires before betrayal ever
         # started (e.g. the team abandons mid-board / mid-battle / mid-trial-decision).
-        await asyncio.to_thread(self.game.finish_inheritance_ground_run, [uid for uid, _ in self.team])
+        await asyncio.to_thread(self.game.finish_inheritance_ground_run, [uid for uid, _ in self.team], self.leader_id)
         self.phase = "resolved"
         for child in self.children:
             child.disabled = True
