@@ -1679,8 +1679,15 @@ class GameManager:
         # pool" shape as the root/physique loop just above, level-scaled via
         # avatar.scaled_bonus. hp_pct isn't part of the generic pool (see the manual hp_pct
         # special case above), so it gets its own parallel one-liner the same way.
+        # cultivation_speed_pct is ALSO excluded from this generic loop -- unlike every other
+        # special key, it's already fully resolved via qi_status["manual_bonus"] above, which
+        # (see GameDatabase._qi_rate_components) itself now sums the avatar soul's own
+        # scaled_bonus for this key before the shared cultivation cap is applied; adding it
+        # again here would double-count it in the displayed total.
         if player_row and player_row["avatar_soul"]:
             for stat in special:
+                if stat == "cultivation_speed_pct":
+                    continue
                 bonus = avatar.scaled_bonus(player_row["avatar_soul"], player_row["avatar_level"], stat)
                 if bonus:
                     special[stat] += bonus
@@ -1691,6 +1698,9 @@ class GameManager:
         # generic pool" shape as the avatar-soul block just above. hp_pct isn't part of the
         # generic pool (see the manual/avatar-soul hp_pct special cases above), so it gets
         # its own parallel one-liner here too, summed across every equipped instance.
+        # cultivation_speed_pct is excluded the same way as the avatar-soul loop above, for
+        # the same double-counting reason (_qi_rate_components already sums equipped avatar
+        # gear's own cultivation_speed_pct into qi_status["manual_bonus"]).
         if player_row:
             for instance_id in self.db.get_avatar_equipped_instance_ids(user_id).values():
                 instance = self.db.get_avatar_gear_instance(instance_id)

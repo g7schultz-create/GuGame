@@ -1271,6 +1271,24 @@ class GameDatabase:
             if gear:
                 total_manual_pct += gear.stat_bonuses.get("cultivation_speed_pct", 0) * 100
 
+        # Nascent Soul Avatar's own rolled gear (see avatar_gear.py's UTILITY_KEYS) and its
+        # soul passive (see avatar.py's scaled_bonus) can both carry cultivation_speed_pct --
+        # this was previously ONLY folded into GameManager.compute_equipment_bonuses' generic
+        # display pool, which is read by combat views but NEVER by settle_qi/get_qi_status, so
+        # equipping avatar gear rolled with Cultivation Speed silently did nothing to actual
+        # qi gain (same class of bug the Solar/Moon root special case above exists to avoid).
+        from . import avatar as _avatar
+
+        cur.execute("SELECT instance_id FROM avatar_equipped WHERE user_id = ? AND instance_id IS NOT NULL", (user_id,))
+        for row in cur.fetchall():
+            inst_row = cur.execute(
+                "SELECT stat_bonuses FROM avatar_gear_instances WHERE instance_id = ?", (row["instance_id"],)
+            ).fetchone()
+            if not inst_row:
+                continue
+            total_manual_pct += json.loads(inst_row["stat_bonuses"]).get("cultivation_speed_pct", 0) * 100
+        total_manual_pct += _avatar.scaled_bonus(player["avatar_soul"], player["avatar_level"], "cultivation_speed_pct") * 100
+
         player_rank = _realms.STAGES[player["realm_index"]].great_realm_index + 1
         soft_cap = _search_data.CULTIVATION_SOFT_CAP_BY_PLAYER_RANK.get(player_rank, 100)
         hard_cap = _search_data.CULTIVATION_HARD_CAP_BY_PLAYER_RANK.get(player_rank, 100)
