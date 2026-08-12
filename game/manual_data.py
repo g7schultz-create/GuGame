@@ -46,6 +46,12 @@ ALL_PATH_TAGS = [tag for tags in PATH_TAG_FAMILIES.values() for tag in tags]
 # a couple of tags used below that aren't in the doc's own family table but are needed for
 # a couple of the worked example pages (movement, healing) — kept minimal and additive.
 ALL_PATH_TAGS += ["movement", "healing", "shadow"]
+# Rank 8 (White Heaven, see content/manuals/rank8_pages.py) needs 3 tags that don't exist
+# yet -- "light" (gu_types.py already uses "light" as a Gu-type tag in ITS OWN separate,
+# unvalidated vocabulary, but never added it here despite documentation implying it had),
+# "holy", "life". "heavenly" is deliberately NOT added -- rank 8 pages reuse the existing
+# "heaven" tag instead of a near-duplicate.
+ALL_PATH_TAGS += ["light", "holy", "life"]
 
 # -- Manual rank table (see design doc section 5) -------------------------------------------
 @dataclass
@@ -69,8 +75,12 @@ MANUAL_RANK_TABLE: Dict[int, RankSpec] = {
     5: RankSpec((7, 8), 95, (22, 38)),
     6: RankSpec((8, 9), 150, (30, 50)),
     7: RankSpec((9, 10), 230, (40, 65)),
+    # Rank 8 (White Heaven only, see content/manuals/rank8_pages.py) continues the same
+    # ~1.5-1.6x growth the 5-6-7 steps already use (150/95≈1.58, 230/150≈1.53) -- a starting
+    # point for empirical tuning, not a final value.
+    8: RankSpec((10, 11), 350, (55, 85)),
 }
-MAX_MANUAL_RANK = 7
+MAX_MANUAL_RANK = 8
 
 # -- Rarity (see design doc section 7) -------------------------------------------------------
 RARITY_ORDER = ["Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Divine", "Unique"]
@@ -423,6 +433,7 @@ del _rank, _names
 from .content.manuals import rank1_pages  # noqa: E402, F401
 from .content.manuals import rank2_3_pages  # noqa: E402, F401
 from .content.manuals import rank4_7_pages  # noqa: E402, F401
+from .content.manuals import rank8_pages  # noqa: E402, F401
 
 
 # -- Name generation (see design doc section 7) --------------------------------------------------

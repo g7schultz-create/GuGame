@@ -130,12 +130,12 @@ ITEMS: dict[str, Item] = {
     ),
 }
 
-# Beast Core and Beast Material tiers 1-7 — extended from the original Tier 1 Core /
+# Beast Core and Beast Material tiers 1-8 — extended from the original Tier 1 Core /
 # Tier 1-4 Material (dropped by beasts) up to 7 to match Ore/Herb/gear, for Blacksmith
-# crafting. Tiers above what current monsters actually drop (see monsters.py) have no
-# source yet — reserved for future higher-rank content, same as Tier 5-7 Ore/Herb were
-# when /mine and /gather first shipped.
-for _tier in range(1, 8):
+# crafting, then to 8 alongside blacksmith.MAX_TIER for White Heaven content (see
+# content/monsters/white_heaven.py — the only source of Tier 8 material, same relationship
+# Dao Seeking Wilderness has to Tier 7).
+for _tier in range(1, 9):
     ITEMS[f"Tier {_tier} Beast Core"] = Item(
         name=f"Tier {_tier} Beast Core",
         category="Materials",
@@ -150,10 +150,10 @@ for _tier in range(1, 8):
     )
 del _tier
 
-# Ore (Miner) and Herb (Gatherer/Farmer) tiers 1-7 — generated rather than spelled out by
-# hand since all 14 are mechanically identical (inert crafting/farming inputs, no `use`),
+# Ore (Miner) and Herb (Gatherer/Farmer) tiers 1-8 — generated rather than spelled out by
+# hand since all 16 are mechanically identical (inert crafting/farming inputs, no `use`),
 # differing only in tier.
-for _tier in range(1, 8):
+for _tier in range(1, 9):
     ITEMS[f"Tier {_tier} Ore"] = Item(
         name=f"Tier {_tier} Ore",
         category="Materials",

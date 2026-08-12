@@ -48,7 +48,7 @@ BEAST_MATERIAL_COST = 1
 BEAST_CORE_COST = 1
 
 MIN_TIER = 1
-MAX_TIER = 7
+MAX_TIER = 8
 
 # The 6 stats a crafted piece's percentage budget can land in — every stat realm
 # breakthroughs actually scale (see realms.py), swapping out LCK (which they don't) for
@@ -60,12 +60,14 @@ STAT_KEYS = ["str_pct", "atk_pct", "def_pct", "spd_pct", "hp_pct", "qi_pct"]
 # percentage is already realm-relative — so tiers just need to feel like a steady quality
 # climb. A piece dumping its whole budget into one stat is a genuinely great single-stat
 # roll; split across 3-4 stats (the common case) it's a handful of double-digit percents.
-TIER_PCT_BUDGET = {1: 8, 2: 14, 3: 20, 4: 28, 5: 37, 6: 47, 7: 60}
+TIER_PCT_BUDGET = {1: 8, 2: 14, 3: 20, 4: 28, 5: 37, 6: 47, 7: 60, 8: 76}
 
 # Blacksmith rank index required to ATTEMPT each tier (0 == Novice, everyone). "Early tier
 # easy for everyone, higher tier needs levels" — tiers 1-2 are open at rank 0, tier 7 needs
-# Grandmaster (index 5).
-TIER_RANK_REQUIRED = {1: 0, 2: 0, 3: 1, 4: 2, 5: 3, 6: 4, 7: 5}
+# Grandmaster (index 5). Tier 8 (White Heaven materials only, see content/materials_white_
+# heaven.py) needs Heavenly Master (index 6) — real headroom professions.RANKS already had,
+# nothing used it until now.
+TIER_RANK_REQUIRED = {1: 0, 2: 0, 3: 1, 4: 2, 5: 3, 6: 4, 7: 5, 8: 6}
 
 MIN_STATS_ROLLED = 2
 MAX_STATS_ROLLED = 4

@@ -201,6 +201,65 @@ def validate_gu_families() -> List[str]:
     return errors
 
 
+def validate_canon_gu() -> List[str]:
+    """Checks canon_gu.CANON_GU — a gap that had zero validator coverage until now, unlike
+    every other content-module catalog in this file. Duplicate names, required fields,
+    sane gu_rank/drop_weight/base_power ranges, known rarity values (reuses manual_data.
+    RARITY_ORDER, the same broader vocabulary accessories/discoveries already share), and
+    that _FUNCTIONAL_STAT_KEY/_FUNCTIONAL_EFFECT_BY_STAR (the small set of canon Gu with a
+    real passive, see canon_gu.py's own module docstring) stay internally consistent with
+    each other and with a real, known stat_bonuses key."""
+    from .. import canon_gu, equipment, manual_data
+
+    errors: List[str] = []
+    known_stat_keys = set(equipment.FOUNDATION_STAT_LABELS) | set(equipment.SPECIAL_BONUS_POWER_WEIGHTS)
+    known_rarities = set(manual_data.RARITY_ORDER)
+    seen_names = set()
+
+    for gu in canon_gu.CANON_GU:
+        name = gu.get("name")
+        if not name:
+            errors.append("[canon_gu] an entry has no 'name' at all.")
+            continue
+        if name in seen_names:
+            errors.append(f"[canon_gu] duplicate name '{name}'.")
+        seen_names.add(name)
+
+        for field in ("gu_rank", "path", "role", "rarity", "drop_weight", "base_power", "is_passive", "description", "effect_text"):
+            if field not in gu:
+                errors.append(f"[canon_gu] '{name}' is missing required field '{field}'.")
+
+        if "gu_rank" in gu and (not isinstance(gu["gu_rank"], int) or gu["gu_rank"] < 1):
+            errors.append(f"[canon_gu] '{name}' has an invalid gu_rank {gu.get('gu_rank')!r} (must be a positive int).")
+        if "drop_weight" in gu and (not isinstance(gu["drop_weight"], (int, float)) or gu["drop_weight"] < 0):
+            errors.append(f"[canon_gu] '{name}' has a negative drop_weight {gu.get('drop_weight')!r}.")
+        if "base_power" in gu and (not isinstance(gu["base_power"], (int, float)) or gu["base_power"] <= 0):
+            errors.append(f"[canon_gu] '{name}' has a non-positive base_power {gu.get('base_power')!r}.")
+        if "rarity" in gu and gu["rarity"] not in known_rarities:
+            errors.append(f"[canon_gu] '{name}' has an unrecognized rarity '{gu.get('rarity')}' (expected one of {sorted(known_rarities)}).")
+
+    # _FUNCTIONAL_STAT_KEY/_FUNCTIONAL_EFFECT_BY_STAR (the handful of canon Gu with a real,
+    # wired passive rather than the generic role-power fallback) must reference real Gu,
+    # real stat keys, and a full 7-entry star curve (matching equipment.GU_QUALITY_ORDER).
+    star_count = len(equipment.GU_QUALITY_ORDER)
+    for name, (stat_key, kind) in canon_gu._FUNCTIONAL_STAT_KEY.items():
+        if name not in seen_names:
+            errors.append(f"[canon_gu] _FUNCTIONAL_STAT_KEY references '{name}', which isn't in CANON_GU.")
+        if kind not in ("flat", "percent"):
+            errors.append(f"[canon_gu] _FUNCTIONAL_STAT_KEY['{name}']'s kind '{kind}' must be 'flat' or 'percent'.")
+        if kind == "percent" and stat_key not in known_stat_keys:
+            errors.append(f"[canon_gu] _FUNCTIONAL_STAT_KEY['{name}']'s stat key '{stat_key}' isn't a known stat_bonuses key.")
+        if name not in canon_gu._FUNCTIONAL_EFFECT_BY_STAR:
+            errors.append(f"[canon_gu] '{name}' is in _FUNCTIONAL_STAT_KEY but missing from _FUNCTIONAL_EFFECT_BY_STAR.")
+        elif len(canon_gu._FUNCTIONAL_EFFECT_BY_STAR[name]) != star_count:
+            errors.append(f"[canon_gu] _FUNCTIONAL_EFFECT_BY_STAR['{name}'] has {len(canon_gu._FUNCTIONAL_EFFECT_BY_STAR[name])} values, expected {star_count} (one per GU_QUALITY_ORDER star).")
+    for name in canon_gu._FUNCTIONAL_EFFECT_BY_STAR:
+        if name not in canon_gu._FUNCTIONAL_STAT_KEY:
+            errors.append(f"[canon_gu] '{name}' is in _FUNCTIONAL_EFFECT_BY_STAR but missing from _FUNCTIONAL_STAT_KEY.")
+
+    return errors
+
+
 def validate_manual_pages() -> List[str]:
     """Checks manual_data.PAGES — unique page_id, valid category/rank, known tags/flaw ids,
     positive power_value, at least one effect, and category coverage per rank: Foundation
@@ -489,6 +548,7 @@ def validate_all_content() -> List[str]:
     errors.extend(validate_discoveries())
     errors.extend(validate_manual_pages())
     errors.extend(validate_gu_families())
+    errors.extend(validate_canon_gu())
     errors.extend(validate_accessories())
     errors.extend(validate_root_specs())
     errors.extend(validate_physique_specs())

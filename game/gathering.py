@@ -1,12 +1,16 @@
 """
-Roll logic for /mine and /gather — both draw from the same tier-1-7 weighted shape (tier 7
-is deliberately under 1%), differing only in which item name the tier maps to.
+Roll logic for /mine and /gather — both draw from the same tier-1-8 weighted shape (tier 7
+is deliberately under 1%, tier 8 far rarer still), differing only in which item name the
+tier maps to.
 """
 
 import random
 import re
 
-# (weight, tier) — sums to 970; tier 7 = 5/970 ≈ 0.52%, comfortably under 1%.
+# (weight, tier) — sums to 971; tier 7 = 5/971 ≈ 0.51%, tier 8 = 1/971 ≈ 0.10%. Tier 8 is
+# reachable this way purely as an extreme-luck flavor moment -- White Heaven's own monsters
+# (see content/monsters/white_heaven.py) are the REAL, practical source, the same
+# relationship Dao Seeking Wilderness's hunt drops already have to Tier 7.
 RESOURCE_TIER_WEIGHTS = [
     (400, 1),
     (250, 2),
@@ -15,6 +19,7 @@ RESOURCE_TIER_WEIGHTS = [
     (50, 5),
     (25, 6),
     (5, 7),
+    (1, 8),
 ]
 
 # random.randint range for a gather action's base quantity, before a profession's yield
@@ -48,14 +53,18 @@ def roll_quantity(yield_multiplier: float = 1.0) -> int:
 # rare a tier-6/7 roll actually is.
 TIER_RARITY_NAMES = {
     1: "Common", 2: "Common", 3: "Uncommon", 4: "Uncommon", 5: "Rare", 6: "Epic", 7: "Legendary",
+    8: "Mythic",
 }
 
 # Same color-coded emoji as the matching rarity name above, reusing the exact scheme
 # character_data.ROOT_TIERS uses for Common/Uncommon/Rare/Epic/Legendary — so a glance at
 # an ore/herb tells you at a glance how it stacks up against everything else in the bot,
 # not just other ore. Two numeric tiers can share a color (T1/T2 are both "Common"); the
-# tier number in the item name itself still tells those apart.
-TIER_EMOJI = {1: "🟢", 2: "🟢", 3: "🔵", 4: "🔵", 5: "🟣", 6: "🟠", 7: "🟡"}
+# tier number in the item name itself still tells those apart. Tier 8 (White Heaven) gets
+# ⚪ rather than continuing the rainbow -- both a fresh "beyond Legendary" color and a nod
+# to the region's own name. Every consumer (this module, sell_view.py, views.py) indexes
+# this dict with no .get() fallback, so a missing tier here is a hard KeyError risk.
+TIER_EMOJI = {1: "🟢", 2: "🟢", 3: "🔵", 4: "🔵", 5: "🟣", 6: "🟠", 7: "🟡", 8: "⚪"}
 
 _TIER_NAME_RE = re.compile(r"^Tier (\d+) ")
 

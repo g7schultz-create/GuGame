@@ -131,7 +131,7 @@ def _roll_equipment_reward(kind: str, location_rank: int, rng: random.Random) ->
 
 
 def _roll_material_reward(location_rank: int, rng: random.Random) -> tuple:
-    tier = max(1, min(7, location_rank))
+    tier = max(1, min(blacksmith.MAX_TIER, location_rank))
     kind = rng.choice(["Ore", "Herb", "Beast Material"])
     name = f"Tier {tier} {kind}" if kind != "Beast Material" else f"Tier {tier} Beast Material"
     quantity = rng.randint(1, 3)
@@ -154,7 +154,7 @@ def generate_loot(category_key: str, source_key: str, location_rank: int, diffic
     rarity = roll_rarity(source_key, rng)
 
     if category_key in ("spirit_stones",):
-        base = {1: 20, 2: 60, 3: 150, 4: 350, 5: 700, 6: 1400, 7: 2500}[item_rank]
+        base = {1: 20, 2: 60, 3: 150, 4: 350, 5: 700, 6: 1400, 7: 2500, 8: 4500}[item_rank]
         quality_mult = 1 + search_data.DIFFICULTY_REWARD_QUALITY_PCT.get(difficulty, 0) / 100
         return {"kind": "stones", "amount": max(1, round(base * quality_mult * rng.uniform(0.8, 1.2)))}
 
