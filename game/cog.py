@@ -1136,11 +1136,11 @@ class GameCog(commands.Cog):
 
     @app_commands.command(
         name="inheritance_ground",
-        description="[Admin] Invite 2-3 others into an inheritance ground (leave blank to solo-test)",
+        description="Invite 2-3 others into an inheritance ground (leave blank to run it solo)",
     )
     @app_commands.describe(
-        member1="First required teammate (leave blank along with member2 to start solo, for testing)",
-        member2="Second required teammate (leave blank along with member1 to start solo, for testing)",
+        member1="First required teammate (leave blank along with member2 to run solo)",
+        member2="Second required teammate (leave blank along with member1 to run solo)",
         member3="Optional 4th teammate (only used alongside member1/member2)",
     )
     @app_commands.guilds(GUILD)
@@ -1148,15 +1148,13 @@ class GameCog(commands.Cog):
         self, interaction: discord.Interaction, member1: Optional[discord.Member] = None,
         member2: Optional[discord.Member] = None, member3: Optional[discord.Member] = None,
     ):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
-            return
         leader = interaction.user
-        # Solo test mode: an admin leaves BOTH member1/member2 blank to skip the invite lobby
-        # entirely and start immediately as a 1-person team -- everything downstream (the bubble
-        # board, battles, Final Trial, betrayal) already tolerates any team size, so this needs
-        # no gameplay changes, just a shortcut around the lobby. Giving exactly one of the two
-        # is ambiguous (a real team invite needs both), so that's refused rather than guessed at.
+        # Solo mode: leaving BOTH member1/member2 blank skips the invite lobby entirely and
+        # starts immediately as a 1-person team -- everything downstream (the bubble board,
+        # battles, Final Trial, betrayal) already tolerates any team size, so this needs no
+        # gameplay changes, just a shortcut around the lobby, for anyone who can't round up
+        # teammates. Giving exactly one of the two is ambiguous (a real team invite needs
+        # both), so that's refused rather than guessed at.
         if member1 is None and member2 is None:
             leader_player = await asyncio.to_thread(self.game.get_player_stats, leader.id, leader.display_name)
             if not leader_player["character_confirmed"]:
@@ -1166,12 +1164,13 @@ class GameCog(commands.Cog):
                 abandon_view = AbandonInheritanceGroundView(leader.id, self.game)
                 await interaction.response.send_message("🗺️ Finish your current inheritance ground run first!", view=abandon_view, ephemeral=True)
                 return
-            # No leader cooldown check here (unlike most other gated commands) -- the whole
-            # /inheritance_ground command already requires administrator (see the guard at the
-            # top), so this only ever runs for admins testing the feature; gating repeat runs
-            # behind an 8h cooldown would just slow down that testing for no real benefit.
-            # GameManager.inheritance_ground_cooldown_remaining still exists and still gets set
-            # by finish_inheritance_ground_run -- only this command's own refusal is removed.
+            leader_cooldown = self.game.inheritance_ground_cooldown_remaining(leader_player)
+            if leader_cooldown > 0:
+                await interaction.response.send_message(
+                    f"🗺️ You're still recovering from your last inheritance ground run — try again in **{format_duration(leader_cooldown)}**.",
+                    ephemeral=True,
+                )
+                return
 
             ground_key = "blood_sea_ancestor"  # only one ground exists so far -- see inheritance_ground_data.GROUNDS
             team = [(leader.id, leader.display_name)]
@@ -1212,9 +1211,13 @@ class GameCog(commands.Cog):
             abandon_view = AbandonInheritanceGroundView(leader.id, self.game)
             await interaction.response.send_message("🗺️ Finish your current inheritance ground run first!", view=abandon_view, ephemeral=True)
             return
-        # No leader cooldown check here -- same reasoning as the solo-test branch above: this
-        # whole command already requires administrator, so gating it behind an 8h cooldown
-        # would just slow down testing.
+        leader_cooldown = self.game.inheritance_ground_cooldown_remaining(leader_player)
+        if leader_cooldown > 0:
+            await interaction.response.send_message(
+                f"🗺️ You're still recovering from your last inheritance ground run — try again in **{format_duration(leader_cooldown)}**.",
+                ephemeral=True,
+            )
+            return
 
         # Third-person here (about each invitee), unlike InheritanceGroundLobbyView's own
         # accept-time re-check of this exact same eligibility, which is "you"-phrased since

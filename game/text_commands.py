@@ -388,7 +388,7 @@ def register_text_commands(bot: commands.Bot, cog):
     async def text_inheritance_ground(
         ctx: commands.Context, member1: discord.Member = None, member2: discord.Member = None, member3: discord.Member = None,
     ):
-        # Both blank -> solo admin test-start (see cog.inheritance_ground's own handling).
+        # Both blank -> solo start (see cog.inheritance_ground's own handling).
         await cog.inheritance_ground.callback(cog, ShimInteraction(ctx), member1, member2, member3)
 
     bot.add_command(commands.Command(
