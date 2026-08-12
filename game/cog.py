@@ -50,6 +50,7 @@ from .inheritance_ground_view import (
     AbandonInheritanceGroundView, InheritanceGroundLobbyView, InheritanceGroundView, build_intro_image_file,
 )
 from .region_view import RegionView
+from .white_heaven_view import WhiteHeavenView, build_white_heaven_image_file
 from .battlefield_view import BattlefieldView
 from .world_boss_view import WorldBossView
 from .manual_view import ManualView
@@ -119,6 +120,7 @@ class GameCog(commands.Cog):
         self.trade_timeout_tick.start()
         self.study_tick.start()
         self.essence_exchange_timeout_tick.start()
+        self.white_heaven_tick.start()
 
     async def cog_unload(self):
         self.world_boss_tick.cancel()
@@ -127,6 +129,7 @@ class GameCog(commands.Cog):
         self.trade_timeout_tick.cancel()
         self.study_tick.cancel()
         self.essence_exchange_timeout_tick.cancel()
+        self.white_heaven_tick.cancel()
 
     # World Boss respawn scheduler (see world_boss.py's own module docstring) -- checks every
     # 5 minutes whether the current boss expired and/or a fresh one is due; GameManager.
@@ -390,6 +393,42 @@ class GameCog(commands.Cog):
         message = (
             f"{emoji} Your **{completed['profession']}** study is complete — you've advanced "
             f"to **{rank_name}**! Run `/study` to start your next rank."
+        )
+        try:
+            user = self.bot.get_user(completed["user_id"]) or await self.bot.fetch_user(completed["user_id"])
+            await user.send(message)
+        except discord.HTTPException:
+            pass
+
+    # White Heaven travel (see game/white_heaven.py) -- same 5-minute cadence as study_tick,
+    # auto-completing a 1h trip once it's actually elapsed rather than making the player
+    # check back in. Reuses study_tick's exact "sweep, then best-effort DM each completion"
+    # shape. A plain literal here (not white_heaven.WHITE_HEAVEN_TICK_INTERVAL_SECONDS),
+    # matching STUDY_TICK_INTERVAL_SECONDS's own convention above -- this class also defines
+    # an app_commands method named white_heaven (the /white_heaven command further down in
+    # this file), which would shadow a bare `white_heaven` module reference used inside a
+    # class-body-evaluated decorator argument (see the cog.py name-shadowing trap already
+    # hit once this session for equipment/blacksmith/tournament).
+    WHITE_HEAVEN_TICK_INTERVAL_SECONDS = 300
+
+    @tasks.loop(seconds=WHITE_HEAVEN_TICK_INTERVAL_SECONDS)
+    async def white_heaven_tick(self):
+        for completed in await asyncio.to_thread(self.game.check_and_complete_white_heaven_travel):
+            await self._dm_white_heaven_travel_complete(completed)
+
+    @white_heaven_tick.before_loop
+    async def _before_white_heaven_tick(self):
+        await self.bot.wait_until_ready()
+
+    async def _dm_white_heaven_travel_complete(self, completed: dict):
+        """Best-effort, same shape as _dm_study_complete above."""
+        message = (
+            "☁️ You've arrived in **White Heaven** — `/hunt`, `/raid`, `/explore`, and "
+            "`/search_forgotten_blessed_land` all draw from its own far more dangerous pools "
+            "while you're there. Run `/white_heaven` any time to head back."
+            if completed["arrived"] else
+            "🏠 You've made it back home from White Heaven — `/hunt`, `/raid`, `/explore`, and "
+            "`/search_forgotten_blessed_land` are back to normal."
         )
         try:
             user = self.bot.get_user(completed["user_id"]) or await self.bot.fetch_user(completed["user_id"])
@@ -1321,6 +1360,23 @@ class GameCog(commands.Cog):
         view = RegionView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
+
+    @app_commands.command(name="white_heaven", description="Travel to White Heaven (Dao Seeking realm+) -- a real 1h journey each way")
+    @app_commands.guilds(GUILD)
+    async def white_heaven(self, interaction: discord.Interaction):
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
+        if not player["character_confirmed"]:
+            await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
+            return
+        # Constructed directly, NOT via asyncio.to_thread -- see every other View's own
+        # construction note in this file for why (commit 45e239a).
+        view = WhiteHeavenView(interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        file = await asyncio.to_thread(build_white_heaven_image_file)
+        if file:
+            await interaction.response.send_message(embed=embed, view=view, file=file)
+        else:
+            await interaction.response.send_message(embed=embed, view=view)
 
     @app_commands.command(name="cd", description="Show all your active cooldowns and timers")
     @app_commands.guilds(GUILD)

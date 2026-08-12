@@ -9,7 +9,7 @@ from . import (
     accessories_data, accessories_gen, alchemy, avatar, avatar_gear, blacksmith, canon_gu, chargen, combat,
     dao_companion, dao_paths, discovery_gen, equipment, exploration, gathering, gu_types,
     inheritance_ground_data, items, killer_move_gen, manual_data, manual_gen, monsters, professions, realms,
-    search_data, sects, split_body, tournament, treasure_hunt, world_boss, world_regions,
+    search_data, sects, split_body, tournament, treasure_hunt, white_heaven, world_boss, world_regions,
 )
 from .content.monsters import blood_sea_ancestor
 from .character_data import PATHS, PHYSIQUE_TIER_ORDER, RACES, ROOT_TIER_ORDER
@@ -2306,6 +2306,61 @@ class GameManager:
         already have a resolved reward dict from discovery_gen.generate_loot or a hand-built
         region hoard reward."""
         return self._grant_reward(user_id, name, reward)
+
+    # -- White Heaven: /white_heaven (see game/white_heaven.py) -- a Dao Seeking+ endgame
+    # region reached via a real 1h travel delay each way, auto-completed by a background
+    # tick (see check_and_complete_white_heaven_travel) rather than manually claimed, since
+    # there's nothing to claim here -- just a location flip. Deliberately separate from
+    # world_regions.py above: that's an instant-switch mortal-realm playstyle choice, this is
+    # a real journey gated at the opposite end of the realm ladder.
+
+    def get_white_heaven_status(self, user_id: int, name: str) -> dict:
+        player = self.db.get_or_create_player(user_id, name)
+        great_realm_index = realms.STAGES[player["realm_index"]].great_realm_index
+        started = player["white_heaven_travel_started_ts"]
+        remaining = max(0, white_heaven.WHITE_HEAVEN_TRAVEL_SECONDS - (int(time.time()) - started)) if started else 0
+        return {
+            "player": player,
+            "eligible": white_heaven.is_eligible(great_realm_index),
+            "status": player["white_heaven_status"],
+            "remaining_seconds": remaining,
+        }
+
+    def start_white_heaven_travel(self, user_id: int, name: str) -> dict:
+        """'Depart for White Heaven' -- only from 'away', only realm-eligible, only when no
+        trip is already in progress."""
+        status = self.get_white_heaven_status(user_id, name)
+        if not status["eligible"]:
+            return {"ok": False, "reason": "ineligible"}
+        if status["status"] != "away":
+            return {"ok": False, "reason": "busy", "status": status["status"]}
+        self.db.start_white_heaven_travel(user_id, "traveling_there")
+        return {"ok": True}
+
+    def start_white_heaven_return(self, user_id: int, name: str) -> dict:
+        """'Return Home' -- only from 'present', only when no trip is already in progress."""
+        status = self.get_white_heaven_status(user_id, name)
+        if status["status"] != "present":
+            return {"ok": False, "reason": "not_present", "status": status["status"]}
+        self.db.start_white_heaven_travel(user_id, "traveling_back")
+        return {"ok": True}
+
+    def check_and_complete_white_heaven_travel(self) -> list:
+        """Periodic sweep (see GameCog.white_heaven_tick) -- auto-completes any White Heaven
+        trip that's crossed WHITE_HEAVEN_TRAVEL_SECONDS without the player needing to check
+        back in themselves (mirrors check_and_complete_ready_studies' own auto-complete
+        shape, not split_body's manual-claim shape). Returns [{"user_id", "name", "arrived"},
+        ...] for every completion this sweep triggered, for the caller to DM -- arrived=True
+        means they just landed in White Heaven, False means they just made it back home."""
+        completed = []
+        now = int(time.time())
+        for player in self.db.get_players_with_pending_white_heaven_travel():
+            if now - player["white_heaven_travel_started_ts"] < white_heaven.WHITE_HEAVEN_TRAVEL_SECONDS:
+                continue
+            arrived = player["white_heaven_status"] == "traveling_there"
+            self.db.complete_white_heaven_travel(player["user_id"], "present" if arrived else "away")
+            completed.append({"user_id": player["user_id"], "name": player["name"], "arrived": arrived})
+        return completed
 
     # -- Gathering: /mine, /gather, /explore -----------------------------------
     # All three share a 15-minute cooldown (tracked independently per action) and let Luck

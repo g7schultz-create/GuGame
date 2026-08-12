@@ -236,6 +236,15 @@ class GameDatabase:
         "world_region": "TEXT DEFAULT NULL",
         "last_world_region_change_ts": "INTEGER DEFAULT 0",
 
+        # White Heaven (see white_heaven.py / /white_heaven) -- a Dao Seeking+ endgame region
+        # with a real 1h wall-clock travel delay each way, unlike world_region's instant switch.
+        # status cycles 'away' -> 'traveling_there' -> 'present' -> 'traveling_back' -> 'away'.
+        # travel_started_ts is 0 unless a trip is currently in progress. No separate
+        # "notified" guard is needed the way split_body has one -- see complete_white_heaven_
+        # travel's own docstring for why the status transition itself is a sufficient guard.
+        "white_heaven_status": "TEXT DEFAULT 'away'",
+        "white_heaven_travel_started_ts": "INTEGER DEFAULT 0",
+
         # Sect membership (see sects.py / /sect) -- a player belongs to at most one sect at a
         # time, so this lives directly on the player row rather than a separate membership
         # table, the same convention world_region/root_name/physique_name already use for
@@ -4193,6 +4202,47 @@ class GameDatabase:
         con = self.connect()
         cur = con.cursor()
         cur.execute("SELECT * FROM players WHERE split_body_started_ts > 0 AND split_body_notified = 0")
+        rows = cur.fetchall()
+        con.close()
+        return rows
+
+    # -- White Heaven (see game/white_heaven.py / /white_heaven) -- a real 1h travel delay each
+    # way, auto-completed by a background tick (see GameManager.check_and_complete_white_heaven_
+    # travel) rather than manually claimed, since there's nothing to claim -- just a location
+    # flip. Same single-pending-job idiom as split_body above.
+
+    def start_white_heaven_travel(self, user_id: int, status: str):
+        """status is 'traveling_there' or 'traveling_back' -- the direction of this trip."""
+        con = self.connect()
+        con.execute(
+            "UPDATE players SET white_heaven_status = ?, white_heaven_travel_started_ts = ? WHERE user_id = ?",
+            (status, int(time.time()), user_id),
+        )
+        con.commit()
+        con.close()
+
+    def complete_white_heaven_travel(self, user_id: int, status: str):
+        """status is 'present' (arrival) or 'away' (return) -- called once the tick confirms
+        the travel delay has elapsed. No separate "notified" guard needed the way split_body
+        has one: completion itself flips white_heaven_status away from 'traveling_*', which
+        already excludes the row from get_players_with_pending_white_heaven_travel's own
+        WHERE clause on the very next tick -- unlike split_body, which deliberately leaves
+        its "ready" state sitting there until the player manually claims it."""
+        con = self.connect()
+        con.execute(
+            "UPDATE players SET white_heaven_status = ?, white_heaven_travel_started_ts = 0 WHERE user_id = ?",
+            (status, user_id),
+        )
+        con.commit()
+        con.close()
+
+    def get_players_with_pending_white_heaven_travel(self) -> list:
+        """Candidates only -- does NOT filter by elapsed time (done in Python by GameManager.
+        check_and_complete_white_heaven_travel, matching get_players_currently_studying's own
+        "let Python do time math" convention)."""
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute("SELECT * FROM players WHERE white_heaven_status IN ('traveling_there', 'traveling_back')")
         rows = cur.fetchall()
         con.close()
         return rows
