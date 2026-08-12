@@ -734,7 +734,18 @@ class RaidView(TeamBattleEngine, GameView):
                 loot_lines.append(f"**{p['name']}**: {stones} 🪙 + {loot_text}")
             embed.add_field(name="🎁 Loot (rolled per participant)", value="\n".join(loot_lines)[:1024], inline=False)
         elif self.status == "wiped":
-            embed.add_field(name="💀 Outcome", value="The whole party was knocked out. No loot — regroup and try again.", inline=False)
+            # Per-player Qi lost (see TeamBattleEngine's qi_lost_on_death, team_battle.py) --
+            # the shared "Recent Combat" log already says this too, but it can scroll out of
+            # MAX_LOG_LINES well before a longer fight actually ends, so it's worth a clear,
+            # permanent callout here per explicit request.
+            qi_lines = [
+                f"**{p['name']}**: {p.get('qi_lost_on_death', 0):,.2f} qi lost" for p in self.participants.values()
+            ]
+            embed.add_field(
+                name="💀 Outcome",
+                value="The whole party was knocked out. No loot — regroup and try again.\n" + "\n".join(qi_lines),
+                inline=False,
+            )
 
         if self.status == "starting":
             footer_text = "Click Join Raid to be in it when the countdown ends — round 1 hasn't started yet."

@@ -981,11 +981,17 @@ class GameManager:
 
     # Every non-"battle", non-"treasure" bubble independently rolls one of these -- a dud
     # ("nothing") most of the time, sometimes a guaranteed Qi Ascension Pill (see
-    # grant_inheritance_ground_pill_reward). "treasure" is deliberately NOT in this weighted
-    # pool -- it's a single guaranteed bubble instead (see generate_inheritance_ground_board),
-    # same "exactly one guaranteed tile, everything else weighted" split treasure_hunt.
-    # TILE_CATEGORY_WEIGHTS/roll_board uses. First-pass weights, easy to retune.
-    BUBBLE_OUTCOME_WEIGHT = {"nothing": 25, "ascension_pill": 15}
+    # grant_inheritance_ground_pill_reward), Primeval Essence Crystals (see
+    # grant_inheritance_ground_essence_crystal_reward), or an Essence Restoration Pill (see
+    # grant_inheritance_ground_essence_pill_reward). "treasure" is deliberately NOT in this
+    # weighted pool -- it's a single guaranteed bubble instead (see
+    # generate_inheritance_ground_board), same "exactly one guaranteed tile, everything else
+    # weighted" split treasure_hunt.TILE_CATEGORY_WEIGHTS/roll_board uses. First-pass weights,
+    # easy to retune.
+    BUBBLE_OUTCOME_WEIGHT = {"nothing": 25, "ascension_pill": 15, "essence_crystal": 15, "essence_pill": 15}
+    ESSENCE_CRYSTAL_QUANTITY_RANGE = (20, 100)
+    ESSENCE_PILL_MIN_TIER = 4
+    ESSENCE_PILL_MAX_TIER = 7
 
     def generate_inheritance_ground_board(self, team_size: int) -> list:
         """Returns INHERITANCE_GROUND_BOARD_SIZE (20) bubble labels: MIN_BATTLE_BUBBLES
@@ -1124,6 +1130,38 @@ class GameManager:
             results.append((name, f"1x **{pill_name}**"))
         return results
 
+    def grant_inheritance_ground_essence_crystal_reward(self, team: list) -> list:
+        """An "essence_crystal" bubble (see generate_inheritance_ground_board) -- 20-100
+        Primeval Essence Crystal, independently rolled per team member, same "whole team
+        shares the bubble's find" shape grant_inheritance_ground_treasure_reward uses.
+        Returns [(name, reward_str), ...]."""
+        results = []
+        for user_id, name in team:
+            qty = random.randint(*self.ESSENCE_CRYSTAL_QUANTITY_RANGE)
+            self.db.add_item(user_id, "Primeval Essence Crystal", qty)
+            results.append((name, f"{qty}x **Primeval Essence Crystal**"))
+        return results
+
+    def grant_inheritance_ground_essence_pill_reward(self, team: list) -> list:
+        """An "essence_pill" bubble (see generate_inheritance_ground_board) -- a Tier 4-7
+        Essence Restoration Pill, independently rolled per team member (tier weighted via
+        items.ESSENCE_RESTORATION_PILL_TIER_WEIGHTS' own relative weights, filtered to
+        [ESSENCE_PILL_MIN_TIER, ESSENCE_PILL_MAX_TIER] -- same sub-range technique treasure_
+        hunt._essence_pill_tier uses). Returns [(name, reward_str), ...]."""
+        sub_weights = {
+            t: w for t, w in items.ESSENCE_RESTORATION_PILL_TIER_WEIGHTS.items()
+            if self.ESSENCE_PILL_MIN_TIER <= t <= self.ESSENCE_PILL_MAX_TIER
+        }
+        tiers = list(sub_weights.keys())
+        weights = list(sub_weights.values())
+        results = []
+        for user_id, name in team:
+            tier = random.choices(tiers, weights=weights, k=1)[0]
+            pill_name = items.alchemy_pill_name("Essence Restoration", tier)
+            self.db.add_item(user_id, pill_name, 1)
+            results.append((name, f"1x **{pill_name}**"))
+        return results
+
     def grant_inheritance_ground_share_reward(self, ground_key: str, user_id: int, name: str) -> str:
         """One independent reward roll per Share-choosing member -- same "roll once per
         participant" convention raid.py's own _on_victory uses for its per-participant loot,
@@ -1136,11 +1174,20 @@ class GameManager:
         reward = discovery_gen.generate_loot(category, "inheritance_ground", ground["gu_rank"], "Standard", ground.get("tags", []), rng)
         return self.grant_reward(user_id, name, reward)
 
-    def grant_inheritance_ground_bonus_gu(self, ground_key: str, user_id: int, name: str) -> str:
-        """The backstab prize -- a GUARANTEED canon Gu roll (unlike canon_gu.roll_canon_gu_drop,
-        which is chance-gated for a normal kill; this is the explicit reward for winning the
-        betrayal, so it must always land), same rank-eligibility/weighting canon_gu's own
-        roll_canon_gu_drop uses, just skipping its RNG "does anything drop at all" gate."""
+    def roll_inheritance_ground_bonus_gu(self, ground_key: str) -> Optional[str]:
+        """Rolls (but does NOT grant) the specific Core Gu item name at stake in the betrayal
+        stage -- called the moment the team reaches "betrayal" (see InheritanceGroundView.
+        _on_victory) so it can be REVEALED to the whole team before anyone chooses Share or
+        Backstab, per explicit request ("have the group know what the core gu is so they can
+        decide"). Whoever actually wins the duel is then handed this exact SAME name via
+        grant_inheritance_ground_bonus_gu, so the reveal and the real prize always match --
+        never re-rolled at grant time. Same rank-eligibility/weighting canon_gu.py's own
+        roll_canon_gu_drop uses for WHICH family, skipping its RNG "does anything drop at all"
+        gate (this must always land); quality is independently rolled "at least Epic" (see
+        treasure_hunt.GU_QUALITY_WEIGHTS) per explicit request -- the backstab's real
+        temptation, not a Common-tier consolation prize. Returns None only in the extremely
+        unlikely case no canon Gu is eligible at this rank at all (see
+        grant_inheritance_ground_bonus_gu's own fallback for that)."""
         ground = inheritance_ground_data.GROUNDS[ground_key]
         gu_rank = ground["gu_rank"]
         eligible = [
@@ -1148,12 +1195,19 @@ class GameManager:
             if gu["drop_weight"] > 0 and gu["gu_rank"] in (gu_rank, max(1, gu_rank - 1))
         ]
         if not eligible:
-            # Extremely unlikely given the canon catalog's rank coverage, but a backstab winner
-            # must never end up empty-handed for finding no eligible Gu at this rank.
+            return None
+        chosen = random.choices(eligible, weights=[gu["drop_weight"] for gu in eligible], k=1)[0]
+        quality = random.choices(list(treasure_hunt.GU_QUALITY_WEIGHTS.keys()), weights=list(treasure_hunt.GU_QUALITY_WEIGHTS.values()), k=1)[0]
+        return equipment.gu_item_name(chosen["name"], quality)
+
+    def grant_inheritance_ground_bonus_gu(self, user_id: int, gu_name: Optional[str]) -> str:
+        """Grants the pre-rolled Core Gu (see roll_inheritance_ground_bonus_gu) to the
+        betrayal's actual winner -- a backstab winner must never end up empty-handed, so
+        gu_name is None only in the extremely-unlikely "no eligible Gu at this rank" case,
+        which falls back to spirit stones instead."""
+        if gu_name is None:
             self.db.add_spirit_stones(user_id, 500)
             return "500 spirit stones (no matching Core Gu was found at this rank)"
-        chosen = random.choices(eligible, weights=[gu["drop_weight"] for gu in eligible], k=1)[0]
-        gu_name = equipment.gu_item_name(chosen["name"], "Common")
         self.db.add_item(user_id, gu_name, 1)
         return gu_name
 

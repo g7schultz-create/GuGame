@@ -84,6 +84,13 @@ GU_TYPE_BY_NAME: Dict[str, str] = {
     "Heavenly Essence Treasure Lotus": "wood",
     "Spring Autumn Cicada": "time",
     "Fortune Rivalling Heaven Gu": "luck",
+    # Missed when this table was first transcribed from canon_gu.CANON_GU -- its own `path`
+    # is "Heaven" (-> "heaven", a cultivation-affinity type, same as Divine Concealment Gu/
+    # Heavenly Secret Gu/Heavenly Web Gu below), but explicit request wants it leaning
+    # "essence" instead -- "water" (primordial-waters-of-creation) fits its own flavor text
+    # ("primeval origin-qi of creation itself") better than the other essence types (moon/
+    # light/food) and isn't already used by anything else this thematically singular.
+    "Primeval Origin Gu": "water",
     # world_boss.py's 24 flat Gu
     "Strength Qi Gu": "strength",
     "Mountain Strength Gu": "earth",

@@ -40,7 +40,10 @@ BATTLE_ROUND_TIMEOUT_SECONDS = 30  # matches raid.ROUND_TIMEOUT_SECONDS's own pa
 DUEL_ROUND_TIMEOUT_SECONDS = 30  # matches BATTLE_ROUND_TIMEOUT_SECONDS's own pacing
 SHARER_SIDE = "sharers"  # the one shared duel "side" every Share-choosing member belongs to
 
-BUBBLE_ICON = {"treasure": "💰", "battle": "⚔️", "nothing": "💨", "ascension_pill": "💊"}
+BUBBLE_ICON = {
+    "treasure": "💰", "battle": "⚔️", "nothing": "💨", "ascension_pill": "💊",
+    "essence_crystal": "💎", "essence_pill": "🧪",
+}
 
 
 def build_intro_image_file(ground_key: str) -> discord.File:
@@ -269,6 +272,11 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         self.betrayal_epoch = 0
         self.share_grants: list = []
         self.betrayal_result: dict = None
+        # Rolled the instant the team reaches "betrayal" (see _on_victory) and shown in that
+        # phase's own embed -- the WHOLE team gets to see exactly what's at stake before
+        # anyone chooses Share or Backstab. Whoever wins the duel is granted this SAME name,
+        # never re-rolled at grant time (see _finish_backstab_duel).
+        self.core_gu_preview: Optional[str] = None
 
         # Backstab duel (1+ backstabbers) -- a real, live, turn-based multi-way fight with the
         # SAME full action set (Attack/Guard/Empower/Class Ability/Gu Ability/Killer Move/Soul
@@ -506,6 +514,14 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
                 results = await asyncio.to_thread(self.game.grant_inheritance_ground_pill_reward, self.team)
                 summary = "\n".join(f"**{name}**: {reward}" for name, reward in results)
                 self.last_bubble_notice = f"💊 The bubble held a stash of Qi Ascension Pills!\n{summary}"
+            elif category == "essence_crystal":
+                results = await asyncio.to_thread(self.game.grant_inheritance_ground_essence_crystal_reward, self.team)
+                summary = "\n".join(f"**{name}**: {reward}" for name, reward in results)
+                self.last_bubble_notice = f"💎 The bubble held a cache of Primeval Essence Crystals!\n{summary}"
+            elif category == "essence_pill":
+                results = await asyncio.to_thread(self.game.grant_inheritance_ground_essence_pill_reward, self.team)
+                summary = "\n".join(f"**{name}**: {reward}" for name, reward in results)
+                self.last_bubble_notice = f"🧪 The bubble held a stash of Essence Restoration Pills!\n{summary}"
             else:  # "nothing" -- a dud, matching BUBBLE_OUTCOME_WEIGHT's own possible outcomes
                 self.last_bubble_notice = "💨 Just an empty bubble. Nothing here."
             if sum(self.actually_clicked) >= self._max_bubble_pops():
@@ -655,6 +671,10 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         loot_summary = "\n".join(f"**{name}**: {text}" for name, text in loot_results)
         if self.is_final_boss_battle:
             self._log(f"🏆 The team brings down {monster.name}! {loot_summary}")
+            # Rolled here (not at grant time) so it can be REVEALED to the whole team on the
+            # betrayal embed before anyone actually chooses -- see core_gu_preview's own
+            # __init__ comment.
+            self.core_gu_preview = self.game.roll_inheritance_ground_bonus_gu(self.ground_key)
             self.phase = "betrayal"
             return
         self.last_bubble_notice = f"⚔️ The team defeats {monster.name}!\n{loot_summary}"
@@ -998,6 +1018,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             return
         reduction = self.game.compute_equipment_bonuses(user_id).get("death_qi_loss_reduction_pct", 0)
         qi_lost, _ = self.game.db.apply_death_penalty(user_id, reduction_pct=reduction)
+        p["qi_lost_on_death"] = qi_lost
         self._log(f"💀 **{p['name']}** is knocked out, losing {qi_lost:,.2f} qi!")
 
     def _resolve_duel_hit(
@@ -1097,7 +1118,9 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         than leave the Core Gu unclaimed. One random survivor claims the prize either way."""
         winner_id = random.choice(still_alive) if still_alive else random.choice(list(self.participants.keys()))
         winner = self.participants[winner_id]
-        gu_name = self.game.grant_inheritance_ground_bonus_gu(self.ground_key, winner_id, winner["name"])
+        # The SAME Gu already rolled (and shown to the whole team) at the top of the betrayal
+        # stage -- never re-rolled here, so the reveal and the real prize always match.
+        gu_name = self.game.grant_inheritance_ground_bonus_gu(winner_id, self.core_gu_preview)
         self.betrayal_result = {
             "winner_user_id": winner_id, "winner_name": winner["name"],
             "winner_was_backstabber": winner["side"] != SHARER_SIDE,
@@ -1405,6 +1428,13 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
                 ),
                 color=discord.Color.gold(),
             )
+            # Revealed to the WHOLE team up front, per explicit request, so everyone can weigh
+            # the temptation before choosing -- see core_gu_preview's own __init__ comment.
+            embed.add_field(
+                name="🐛 The Core Gu at Stake",
+                value=self.core_gu_preview or "A canon Gu (details unknown)",
+                inline=False,
+            )
             embed.set_footer(text=f"{responded}/{len(self.team)} have decided — resolves once everyone has, or in {BETRAYAL_DECISION_SECONDS}s.")
             return embed
 
@@ -1449,6 +1479,13 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             else:
                 description = f"{monster_name} proves too much — the team is beaten back and forced to retreat before ever reaching the Trial."
             embed = discord.Embed(title=f"🗺️ {ground['name']} — Overwhelmed", description=description, color=discord.Color.dark_red())
+            # Per-player Qi lost (see TeamBattleEngine's qi_lost_on_death, team_battle.py) --
+            # the shared "Recent Combat" log already says this too, but it can scroll out of
+            # MAX_LOG_LINES well before a longer fight actually ends, so it's worth a clear,
+            # permanent callout here per explicit request.
+            qi_lines = [f"**{p['name']}**: {p.get('qi_lost_on_death', 0):,.2f} qi lost" for p in self.participants.values()]
+            if qi_lines:
+                embed.add_field(name="💀 Qi Lost", value="\n".join(qi_lines)[:1024], inline=False)
             return embed
 
         embed = discord.Embed(
@@ -1467,6 +1504,12 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             else:
                 outcome_line = f"🛡️ The defenders hold! **{self.betrayal_result['winner_name']}** survives the backstab and claims the {self.betrayal_result['gu_name']}!"
             embed.add_field(name="Backstab Outcome", value=outcome_line[:1024], inline=False)
+            # Only a defeated BACKSTABBER ever has qi_lost_on_death > 0 here (see
+            # _apply_duel_knockout -- a defending sharer never loses any), so this list is
+            # naturally just the losing backstabber(s), never the sharers.
+            qi_lines = [f"💀 **{p['name']}**: {p['qi_lost_on_death']:,.2f} qi lost" for p in self.participants.values() if p.get("qi_lost_on_death", 0) > 0]
+            if qi_lines:
+                embed.add_field(name="Qi Lost", value="\n".join(qi_lines)[:1024], inline=False)
             events = self.betrayal_result["duel"]["events"]
             if events:
                 embed.add_field(name="Duel — Final Moments", value="\n".join(events[-5:])[:1024], inline=False)

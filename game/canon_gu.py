@@ -111,7 +111,11 @@ CANON_GU = [
     # a canon Gu at all. Same rarity/drop_weight as rank 5's own Mythic entry (the rarest tier
     # that's still normally obtainable, one step below the Unique/event-only tier ranks 6 and 8
     # sit at) rather than another event-only slot, since that wouldn't have closed the gap.
-    {"name": "Primeval Origin Gu", "gu_rank": 7, "path": "Heaven", "role": "Attack", "rarity": "Mythic", "drop_weight": 1, "base_power": 175, "is_passive": False,
+    # base_power=950 (2026-08-12, explicit request: "the strongest") -- strictly above every
+    # other entry in this list, including the two drop_weight=0/Unique ones (Fortune Rivalling
+    # Heaven Gu's 900, Spring Autumn Cicada's 500), since /killer_move's own core-Gu picker
+    # lists all three side by side and the request was for it to win that comparison outright.
+    {"name": "Primeval Origin Gu", "gu_rank": 7, "path": "Heaven", "role": "Attack", "rarity": "Mythic", "drop_weight": 1, "base_power": 950, "is_passive": False,
      "description": "A Gu condensed from the primeval origin-qi of creation itself, said to carry a sliver of the world's own genesis intent.",
      "effect_text": "Unleashes a devastating Heaven-path strike drawn from the world's origin. (Active ability — coming soon.)"},
     {"name": "Spring Autumn Cicada", "gu_rank": 6, "path": "Time", "role": "Rebirth", "rarity": "Unique", "drop_weight": 0, "base_power": 500, "is_passive": False,

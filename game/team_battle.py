@@ -303,6 +303,11 @@ class TeamBattleEngine:
             # Bloodscale Serpent-style Bleed (see Phase 1.65 / _resolve_enemy_hit) -- seeded on
             # a landed enemy hit, ticked once per round independent of who queued the round.
             "bleed_damage_per_tick": 0, "bleed_ticks_remaining": 0,
+            # Set on an actual knockout (see the 3 apply_death_penalty call sites below) --
+            # 0.0 otherwise, including a ward/escape save. Lets a concrete view's own "wiped"
+            # embed show each participant's own qi loss, not just a shared scrolling log line
+            # that can get pushed out of MAX_LOG_LINES by the time the fight actually ends.
+            "qi_lost_on_death": 0.0,
         }
         # Clear Mind-family physique's encounter-start adaptive stat — compared against the
         # opponent (self.enemies[0]), same one-time-at-join computation hunt.py's own
@@ -702,6 +707,7 @@ class TeamBattleEngine:
                     bonuses = self.game.compute_equipment_bonuses(user_id)
                     reduction = bonuses.get("death_qi_loss_reduction_pct", 0)
                     qi_lost, _ = self.game.db.apply_death_penalty(user_id, reduction_pct=reduction)
+                    p["qi_lost_on_death"] = qi_lost
                     self._log(f"💀 **{p['name']}** is knocked out, losing {qi_lost:,.2f} qi!")
 
         # Phase 2: flee attempts (RaidView-only — see _resolve_flee_phase's default no-op).
@@ -763,6 +769,7 @@ class TeamBattleEngine:
             self._log(f"☠️ {enemy.monster.name}'s pressure claims **{p['name']}**'s life!")
             reduction = self.game.compute_equipment_bonuses(target_id).get("death_qi_loss_reduction_pct", 0)
             qi_lost, _ = self.game.db.apply_death_penalty(target_id, reduction_pct=reduction)
+            p["qi_lost_on_death"] = qi_lost
             self._log(f"💀 **{p['name']}** is knocked out, losing {qi_lost:,.2f} qi!")
             enemy.dps_check_interval += enemy.monster.dps_check_interval_growth
             enemy.dps_check_next_kill_round += enemy.dps_check_interval
@@ -903,6 +910,7 @@ class TeamBattleEngine:
                     # SPECIAL_BONUS_KEYS.
                     reduction = bonuses.get("death_qi_loss_reduction_pct", 0)
                     qi_lost, _ = self.game.db.apply_death_penalty(target_id, reduction_pct=reduction)
+                    p["qi_lost_on_death"] = qi_lost
                     self._log(f"💀 **{p['name']}** is knocked out, losing {qi_lost:,.2f} qi!")
             # Immovable Mountain Physique: surviving a landed hit reflects a portion of the
             # damage taken straight back at the attacker -- guaranteed (no separate hit/dodge/
