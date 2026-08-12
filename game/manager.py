@@ -1709,6 +1709,8 @@ class GameManager:
                 for stat, value in instance["stat_bonuses"].items():
                     if stat == "hp_pct":
                         stats["hp"] = stats.get("hp", 0) + player_row["max_hp"] * value
+                    elif stat == "cultivation_speed_pct":
+                        continue
                     elif stat in special:
                         special[stat] += value
         return {"stats": stats, **special}
