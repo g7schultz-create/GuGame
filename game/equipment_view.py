@@ -1,4 +1,6 @@
 import asyncio
+import traceback
+
 import discord
 
 from . import accessories_data
@@ -125,7 +127,14 @@ class EquipmentView(GameView):
         self.gu_sort_mode = "power"  # "power" | "rarity" | "stat"
         self.gu_sort_stat: str = None
         self.gu_sort_stat_page = 0
-        self.gu_item_page = 0
+        # Generalized to every slot's item-select (was Gu-only) -- see _add_item_select.
+        # Reset to 0 whenever the selected slot/category changes.
+        self.item_page = 0
+        # Cross-slot search (see EquipmentSearchModal/_search_results) -- lets a player find
+        # an item by name without knowing which category it lives under first.
+        self.search_active = False
+        self.search_query: str = None
+        self.search_page = 0
         self._build_components()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -289,7 +298,13 @@ class EquipmentView(GameView):
         equipped = self.game.get_equipped(self.user_id)
         player = self.game.get_player_stats(self.user_id, self.display_name)
 
-        if self.selected_slot:
+        if self.search_active:
+            self._add_search_result_select(equipped, player, row=0)
+            back_button = discord.ui.Button(label="Back", emoji="↩️", row=1)
+            back_button.callback = self._on_back
+            self.add_item(back_button)
+            bottom_row = 2
+        elif self.selected_slot:
             self._add_item_select(equipped, player, row=0)
             next_row = 1
             if self.selected_slot in ("gu_ability", "gu_ability_2"):
@@ -323,55 +338,111 @@ class EquipmentView(GameView):
                 button = discord.ui.Button(label=label, emoji=emoji, style=discord.ButtonStyle.primary, row=index // 5)
                 button.callback = self._make_category_callback(key)
                 self.add_item(button)
+            search_button = discord.ui.Button(label="Search", emoji="🔍", style=discord.ButtonStyle.secondary, row=2)
+            search_button.callback = self._on_open_search
+            self.add_item(search_button)
             bottom_row = 2
 
         profile_button = discord.ui.Button(label="Profile", emoji="📖", style=discord.ButtonStyle.secondary, row=bottom_row)
         profile_button.callback = self._on_profile
         self.add_item(profile_button)
 
+    def _raw_slot_options(self, slot_key: str, equipped: dict, player: dict) -> list:
+        """Every real candidate for slot_key, unpaginated and with no leading 'Unequip'
+        entry -- shared by _add_item_select (self.selected_slot, the normal per-slot screen)
+        and _build_all_owned_gear_by_slot (every slot at once, for cross-slot search)."""
+        if slot_key in MANUAL_SLOT_NAME:
+            return self._build_manual_slot_options(player)
+        if slot_key in ("gu_ability", "gu_ability_2"):
+            return self._build_gu_options()
+        slot_type = SLOT_TYPE_BY_KEY[slot_key]
+        current = equipped.get(slot_key)
+        return self._build_real_slot_options(slot_type, current)
+
     def _add_item_select(self, equipped: dict, player: dict, row: int):
-        """The actual equip/unequip dropdown for self.selected_slot — same options logic as
-        before, just no longer sharing a screen with the slot picker above it."""
-        placeholder_suffix = ""
+        """The actual equip/unequip dropdown for self.selected_slot. Paginated (see
+        ui_utils.paginate_select_options) for EVERY slot now, not just Gu Ability -- a
+        handful of slots (Weapon, accessories, ...) can genuinely exceed Discord's 25-option
+        cap once crafted-gear/accessory instances pile up, and used to just silently truncate
+        with no way to see the rest."""
         if self.selected_slot in MANUAL_SLOT_NAME:
             current = player[MANUAL_PLAYER_COLUMN[self.selected_slot]]
-            options = []
-            if current:
-                options.append(discord.SelectOption(label="Unequip (leave empty)", value="__unequip__", emoji="🗑️"))
-            options.extend(self._build_manual_slot_options(player))
-            placeholder = "Choose a manual..." if options else "Nothing available for this slot"
+            placeholder_base = "Choose a manual..."
         elif self.selected_slot in ("gu_ability", "gu_ability_2"):
             current = equipped.get(self.selected_slot)
-            leading = []
-            if current:
-                leading.append(discord.SelectOption(label="Unequip (leave empty)", value="__unequip__", emoji="🗑️"))
-            gu_options = self._build_gu_options()
-            page_options, total_pages, self.gu_item_page = paginate_select_options(
-                gu_options, self.gu_item_page, reserved_slots=len(leading),
-            )
-            options = leading + page_options
-            placeholder = "Choose gear for Gu Ability..." if options else "Nothing available for this slot"
-            if total_pages > 1:
-                placeholder_suffix = f" (page {self.gu_item_page + 1}/{total_pages})"
+            placeholder_base = "Choose gear for Gu Ability..."
         else:
-            slot_type = SLOT_TYPE_BY_KEY[self.selected_slot]
             current = equipped.get(self.selected_slot)
-            options = []
-            if current:
-                options.append(discord.SelectOption(label="Unequip (leave empty)", value="__unequip__", emoji="🗑️"))
-            options.extend(self._build_real_slot_options(slot_type, current))
-            placeholder = f"Choose gear for {SLOT_LABEL_BY_KEY[self.selected_slot]}..." if options else "Nothing available for this slot"
+            placeholder_base = f"Choose gear for {SLOT_LABEL_BY_KEY[self.selected_slot]}..."
+
+        leading = []
+        if current:
+            leading.append(discord.SelectOption(label="Unequip (leave empty)", value="__unequip__", emoji="🗑️"))
+        raw_options = self._raw_slot_options(self.selected_slot, equipped, player)
+        page_options, total_pages, self.item_page = paginate_select_options(raw_options, self.item_page, reserved_slots=len(leading))
+        options = leading + page_options
+        placeholder = placeholder_base if options else "Nothing available for this slot"
+        if total_pages > 1:
+            placeholder += f" (page {self.item_page + 1}/{total_pages})"
 
         item_select = discord.ui.Select(
-            placeholder=(placeholder + placeholder_suffix)[:150],
-            # Still capped at Discord's 25-option limit — every non-Gu slot realistically
-            # never gets close, so only the Gu Ability branch above actually paginates.
+            placeholder=placeholder[:150],
             options=options[:25] or [discord.SelectOption(label="None", value="none")],
             disabled=not options,
             row=row,
         )
         item_select.callback = self._on_pick_item
         self.add_item(item_select)
+
+    def _build_all_owned_gear_by_slot(self, equipped: dict, player: dict) -> dict:
+        """slot_key -> raw options (see _raw_slot_options) for every slot the player could
+        equip into right now -- respects the same Twin Gu Sovereign Physique gating as the
+        ordinary category picker (_effective_slot_keys) and drops the legacy "manual" slot,
+        same as the category summary embed does. Powers global search (EquipmentSearchModal)."""
+        slot_keys = []
+        for category_key, _, _, _ in CATEGORY_GROUPS:
+            for slot_key in self._effective_slot_keys(category_key, player):
+                if slot_key == "manual":
+                    continue
+                slot_keys.append(slot_key)
+        return {slot_key: self._raw_slot_options(slot_key, equipped, player) for slot_key in slot_keys}
+
+    def _search_results(self, equipped: dict, player: dict) -> list:
+        """Every owned item across every slot whose label contains self.search_query
+        (case-insensitive), tagged as "{slot_key}::{value}" so picking one can be equipped
+        directly (see _on_pick_search_result/_resolve_equip_choice) without first navigating
+        to its slot."""
+        query = (self.search_query or "").lower()
+        results = []
+        for slot_key, raw_options in self._build_all_owned_gear_by_slot(equipped, player).items():
+            label, emoji = SLOT_INFO[slot_key]
+            for option in raw_options:
+                if query and query not in option.label.lower():
+                    continue
+                description = f"{label} — {option.description}" if option.description else label
+                results.append(discord.SelectOption(
+                    label=option.label[:100], value=f"{slot_key}::{option.value}",
+                    description=description[:100], emoji=emoji,
+                ))
+        return results
+
+    def _add_search_result_select(self, equipped: dict, player: dict, row: int):
+        raw_results = self._search_results(equipped, player)
+        page_options, total_pages, self.search_page = paginate_select_options(raw_results, self.search_page)
+        placeholder = f"🔍 '{self.search_query}'" if self.search_query else "🔍 Search"
+        if not raw_results:
+            placeholder += " — no matches"
+        elif total_pages > 1:
+            placeholder += f" (page {self.search_page + 1}/{total_pages})"
+
+        select = discord.ui.Select(
+            placeholder=placeholder[:150],
+            options=page_options[:25] or [discord.SelectOption(label="None", value="none")],
+            disabled=not raw_results,
+            row=row,
+        )
+        select.callback = self._on_pick_search_result
+        self.add_item(select)
 
     def _make_category_callback(self, category_key: str):
         async def callback(interaction: discord.Interaction):
@@ -384,6 +455,7 @@ class EquipmentView(GameView):
             if len(slot_keys) == 1:
                 self.selected_slot = slot_keys[0]
             self.last_result = None
+            self.item_page = 0
             await asyncio.to_thread(self._build_components)
             embed = await asyncio.to_thread(self.build_embed)
             await interaction.response.edit_message(embed=embed, view=self)
@@ -394,6 +466,7 @@ class EquipmentView(GameView):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 0)
         self.selected_slot = select.values[0]
         self.last_result = None
+        self.item_page = 0
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -401,7 +474,7 @@ class EquipmentView(GameView):
     def _make_gu_sort_mode_callback(self, key: str):
         async def callback(interaction: discord.Interaction):
             self.gu_sort_mode = key
-            self.gu_item_page = 0
+            self.item_page = 0
             await asyncio.to_thread(self._build_components)
             embed = await asyncio.to_thread(self.build_embed)
             await interaction.response.edit_message(embed=embed, view=self)
@@ -417,63 +490,109 @@ class EquipmentView(GameView):
             self.gu_sort_stat_page += 1
         elif choice != "none":
             self.gu_sort_stat = choice
-            self.gu_item_page = 0
+            self.item_page = 0
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
+
+    def _resolve_equip_choice(self, choice: str) -> str:
+        """Actually equips/unequips `choice` (as produced by _raw_slot_options, or the
+        slot-tagged half of a global search result -- see _on_pick_search_result) into
+        self.selected_slot, returning the result message. Shared so picking a search result
+        equips exactly the same way picking that same option from its own slot screen would."""
+        if self.selected_slot in MANUAL_SLOT_NAME:
+            manual_slot = MANUAL_SLOT_NAME[self.selected_slot]
+            if choice == "__unequip__":
+                _, result = self.game.unequip_manual(self.user_id, self.display_name, manual_slot)
+            else:
+                manual_id = int(choice[len(MANUAL_VALUE_PREFIX):])
+                _, result = self.game.equip_manual(self.user_id, self.display_name, manual_id, manual_slot)
+        elif choice == "__unequip__":
+            if self.selected_slot in self.game.ACCESSORY_ARTIFACT_SLOT_TYPES:
+                _, result = self.game.unequip_accessory_artifact(self.user_id, self.display_name, self.selected_slot)
+            else:
+                _, result = self.game.unequip_item(self.user_id, self.display_name, self.selected_slot)
+        elif choice.startswith(INSTANCE_VALUE_PREFIX):
+            gear_id = int(choice[len(INSTANCE_VALUE_PREFIX):])
+            _, result = self.game.equip_crafted_gear(self.user_id, self.display_name, gear_id)
+        elif choice.startswith(ACCESSORY_VALUE_PREFIX):
+            instance_id = int(choice[len(ACCESSORY_VALUE_PREFIX):])
+            _, result = self.game.equip_accessory_artifact(self.user_id, self.display_name, self.selected_slot, instance_id)
+        else:
+            _, result = self.game.equip_item(self.user_id, self.display_name, self.selected_slot, choice)
+        self.refresh()
+        return result
 
     async def _on_pick_item(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 0)
         choice = select.values[0]
         if choice == NAV_PREV_VALUE:
-            self.gu_item_page = max(0, self.gu_item_page - 1)
+            self.item_page = max(0, self.item_page - 1)
             await asyncio.to_thread(self._build_components)
             embed = await asyncio.to_thread(self.build_embed)
             await interaction.response.edit_message(embed=embed, view=self)
             return
         if choice == NAV_NEXT_VALUE:
-            self.gu_item_page += 1
+            self.item_page += 1
             await asyncio.to_thread(self._build_components)
             embed = await asyncio.to_thread(self.build_embed)
             await interaction.response.edit_message(embed=embed, view=self)
             return
-        def _resolve():
-            if self.selected_slot in MANUAL_SLOT_NAME:
-                manual_slot = MANUAL_SLOT_NAME[self.selected_slot]
-                if choice == "__unequip__":
-                    _, result = self.game.unequip_manual(self.user_id, self.display_name, manual_slot)
-                else:
-                    manual_id = int(choice[len(MANUAL_VALUE_PREFIX):])
-                    _, result = self.game.equip_manual(self.user_id, self.display_name, manual_id, manual_slot)
-            elif choice == "__unequip__":
-                if self.selected_slot in self.game.ACCESSORY_ARTIFACT_SLOT_TYPES:
-                    _, result = self.game.unequip_accessory_artifact(self.user_id, self.display_name, self.selected_slot)
-                else:
-                    _, result = self.game.unequip_item(self.user_id, self.display_name, self.selected_slot)
-            elif choice.startswith(INSTANCE_VALUE_PREFIX):
-                gear_id = int(choice[len(INSTANCE_VALUE_PREFIX):])
-                _, result = self.game.equip_crafted_gear(self.user_id, self.display_name, gear_id)
-            elif choice.startswith(ACCESSORY_VALUE_PREFIX):
-                instance_id = int(choice[len(ACCESSORY_VALUE_PREFIX):])
-                _, result = self.game.equip_accessory_artifact(self.user_id, self.display_name, self.selected_slot, instance_id)
-            else:
-                _, result = self.game.equip_item(self.user_id, self.display_name, self.selected_slot, choice)
-            self.refresh()
-            return result
+        self.last_result = await asyncio.to_thread(self._resolve_equip_choice, choice)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
-        self.last_result = await asyncio.to_thread(_resolve)
+    async def _on_open_search(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(EquipmentSearchModal(self))
+
+    async def _on_pick_search_result(self, interaction: discord.Interaction):
+        select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 0)
+        choice = select.values[0]
+        if choice == NAV_PREV_VALUE:
+            self.search_page = max(0, self.search_page - 1)
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
+            return
+        if choice == NAV_NEXT_VALUE:
+            self.search_page += 1
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
+            return
+        if choice == "none":
+            return
+        slot_key, item_choice = choice.split("::", 1)
+        self.selected_slot = slot_key
+        self.selected_category = CATEGORY_FOR_SLOT[slot_key]
+        self.search_active = False
+        self.search_query = None
+        self.item_page = 0
+        self.last_result = await asyncio.to_thread(self._resolve_equip_choice, item_choice)
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_back(self, interaction: discord.Interaction):
-        if self.selected_slot:
+        if self.search_active:
+            # Search is only ever entered from the top level (see _build_components' top-level
+            # branch, the only place the Search button appears), so leaving it always lands
+            # back at the top level too -- explicit here rather than relying on whatever
+            # selected_category/selected_slot happened to be beforehand.
+            self.search_active = False
+            self.search_query = None
+            self.search_page = 0
+            self.selected_category = None
+            self.selected_slot = None
+        elif self.selected_slot:
             # Single-slot categories skipped their own picker screen (see
             # _make_category_callback), so backing out of slot management on one of those
             # goes all the way to the top level instead of a picker with nothing useful on it.
             player = await asyncio.to_thread(self.game.get_player_stats, self.user_id, self.display_name)
             slot_keys = self._effective_slot_keys(self.selected_category, player)
             self.selected_slot = None
+            self.item_page = 0
             if len(slot_keys) == 1:
                 self.selected_category = None
         else:
@@ -568,7 +687,10 @@ class EquipmentView(GameView):
         if gu_bonus_lines:
             embed.add_field(name="✨ Passive Bonuses", value=" • ".join(gu_bonus_lines), inline=False)
 
-        if self.selected_slot:
+        if self.search_active:
+            value = f"Searching for **{self.search_query}**..." if self.search_query else "Searching..."
+            embed.add_field(name="🔍 Search", value=value, inline=False)
+        elif self.selected_slot:
             # Focused on exactly one slot — the item-equip dropdown below the embed handles
             # changing it, this just shows what's there right now.
             cat_label, cat_emoji, _ = CATEGORY_BY_KEY[self.selected_category]
@@ -600,3 +722,34 @@ class EquipmentView(GameView):
 
         embed.set_footer(text="These bonuses aren't reflected on /profile's Combat tab yet.")
         return embed
+
+
+class EquipmentSearchModal(discord.ui.Modal, title="Search Your Gear"):
+    query_input = discord.ui.TextInput(label="Item name (or part of it)", placeholder="e.g. Jade, Immortal, Ring...", max_length=100)
+
+    def __init__(self, view: "EquipmentView"):
+        super().__init__()
+        self.view_ref = view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        self.view_ref.search_active = True
+        self.view_ref.search_query = str(self.query_input.value).strip()
+        self.view_ref.search_page = 0
+        self.view_ref.last_result = None
+        await asyncio.to_thread(self.view_ref._build_components)
+        embed = await asyncio.to_thread(self.view_ref.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self.view_ref)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        # Modal has its own separate error hook from View.on_error (see base_view.py) — same
+        # "surface a real message instead of silently hanging" treatment as CharacterNameModal.
+        print(f"[modal error] EquipmentSearchModal raised {type(error).__name__}: {error}")
+        traceback.print_exception(type(error), error, error.__traceback__)
+        message = f"⚠️ Something went wrong ({type(error).__name__}: {error})."
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except discord.HTTPException:
+            pass
