@@ -964,33 +964,50 @@ class GameManager:
     # bubbles that are either an immediate shared treasure or a real, multi-round interactive
     # team fight against a monster that gets harder with every battle bubble revealed. See
     # InheritanceGroundView's "bubble_board"/"battle" phases for the UI/round-by-round flow.
-    BUBBLES_PER_TEAM_MEMBER = 2
-    MIN_BATTLE_BUBBLES = 2  # flat, not scaled by team size -- a guaranteed minimum, same
+    # BOARD_SIZE is now FIXED (not scaled by team size) and BUBBLES_PER_TEAM_MEMBER is the POP
+    # CAP per member instead -- mirrors treasure_hunt.py's own "board is bigger than what you
+    # actually get to explore" shape (BOARD_SIZE=25, MAX_CLICKS_PER_BOARD=7) per explicit
+    # request: 20 bubbles, one guaranteed hidden Treasure among them, team only gets
+    # team_size * BUBBLES_PER_TEAM_MEMBER total pops (see max_inheritance_ground_pops) --
+    # most of the board, quite possibly including the Treasure, goes unpopped every run.
+    INHERITANCE_GROUND_BOARD_SIZE = 20
+    BUBBLES_PER_TEAM_MEMBER = 2  # pops per team member, not board size -- see the note above
+    MIN_BATTLE_BUBBLES = 2  # flat, not scaled by board size -- a guaranteed minimum, same
     # "fixed multiset, then shuffle" reasoning treasure_hunt.roll_board's own guaranteed
     # treasure tile uses, rather than a per-bubble coin flip that could rarely land zero battles.
     # Battles escalate faster than Battlefield's own solo 0.15/wave (WAVE_STAT_MULTIPLIER_PER_WAVE
     # in battlefield_view.py) since a whole team is fighting together, not one player.
     BATTLE_STAT_MULTIPLIER_PER_BATTLE = 0.20
 
-    # Every non-"battle" bubble independently rolls one of these -- "treasure" most of the
-    # time, sometimes a dud ("nothing"), occasionally a guaranteed Qi Ascension Pill (see
-    # grant_inheritance_ground_pill_reward) -- rather than always being "treasure". First-pass
-    # weights, easy to retune.
-    BUBBLE_OUTCOME_WEIGHT = {"treasure": 60, "nothing": 25, "ascension_pill": 15}
+    # Every non-"battle", non-"treasure" bubble independently rolls one of these -- a dud
+    # ("nothing") most of the time, sometimes a guaranteed Qi Ascension Pill (see
+    # grant_inheritance_ground_pill_reward). "treasure" is deliberately NOT in this weighted
+    # pool -- it's a single guaranteed bubble instead (see generate_inheritance_ground_board),
+    # same "exactly one guaranteed tile, everything else weighted" split treasure_hunt.
+    # TILE_CATEGORY_WEIGHTS/roll_board uses. First-pass weights, easy to retune.
+    BUBBLE_OUTCOME_WEIGHT = {"nothing": 25, "ascension_pill": 15}
 
     def generate_inheritance_ground_board(self, team_size: int) -> list:
-        """Returns team_size * BUBBLES_PER_TEAM_MEMBER bubble labels, MIN_BATTLE_BUBBLES of
-        them guaranteed "battle" (same "fixed multiset, then shuffle" reasoning as before --
-        a guaranteed minimum, not a coin flip that could rarely land zero battles). Every
-        other slot independently rolls via BUBBLE_OUTCOME_WEIGHT, so the non-battle bubbles
-        are now genuinely random (treasure/nothing/ascension_pill) instead of always treasure."""
-        size = team_size * self.BUBBLES_PER_TEAM_MEMBER
-        battle_count = min(size, self.MIN_BATTLE_BUBBLES)
+        """Returns INHERITANCE_GROUND_BOARD_SIZE (20) bubble labels: MIN_BATTLE_BUBBLES
+        guaranteed "battle", exactly ONE guaranteed "treasure" (unpredictable position --
+        mirrors treasure_hunt.roll_board's own single guaranteed tile), and the rest
+        independently rolled via BUBBLE_OUTCOME_WEIGHT. team_size no longer affects the board
+        itself, only how many of these 20 the team actually gets to pop -- see
+        max_inheritance_ground_pops."""
+        size = self.INHERITANCE_GROUND_BOARD_SIZE
         outcomes = list(self.BUBBLE_OUTCOME_WEIGHT.keys())
         weights = list(self.BUBBLE_OUTCOME_WEIGHT.values())
-        board = ["battle"] * battle_count + random.choices(outcomes, weights=weights, k=size - battle_count)
+        filler_count = size - self.MIN_BATTLE_BUBBLES - 1  # -1 for the single guaranteed treasure
+        board = ["battle"] * self.MIN_BATTLE_BUBBLES + ["treasure"] + random.choices(outcomes, weights=weights, k=filler_count)
         random.shuffle(board)
         return board
+
+    def max_inheritance_ground_pops(self, team_size: int) -> int:
+        """How many of the 20 bubbles this team's run actually gets to pop before the board
+        locks and reveals what the rest held -- see InheritanceGroundView._reveal_remaining_
+        bubbles. Deliberately well under INHERITANCE_GROUND_BOARD_SIZE, same scarcity
+        treasure_hunt.MAX_CLICKS_PER_BOARD (7 of 25) creates."""
+        return team_size * self.BUBBLES_PER_TEAM_MEMBER
 
     # Blood Sea Ancestor's own dedicated battle-bubble roster (see content/monsters/
     # blood_sea_ancestor.py) -- weighted by TIER (individual monsters within a tier are
@@ -1072,17 +1089,20 @@ class GameManager:
         return results
 
     def grant_inheritance_ground_treasure_reward(self, ground_key: str, team: list) -> list:
-        """One independent, reduced-magnitude roll per team member -- same discovery_gen.
-        generate_loot machinery grant_inheritance_ground_share_reward already uses for the run's
-        own capstone reward, just at "Safe" difficulty (see search_data.DIFFICULTY_REWARD_
-        QUALITY_PCT, -15%/-1 rank vs "Standard"'s baseline) so the final Share/Backstab payout
-        still feels like the bigger prize. Returns [(name, reward_str), ...]."""
+        """The board's single guaranteed Treasure bubble (see generate_inheritance_ground_
+        board) -- one independent roll per team member, same discovery_gen.generate_loot
+        machinery grant_inheritance_ground_share_reward uses for the run's own capstone
+        reward. "Standard" difficulty (see search_data.DIFFICULTY_REWARD_QUALITY_PCT) -- it's
+        no longer a "sometimes" bubble sitting below the Share/Backstab payout, it's the one
+        real prize hidden among 20 bubbles the team might never even find; the -15%/-1 rank
+        "Safe" penalty this used to roll at no longer fits that. Returns
+        [(name, reward_str), ...]."""
         ground = inheritance_ground_data.GROUNDS[ground_key]
         rng = random.Random()
         results = []
         for user_id, name in team:
             category = discovery_gen.weighted_choice(search_data.INHERITANCE_FINAL_CHEST_TABLE, rng)
-            reward = discovery_gen.generate_loot(category, "inheritance_ground", ground["gu_rank"], "Safe", ground.get("tags", []), rng)
+            reward = discovery_gen.generate_loot(category, "inheritance_ground", ground["gu_rank"], "Standard", ground.get("tags", []), rng)
             results.append((name, self.grant_reward(user_id, name, reward)))
         return results
 

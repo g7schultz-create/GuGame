@@ -232,6 +232,14 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         # "disabled for one viewer but not another" -- everyone sees the same button state).
         self.board: list = []
         self.revealed: list = []
+        # True only for bubbles a team member ACTUALLY clicked -- distinct from self.revealed,
+        # which also goes True for every bubble _reveal_remaining_bubbles shows once the
+        # team's pop cap is hit, purely for display (no reward rolled/granted for those).
+        self.actually_clicked: list = []
+        # True once the team has used every pop max_inheritance_ground_pops allows -- the board
+        # then shows every bubble (real finds AND what was missed) plus a Continue button,
+        # instead of more interactive "?" bubbles. See _reveal_remaining_bubbles.
+        self.board_exhausted = False
         self.turn_index = 0
         # Only the MOST RECENT bubble result -- replaced, never appended, so old notifications
         # disappear on the very next turn instead of piling up in a growing "So far" history.
@@ -309,11 +317,20 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             for index, category in enumerate(self.board):
                 row = index // 5
                 if self.revealed[index]:
-                    button = discord.ui.Button(label="", emoji=BUBBLE_ICON[category], style=discord.ButtonStyle.secondary, row=row, disabled=True)
+                    # Once the pop cap is hit, _reveal_remaining_bubbles flips every remaining
+                    # bubble's revealed flag too, purely for display -- "Missed" tells those
+                    # apart from the ones the team actually clicked and were granted.
+                    missed = self.board_exhausted and not self.actually_clicked[index]
+                    button = discord.ui.Button(label="Missed" if missed else "", emoji=BUBBLE_ICON[category], style=discord.ButtonStyle.secondary, row=row, disabled=True)
                 else:
                     button = discord.ui.Button(label="?", emoji="🫧", style=discord.ButtonStyle.primary, row=row)
                     button.callback = self._make_bubble_callback(index)
                 self.add_item(button)
+            if self.board_exhausted:
+                # Row 4 is free -- 20 bubbles at 5/row fills rows 0-3.
+                continue_button = discord.ui.Button(label="Continue to the Trial", emoji="➡️", style=discord.ButtonStyle.primary, row=4)
+                continue_button.callback = self._on_bubble_board_continue
+                self.add_item(continue_button)
         elif self.phase == "battle":
             # Full TeamBattleEngine action set (team_battle.py) -- same combat loop /raid
             # runs. Most battles are single-enemy (no target-select needed, every action
@@ -433,11 +450,25 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         self.phase = "bubble_board"
         self.board = await asyncio.to_thread(self.game.generate_inheritance_ground_board, len(self.team))
         self.revealed = [False] * len(self.board)
+        self.actually_clicked = [False] * len(self.board)
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
 
     # -- bubble board (turn-based -- only self.team[self.turn_index] may pop the next bubble) --
+
+    def _max_bubble_pops(self) -> int:
+        return self.game.max_inheritance_ground_pops(len(self.team))
+
+    def _reveal_remaining_bubbles(self):
+        """Called once the team's pop cap is reached (see _make_bubble_callback/_on_victory) --
+        reveals every STILL-hidden bubble's category for display, per explicit request ("have
+        all the bubbles show their loot at the end so people can feel bad they missed the
+        treasure"). Purely cosmetic: nothing is rolled or granted for a bubble nobody actually
+        clicked (self.actually_clicked stays False for those) -- see _build_components/
+        _build_phase_embed for how a real find is told apart from a missed one."""
+        self.board_exhausted = True
+        self.revealed = [True] * len(self.board)
 
     def _make_bubble_callback(self, index: int):
         async def callback(interaction: discord.Interaction):
@@ -455,6 +486,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             await interaction.response.defer()
             category = self.board[index]
             self.revealed[index] = True
+            self.actually_clicked[index] = True
             if category == "battle":  # turn rotation PAUSES until the fight is actually won
                 self.last_bubble_notice = None
                 self.battles_fought += 1
@@ -468,22 +500,32 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
 
             if category == "treasure":
                 results = await asyncio.to_thread(self.game.grant_inheritance_ground_treasure_reward, self.ground_key, self.team)
-                summary = "; ".join(f"**{name}**: {reward}" for name, reward in results)
-                self.last_bubble_notice = f"💰 {summary}"
+                summary = "\n".join(f"**{name}**: {reward}" for name, reward in results)
+                self.last_bubble_notice = f"💰 **The Treasure!**\n{summary}"
             elif category == "ascension_pill":
                 results = await asyncio.to_thread(self.game.grant_inheritance_ground_pill_reward, self.team)
-                summary = "; ".join(f"**{name}**: {reward}" for name, reward in results)
-                self.last_bubble_notice = f"💊 The bubble held a stash of Qi Ascension Pills! {summary}"
+                summary = "\n".join(f"**{name}**: {reward}" for name, reward in results)
+                self.last_bubble_notice = f"💊 The bubble held a stash of Qi Ascension Pills!\n{summary}"
             else:  # "nothing" -- a dud, matching BUBBLE_OUTCOME_WEIGHT's own possible outcomes
                 self.last_bubble_notice = "💨 Just an empty bubble. Nothing here."
-            self._advance_turn()
-            self.phase = "pre_trial" if all(self.revealed) else "bubble_board"
+            if sum(self.actually_clicked) >= self._max_bubble_pops():
+                self._reveal_remaining_bubbles()
+            else:
+                self._advance_turn()
             self.bubble_resolving = False
             await asyncio.to_thread(self._build_components)
             embed = await asyncio.to_thread(self.build_embed)
             await interaction.edit_original_response(embed=embed, view=self)
 
         return callback
+
+    async def _on_bubble_board_continue(self, interaction: discord.Interaction):
+        """Only shown once board_exhausted -- moves on to the Final Trial once the team's
+        actually done looking at what they found and missed."""
+        self.phase = "pre_trial"
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     # -- battle (whole team fights together -- every alive member acts each round) ----------
     # asyncio.create_task (via _start_battle_round_timer) requires a running loop on the
@@ -610,14 +652,17 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             context) notices this phase land on "betrayal" and starts its timer."""
         monster = self.enemies[0].monster
         loot_results = self.game.grant_inheritance_ground_battle_loot(self.ground_key, self.team, monster)
-        loot_summary = "; ".join(f"**{name}**: {text}" for name, text in loot_results)
+        loot_summary = "\n".join(f"**{name}**: {text}" for name, text in loot_results)
         if self.is_final_boss_battle:
             self._log(f"🏆 The team brings down {monster.name}! {loot_summary}")
             self.phase = "betrayal"
             return
-        self.last_bubble_notice = f"⚔️ The team defeats {monster.name}! {loot_summary}"
-        self._advance_turn()
-        self.phase = "pre_trial" if all(self.revealed) else "bubble_board"
+        self.last_bubble_notice = f"⚔️ The team defeats {monster.name}!\n{loot_summary}"
+        if sum(self.actually_clicked) >= self._max_bubble_pops():
+            self._reveal_remaining_bubbles()
+        else:
+            self._advance_turn()
+        self.phase = "bubble_board"
 
     def _on_wipe(self):
         """Called by TeamBattleEngine._resolve_round (team_battle.py) once every participant
@@ -935,9 +980,15 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
     def _apply_duel_knockout(self, user_id: int, p: dict):
         """Ward/Worldly Escape/death-penalty pipeline on an actual duel knockout -- shared by
         both a landed hit and a retaliation kill in _resolve_duel_hit, mirroring how a normal
-        battle's Phase 1.65 (bleed) reuses the exact same pipeline as its own Phase 3."""
+        battle's Phase 1.65 (bleed) reuses the exact same pipeline as its own Phase 3. Per
+        explicit request, only a BACKSTABBER risks losing Qi here -- a defending sharer who
+        gets knocked out was only protecting the loot, not the aggressor, so they're simply
+        out of the fight with no further penalty."""
         p["down"] = True
         self.game.db.set_hp(user_id, 1)
+        if p["side"] == SHARER_SIDE:
+            self._log(f"💫 **{p['name']}** is knocked out of the fight -- no Qi lost, they were only defending.")
+            return
         ward_name = self.game.check_and_consume_defeat_ward(user_id)
         if ward_name:
             self._log(f"✨ **{ward_name}** activates for **{p['name']}** — knocked out, but the Qi loss is warded away!")
@@ -1247,8 +1298,28 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             return embed
 
         if self.phase == "bubble_board":
+            max_pops = self._max_bubble_pops()
+            pops_used = sum(self.actually_clicked)
+            if self.board_exhausted:
+                treasure_index = self.board.index("treasure")
+                if self.actually_clicked[treasure_index]:
+                    treasure_line = "💰 Your team actually found the Treasure this run!"
+                else:
+                    treasure_line = "💰 The Treasure was hidden in one of the bubbles your team never got to — it's gone unclaimed."
+                embed = discord.Embed(
+                    title=f"🗺️ {ground['name']} — The Ruins Fall Silent",
+                    description=(
+                        f"Your team has used all {max_pops} of its turns here. The rest of the "
+                        f"bubbles pop open on their own, revealing what they held.\n\n{treasure_line}"
+                    ),
+                    color=discord.Color.dark_gold(),
+                )
+                if self.last_bubble_notice:
+                    embed.add_field(name="Last thing your team actually found", value=self.last_bubble_notice[:1024], inline=False)
+                embed.set_footer(text=f"{pops_used}/{max_pops} bubbles explored, {len(self.board)} shown. Click Continue when ready.")
+                return embed
+
             current_name = self.team[self.turn_index][1]
-            revealed_count = sum(self.revealed)
             embed = discord.Embed(
                 title=f"🗺️ {ground['name']} — Explore the Ruins",
                 description=(
@@ -1263,7 +1334,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
                 # disappears again once the next bubble gets popped (see last_bubble_notice's
                 # own field comment in __init__).
                 embed.add_field(name="Just happened", value=self.last_bubble_notice[:1024], inline=False)
-            embed.set_footer(text=f"{revealed_count}/{len(self.board)} bubbles popped.")
+            embed.set_footer(text=f"{pops_used}/{max_pops} turns used — {len(self.board)} bubbles on the site.")
             return embed
 
         if self.phase == "battle":
@@ -1380,18 +1451,23 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             embed = discord.Embed(title=f"🗺️ {ground['name']} — Overwhelmed", description=description, color=discord.Color.dark_red())
             return embed
 
-        lines = [f"🤝 **{name}** shares equally: {reward}" for name, reward in self.share_grants]
-        if self.betrayal_result:
-            if self.betrayal_result["winner_was_backstabber"]:
-                lines.append(f"🗡️ **{self.betrayal_result['winner_name']}** overcomes the defenders and claims the {self.betrayal_result['gu_name']}!")
-            else:
-                lines.append(f"🛡️ The defenders hold! **{self.betrayal_result['winner_name']}** survives the backstab and claims the {self.betrayal_result['gu_name']}!")
-            events = self.betrayal_result["duel"]["events"]
-            if events:
-                lines.append("\n".join(events[-5:]))
         embed = discord.Embed(
             title=f"🗺️ {ground['name']} — Run Complete!",
-            description="\n".join(lines) if lines else "The run concludes.",
+            description="The run concludes." if not (self.share_grants or self.betrayal_result) else "Here's how it all shook out.",
             color=discord.Color.gold(),
         )
+        # Each kind of outcome gets its OWN field -- a real visual break between "who shared
+        # what" and "how the backstab played out", instead of one wall of text.
+        if self.share_grants:
+            share_lines = [f"🤝 **{name}** shares equally: {reward}" for name, reward in self.share_grants]
+            embed.add_field(name="Shared Loot", value="\n".join(share_lines)[:1024], inline=False)
+        if self.betrayal_result:
+            if self.betrayal_result["winner_was_backstabber"]:
+                outcome_line = f"🗡️ **{self.betrayal_result['winner_name']}** overcomes the defenders and claims the {self.betrayal_result['gu_name']}!"
+            else:
+                outcome_line = f"🛡️ The defenders hold! **{self.betrayal_result['winner_name']}** survives the backstab and claims the {self.betrayal_result['gu_name']}!"
+            embed.add_field(name="Backstab Outcome", value=outcome_line[:1024], inline=False)
+            events = self.betrayal_result["duel"]["events"]
+            if events:
+                embed.add_field(name="Duel — Final Moments", value="\n".join(events[-5:])[:1024], inline=False)
         return embed
