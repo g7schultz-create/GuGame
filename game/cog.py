@@ -1378,6 +1378,7 @@ class GameCog(commands.Cog):
                 cd_line("PvP", "🗡️", cooldowns["pvp_remaining"]),
                 cd_line("Battlefield", "⚔️", cooldowns["battlefield_remaining"]),
                 cd_line("World Boss", "🐗", cooldowns["world_boss_remaining"]),
+                cd_line("Inheritance Ground", "🗺️", cooldowns["inheritance_ground_remaining"]),
                 tournament_line,
             ]),
             inline=False,

@@ -914,9 +914,8 @@ class GameManager:
     # with an Abandon escape hatch from day one -- see the raid flee bug fixed in commit
     # 0b6b712 for why that matters, rather than adding it reactively after someone gets stuck.
     ACTIVE_INHERITANCE_GROUND_STALE_SECONDS = 2 * 3600
-    # Bigger commitment than solo Battlefield (BATTLEFIELD_COOLDOWN_SECONDS, 6h) since it needs
-    # 2-3 other willing players' time too -- tunable.
-    INHERITANCE_GROUND_COOLDOWN_SECONDS = 8 * 3600
+    # Lowered from 8h now that it's open to every player (was admin-only) -- tunable.
+    INHERITANCE_GROUND_COOLDOWN_SECONDS = 4 * 3600
 
     def has_active_inheritance_ground(self, player: dict) -> bool:
         started = player["active_inheritance_ground_started_ts"]
@@ -2355,7 +2354,8 @@ class GameManager:
 
     def get_cooldowns_status(self, user_id: int, name: str) -> dict:
         """Read-only — remaining seconds (0 if ready) for /mine, /gather, /explore, /rest,
-        /meditate, /teach, /battlefield, /tournament, /search_forgotten_blessed_land, for /cd."""
+        /meditate, /teach, /battlefield, /tournament, /search_forgotten_blessed_land,
+        /inheritance_ground, for /cd."""
         player = self.db.get_or_create_player(user_id, name)
         tournament_phase, tournament_row = self.get_tournament_status()
         companion = self.db.get_dao_companion(user_id)
@@ -2369,6 +2369,7 @@ class GameManager:
             "meditate_remaining": self._check_cooldown(player, "last_meditate_ts", self.MEDITATE_COOLDOWN_SECONDS),
             "battlefield_remaining": self._check_cooldown(player, "last_battlefield_ts", self.BATTLEFIELD_COOLDOWN_SECONDS),
             "world_boss_remaining": self._check_cooldown(player, "last_world_boss_attack_ts", world_boss.WORLD_BOSS_ATTACK_COOLDOWN_SECONDS),
+            "inheritance_ground_remaining": self.inheritance_ground_cooldown_remaining(player),
             # /search_forgotten_blessed_land -- only meaningful once realm-eligible (see
             # start_treasure_hunt's own gate), same "only show gated features once relevant"
             # convention as has_dao_companion/sect_disciple_count/personal_disciple_count below.
