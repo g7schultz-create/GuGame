@@ -4,8 +4,8 @@ user's own full name/path/effect-idea list, translated into the existing canon-G
 architecture rather than a new subsystem. Every entry has drop_weight=0 (never eligible in
 canon_gu.roll_canon_gu_drop's normal weighted roll, same convention as the 2 pre-existing
 Uniques Spring Autumn Cicada/Fortune Rivalling Heaven Gu) -- reachable ONLY through
-GameManager.roll_white_heaven_bonus_gu's own separate, White-Heaven-kill-only roll (1/10000
-per hunt kill, 1/5000 per raid participant -- see WHITE_HEAVEN_HUNT_BONUS_GU_CHANCE/
+GameManager.roll_white_heaven_bonus_gu's own separate, White-Heaven-kill-only roll (1/3000
+per hunt kill, 1/1000 per raid participant -- see WHITE_HEAVEN_HUNT_BONUS_GU_CHANCE/
 WHITE_HEAVEN_RAID_BONUS_GU_CHANCE) and exploration.roll_white_heaven_explore_bonus_gu's own
 1/3000 per /explore find (see WHITE_HEAVEN_CANON_GU_NAMES below, kept distinct from "any
 drop_weight==0 Gu" so the 2 pre-existing Uniques are never eligible for any of these rolls

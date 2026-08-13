@@ -1220,11 +1220,12 @@ class GameManager:
     # a SEPARATE roll from canon_gu.roll_canon_gu_drop's normal weighted mechanism (these 20
     # are drop_weight=0, so that roll always skips them entirely, same as the 2 pre-existing
     # Uniques). ONE combined roll per White-Heaven kill decides if ANY of the 20 drops at
-    # all, not each independently -- hunt and raid get their own separate rate (raid rolls
-    # once per participant, so it's kept lower-odds-per-attempt than hunt's single roll per
-    # kill, per explicit request).
-    WHITE_HEAVEN_HUNT_BONUS_GU_CHANCE = 1 / 10000
-    WHITE_HEAVEN_RAID_BONUS_GU_CHANCE = 1 / 5000
+    # all, not each independently -- hunt and raid get their own separate rate, each its own
+    # named constant so the two can keep moving independently (raid's own higher per-attempt
+    # odds are still meaningfully rarer in PRACTICE since a raid kill takes real team
+    # coordination to reach, unlike hunt's much faster solo kill loop).
+    WHITE_HEAVEN_HUNT_BONUS_GU_CHANCE = 1 / 3000
+    WHITE_HEAVEN_RAID_BONUS_GU_CHANCE = 1 / 1000
 
     def roll_white_heaven_bonus_gu(self, chance: float) -> Optional[str]:
         """Called once per White-Heaven hunt kill or once per raid participant (see hunt.py's/
