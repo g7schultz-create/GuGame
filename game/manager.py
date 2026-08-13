@@ -2667,8 +2667,11 @@ class GameManager:
         EXPLORE_HUNT_NODE_COUNT finds, pre-rolled with this roll's Luck/Explorer-rank bonuses,
         hunted down one at a time via ExplorationHuntView. The cooldown is spent once for the
         whole trail, not per find. Returns {"ok": False, "remaining_seconds": ...} or
-        {"ok": True, "nodes": [...]} where each node is {"band", "stones", "item_name",
-        "quantity"} (see exploration.roll_explore — either stones or item_name is set)."""
+        {"ok": True, "nodes": [...], "white_heaven": bool} where each node is {"band",
+        "stones", "item_name", "quantity"} (see exploration.roll_explore — either stones or
+        item_name is set). white_heaven mirrors whether the caller's own White Heaven status
+        was "present" for this roll (see ExplorationHuntView) -- for its own reward-pool
+        swap, not just display."""
         player = self.db.get_or_create_player(user_id, name)
         remaining = self._check_cooldown(player, "last_explore_ts", self.EXPLORE_COOLDOWN_SECONDS)
         if remaining > 0:
@@ -2688,7 +2691,7 @@ class GameManager:
                 if node["stones"]:
                     node["stones"] = round(node["stones"] * stone_mult)
         self.db.set_timestamp_column(user_id, "last_explore_ts", int(time.time()))
-        return {"ok": True, "nodes": nodes, "region_find": self.maybe_trigger_region_discovery(user_id, name)}
+        return {"ok": True, "nodes": nodes, "white_heaven": in_white_heaven, "region_find": self.maybe_trigger_region_discovery(user_id, name)}
 
     def collect_exploration_hunt(self, user_id: int, collected_stones: int, collected_items: dict):
         """Grants whatever an ExplorationHuntView session actually hunted down — called once

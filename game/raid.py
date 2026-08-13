@@ -31,12 +31,13 @@ Design decisions worth flagging:
 
 import asyncio
 import dataclasses
+import os
 import random
 import time
 
 import discord
 
-from . import avatar, avatar_gear, canon_gu, chargen, dao_paths
+from . import avatar, avatar_gear, canon_gu, chargen, dao_paths, white_heaven
 from .equipment import parse_gu_name
 from .base_view import GameView
 from .character_class import CLASS_EMOJI
@@ -785,6 +786,10 @@ class RaidView(TeamBattleEngine, GameView):
         else:
             footer_text = "This raid has ended."
         embed.set_footer(text=footer_text)
+        # Same "attach once at send, keep pointing every later embed at it" convention as
+        # hunt.py's identical block -- see its own comment for why.
+        if self.enemies[0].monster.realm == "White Heaven" and os.path.exists(white_heaven.WHITE_HEAVEN_IMAGE_PATH):
+            embed.set_image(url=f"attachment://{os.path.basename(white_heaven.WHITE_HEAVEN_IMAGE_PATH)}")
         return embed
 
 

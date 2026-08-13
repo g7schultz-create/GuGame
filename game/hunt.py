@@ -1,10 +1,11 @@
 import asyncio
 import dataclasses
+import os
 import random
 
 import discord
 
-from . import avatar, canon_gu, chargen, combat, dao_paths
+from . import avatar, canon_gu, chargen, combat, dao_paths, white_heaven
 from .base_view import GameView
 from .equipment import EQUIPMENT, gear_power_score, parse_gu_name
 from .items import ITEMS, roll_essence_restoration_pill_drop
@@ -1124,6 +1125,14 @@ class HuntView(GameView):
             )
             if self.status == "fighting" else "This hunt has ended."
         )
+        # The shared White Heaven image (see white_heaven_view.build_white_heaven_image_file)
+        # is only physically ATTACHED once, at the initial send in cog.py -- but it stays on
+        # the message across every subsequent edit that doesn't clear attachments (none of
+        # this view's do), so every later embed just needs to keep pointing at that same
+        # attachment to keep rendering it (mirrors InheritanceGroundBattleView.build_embed's
+        # identical convention).
+        if m.realm == "White Heaven" and os.path.exists(white_heaven.WHITE_HEAVEN_IMAGE_PATH):
+            embed.set_image(url=f"attachment://{os.path.basename(white_heaven.WHITE_HEAVEN_IMAGE_PATH)}")
         return embed
 
 

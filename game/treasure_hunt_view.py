@@ -1,7 +1,9 @@
 import asyncio
+import os
+
 import discord
 
-from . import treasure_hunt
+from . import treasure_hunt, white_heaven
 from .base_view import GameView
 
 UNREVEALED_EMOJI = "🫧"
@@ -89,4 +91,8 @@ class TreasureHuntView(GameView):
             embed.add_field(name=f"Dug up ({self._digs_used()}/{max_digs})", value="\n".join(lines)[:1024], inline=False)
         else:
             embed.add_field(name=f"Dug up (0/{max_digs})", value="Nothing dug up yet — click a bubble!", inline=False)
+        # Same "attach once at send, keep pointing every later embed at it" convention as
+        # hunt.py's identical block -- see its own comment for why.
+        if self.white_heaven and os.path.exists(white_heaven.WHITE_HEAVEN_IMAGE_PATH):
+            embed.set_image(url=f"attachment://{os.path.basename(white_heaven.WHITE_HEAVEN_IMAGE_PATH)}")
         return embed

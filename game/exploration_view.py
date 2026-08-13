@@ -1,7 +1,9 @@
 import asyncio
+import os
+
 import discord
 
-from . import gathering, professions
+from . import gathering, professions, white_heaven
 from .base_view import GameView
 from .ui_utils import path_footer
 
@@ -29,11 +31,12 @@ class ExplorationHuntView(GameView):
     time — mirrors MiningVeinView/GatheringPatchView exactly, just themed for exploring.
     Leaving early banks whatever was already found and forfeits the rest of the trail."""
 
-    def __init__(self, user_id: int, game, display_name: str, nodes: list):
+    def __init__(self, user_id: int, game, display_name: str, nodes: list, white_heaven: bool = False):
         super().__init__(timeout=180)
         self.user_id = user_id
         self.game = game
         self.display_name = display_name
+        self.white_heaven = white_heaven
         self.nodes = nodes
         self.current_index = 0
         self.collected_stones = 0
@@ -156,4 +159,8 @@ class ExplorationHuntView(GameView):
 
         embed.add_field(name="Stats", value=self._stats_line(player), inline=False)
         embed.set_footer(text=path_footer(player))
+        # Same "attach once at send, keep pointing every later embed at it" convention as
+        # hunt.py's identical block -- see its own comment for why.
+        if self.white_heaven and os.path.exists(white_heaven.WHITE_HEAVEN_IMAGE_PATH):
+            embed.set_image(url=f"attachment://{os.path.basename(white_heaven.WHITE_HEAVEN_IMAGE_PATH)}")
         return embed

@@ -924,7 +924,12 @@ class GameCog(commands.Cog):
             return
         view = TreasureHuntView( interaction.user.id, self.game, interaction.user.display_name, board, white_heaven=white_heaven)
         embed = await asyncio.to_thread(view.build_embed)
-        await interaction.response.send_message(content=message, embed=embed, view=view, ephemeral=False)
+        # See the identical White Heaven image note on /hunt above.
+        file = await asyncio.to_thread(build_white_heaven_image_file) if white_heaven else None
+        if file:
+            await interaction.response.send_message(content=message, embed=embed, view=view, file=file, ephemeral=False)
+        else:
+            await interaction.response.send_message(content=message, embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
 
     # -- Equipment presets (save/restore a full loadout by name — /preset_save afk, /preset_load
@@ -1041,7 +1046,14 @@ class GameCog(commands.Cog):
         )
         await asyncio.to_thread(self.game.start_active_hunt, interaction.user.id)
         embed = await asyncio.to_thread(view.build_embed)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
+        # The shared White Heaven image (see white_heaven_view.build_white_heaven_image_file)
+        # only needs to be physically attached on this very first send -- build_embed's own
+        # White Heaven branch keeps every later edit pointing at the same attachment.
+        file = await asyncio.to_thread(build_white_heaven_image_file) if in_white_heaven else None
+        if file:
+            await interaction.response.send_message(embed=embed, view=view, file=file, ephemeral=False)
+        else:
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
         region_find = await asyncio.to_thread(self.game.maybe_trigger_region_discovery, interaction.user.id, interaction.user.display_name)
         notice = _region_find_notice(region_find)
@@ -1137,7 +1149,8 @@ class GameCog(commands.Cog):
         # White Heaven -- see the identical branch on /hunt above. No hard minimum-team-size
         # gate (per explicit decision): the boss is simply tuned strong enough that a solo
         # attempt (including via /solo_raid below) is impractical.
-        if player["white_heaven_status"] == "present":
+        in_white_heaven = player["white_heaven_status"] == "present"
+        if in_white_heaven:
             boss_name = raid_boss_name_for_white_heaven()
             stat_multiplier = 1.0
         else:
@@ -1149,7 +1162,12 @@ class GameCog(commands.Cog):
         # HuntView's construction above (RaidView.__init__ also calls asyncio.create_task).
         view = RaidView(self.game, boss_name, stat_multiplier=stat_multiplier)
         embed = await asyncio.to_thread(view.build_embed)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
+        # See the identical White Heaven image note on /hunt above.
+        file = await asyncio.to_thread(build_white_heaven_image_file) if in_white_heaven else None
+        if file:
+            await interaction.response.send_message(embed=embed, view=view, file=file, ephemeral=False)
+        else:
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
         region_find = await asyncio.to_thread(self.game.maybe_trigger_region_discovery, interaction.user.id, interaction.user.display_name)
         notice = _region_find_notice(region_find)
@@ -1172,7 +1190,8 @@ class GameCog(commands.Cog):
         # White Heaven -- see the identical branch on /raid above. Note this means
         # /solo_raid CAN be used against a White Heaven boss (no hard gate, per explicit
         # decision) -- its own tuned toughness is what makes that impractical, not a refusal.
-        if player["white_heaven_status"] == "present":
+        in_white_heaven = player["white_heaven_status"] == "present"
+        if in_white_heaven:
             boss_name = raid_boss_name_for_white_heaven()
             stat_multiplier = 1.0
         else:
@@ -1194,7 +1213,12 @@ class GameCog(commands.Cog):
         view._begin_fight_or_abandon()
         await asyncio.to_thread(view._build_components)
         embed = await asyncio.to_thread(view.build_embed)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
+        # See the identical White Heaven image note on /hunt above.
+        file = await asyncio.to_thread(build_white_heaven_image_file) if in_white_heaven else None
+        if file:
+            await interaction.response.send_message(embed=embed, view=view, file=file, ephemeral=False)
+        else:
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
         region_find = await asyncio.to_thread(self.game.maybe_trigger_region_discovery, interaction.user.id, interaction.user.display_name)
         notice = _region_find_notice(region_find)
@@ -1370,9 +1394,14 @@ class GameCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        view = ExplorationHuntView( interaction.user.id, self.game, interaction.user.display_name, result["nodes"])
+        view = ExplorationHuntView( interaction.user.id, self.game, interaction.user.display_name, result["nodes"], white_heaven=result["white_heaven"])
         embed = await asyncio.to_thread(view.build_embed)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
+        # See the identical White Heaven image note on /hunt above.
+        file = await asyncio.to_thread(build_white_heaven_image_file) if result["white_heaven"] else None
+        if file:
+            await interaction.response.send_message(embed=embed, view=view, file=file, ephemeral=False)
+        else:
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
         notice = _region_find_notice(result.get("region_find"))
         if notice:
