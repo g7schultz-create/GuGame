@@ -58,14 +58,27 @@ def _stats(archetype: str) -> dict:
     )
 
 
-# Generic Tier 8 materials only for now (see game/content/materials_white_heaven.py, added
-# in a later phase, for the flavor-named White Heaven Floating Dust/Aurora-shard drops layered
-# on top of these).
-_HUNT_DROPS = [
-    DropEntry(chance=1.00, item_name="Tier 8 Beast Core"),
-    DropEntry(chance=0.70, item_name="Tier 8 Beast Material"),
-    DropEntry(chance=0.30, item_name="Tier 8 Ore"),
+# Generic Tier 8 materials, each monster's own named trophy (see game/content/
+# materials_white_heaven.py), and a smaller chance at the region's shared flavor materials
+# (Floating Dust/Aurora shards/Cloud Sea mist/Lotus petal) -- every hunt mob rolls all 4 of
+# these independently.
+_SHARED_FLAVOR_DROPS = [
+    DropEntry(chance=0.35, item_name="White Heaven Floating Dust", quantity=2),
+    DropEntry(chance=0.20, item_name="Aurora-Veined Shard"),
+    DropEntry(chance=0.15, item_name="Cloud Sea Mist Vial"),
+    DropEntry(chance=0.08, item_name="Nine Heavens Lotus Petal"),
 ]
+
+
+def _hunt_drops(trophy_name: str) -> list:
+    return [
+        DropEntry(chance=1.00, item_name="Tier 8 Beast Core"),
+        DropEntry(chance=0.70, item_name="Tier 8 Beast Material"),
+        DropEntry(chance=0.30, item_name="Tier 8 Ore"),
+        DropEntry(chance=0.75, item_name=trophy_name),
+        *_SHARED_FLAVOR_DROPS,
+    ]
+
 
 BLINKING_BIRDS = Monster(
     name="Blinking Birds",
@@ -74,7 +87,7 @@ BLINKING_BIRDS = Monster(
     habitat="The Cloud Seas",
     description="A flock that doesn't so much fly as blink from cloud to cloud, each landing already mid-strike before the eye catches up.",
     ability=MonsterAbility(name="Blink Strike", description="Vanishes and reappears mid-swing, then feeds on the wound it just opened.", str_multiplier=1.15, lifesteal_percent=0.15),
-    drops=_HUNT_DROPS,
+    drops=_hunt_drops("Blinking Bird Feather"),
     gu_rank=8,
     encounter_weight=1.0,
     **_stats("Skirmisher"),
@@ -87,7 +100,7 @@ REMNANT_HEAVENLY_DOGS = Monster(
     habitat="The Aurora Resource Zones",
     description="What's left of a celestial hound pack, still hunting long after whatever bound them here stopped caring whether they ever stopped.",
     ability=MonsterAbility(name="Undying Fang", description="A relentless bite that keeps the pack going no matter how much it's already lost.", str_multiplier=1.05, lifesteal_percent=0.30),
-    drops=_HUNT_DROPS,
+    drops=_hunt_drops("Remnant Heavenly Dog Fang"),
     gu_rank=8,
     encounter_weight=1.0,
     **_stats("Guardian"),
@@ -100,7 +113,7 @@ CLOUD_BEASTS = Monster(
     habitat="The Floating Continents",
     description="Enormous, slow-drifting creatures that seem woven from the floating continents themselves, absorbing blows like they were never really solid to begin with.",
     ability=MonsterAbility(name="Cloudbody Absorption", description="A dense, half-solid body that shrugs off and slowly regrows from damage.", str_multiplier=1.10, lifesteal_percent=0.20),
-    drops=_HUNT_DROPS,
+    drops=_hunt_drops("Cloud Beast Hide"),
     gu_rank=8,
     encounter_weight=1.0,
     **_stats("Mystic"),
@@ -118,10 +131,14 @@ _RAID_DROPS_MAIN = [
     DropEntry(chance=1.00, item_name="Tier 8 Beast Material", quantity=2),
     DropEntry(chance=1.00, item_name="Tier 8 Ore", quantity=2),
     DropEntry(chance=0.50, item_name="Primeval Essence Crystal", quantity=30),
+    DropEntry(chance=1.00, item_name="Aurora-Veined Shard", quantity=2),
+    DropEntry(chance=0.60, item_name="Nine Heavens Lotus Petal"),
+    *_SHARED_FLAVOR_DROPS,
 ]
 _RAID_DROPS_ADD = [
     DropEntry(chance=1.00, item_name="Tier 8 Beast Core"),
     DropEntry(chance=0.60, item_name="Tier 8 Beast Material"),
+    *_SHARED_FLAVOR_DROPS,
 ]
 
 GROTTO_HEAVENS_BOUND_IMMORTAL = Monster(

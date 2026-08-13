@@ -194,10 +194,12 @@ ITEMS["Soul Crystal"] = Item(
 from .content.materials import VERDANT_MATERIALS  # noqa: E402
 from .content.materials_hundred_beast_mountains import HUNDRED_BEAST_MOUNTAINS_MATERIALS  # noqa: E402
 from .content.materials_crimson_furnace import CRIMSON_FURNACE_MATERIALS  # noqa: E402
+from .content.materials_white_heaven import WHITE_HEAVEN_MATERIALS  # noqa: E402
 
 ITEMS.update(VERDANT_MATERIALS)
 ITEMS.update(HUNDRED_BEAST_MOUNTAINS_MATERIALS)
 ITEMS.update(CRIMSON_FURNACE_MATERIALS)
+ITEMS.update(WHITE_HEAVEN_MATERIALS)
 
 # -- Alchemy-craftable pills (see /alchemy, game/alchemy.py) -------------------------------
 # Generic names for now (real ones come later) — one item per (pill type, tier). Each of
