@@ -245,6 +245,22 @@ class GameDatabase:
         "white_heaven_status": "TEXT DEFAULT 'away'",
         "white_heaven_travel_started_ts": "INTEGER DEFAULT 0",
 
+        # Black Heaven (see black_heaven.py / /black_heaven) -- a second, deadlier Dao Seeking+
+        # endgame region alongside White Heaven, with a real 2h wall-clock travel delay each way
+        # (double White Heaven's own 1h). Same 'away' -> 'traveling_there' -> 'present' ->
+        # 'traveling_back' -> 'away' cycle and the same "status transition alone is a sufficient
+        # completion guard" reasoning as white_heaven_status above -- see complete_black_heaven_
+        # travel's own docstring. Independent of white_heaven_status: a player can in principle
+        # be present in both regions at once, mirroring how world_region/white_heaven_status
+        # already coexist as separate, non-unified location flags.
+        "black_heaven_status": "TEXT DEFAULT 'away'",
+        "black_heaven_travel_started_ts": "INTEGER DEFAULT 0",
+        # Search Black Heaven's own "one at a time" busy flag + leader-only cooldown -- same
+        # active_inheritance_ground_started_ts/last_inheritance_ground_ts shape (2h stale-guard,
+        # 4h leader-only cooldown), including its own AbandonBlackHeavenSearchView from day one.
+        "active_black_heaven_started_ts": "INTEGER DEFAULT 0",
+        "last_black_heaven_search_ts": "INTEGER DEFAULT 0",
+
         # Sect membership (see sects.py / /sect) -- a player belongs to at most one sect at a
         # time, so this lives directly on the player row rather than a separate membership
         # table, the same convention world_region/root_name/physique_name already use for
@@ -4246,6 +4262,69 @@ class GameDatabase:
         rows = cur.fetchall()
         con.close()
         return rows
+
+    # -- Black Heaven (see game/black_heaven.py / /black_heaven) -- a real 2h travel delay each
+    # way, auto-completed the same way White Heaven's own travel is above. Search Black Heaven's
+    # own busy-flag/cooldown pair mirrors Inheritance Ground's active/cooldown methods further
+    # below (start_active_inheritance_ground_bulk et al) rather than being duplicated here.
+
+    def start_black_heaven_travel(self, user_id: int, status: str):
+        """status is 'traveling_there' or 'traveling_back' -- the direction of this trip."""
+        con = self.connect()
+        con.execute(
+            "UPDATE players SET black_heaven_status = ?, black_heaven_travel_started_ts = ? WHERE user_id = ?",
+            (status, int(time.time()), user_id),
+        )
+        con.commit()
+        con.close()
+
+    def complete_black_heaven_travel(self, user_id: int, status: str):
+        """status is 'present' (arrival) or 'away' (return) -- same no-separate-notified-guard
+        reasoning as complete_white_heaven_travel's own docstring."""
+        con = self.connect()
+        con.execute(
+            "UPDATE players SET black_heaven_status = ?, black_heaven_travel_started_ts = 0 WHERE user_id = ?",
+            (status, user_id),
+        )
+        con.commit()
+        con.close()
+
+    def get_players_with_pending_black_heaven_travel(self) -> list:
+        """Candidates only -- elapsed-time filtering done in Python, same convention as
+        get_players_with_pending_white_heaven_travel."""
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute("SELECT * FROM players WHERE black_heaven_status IN ('traveling_there', 'traveling_back')")
+        rows = cur.fetchall()
+        con.close()
+        return rows
+
+    def start_active_black_heaven_bulk(self, user_ids: list, ts: int):
+        if not user_ids:
+            return
+        con = self.connect()
+        placeholders = ",".join("?" for _ in user_ids)
+        con.execute(f"UPDATE players SET active_black_heaven_started_ts = ? WHERE user_id IN ({placeholders})", [ts, *user_ids])
+        con.commit()
+        con.close()
+
+    def clear_active_black_heaven_bulk(self, user_ids: list):
+        if not user_ids:
+            return
+        con = self.connect()
+        placeholders = ",".join("?" for _ in user_ids)
+        con.execute(f"UPDATE players SET active_black_heaven_started_ts = 0 WHERE user_id IN ({placeholders})", user_ids)
+        con.commit()
+        con.close()
+
+    def set_black_heaven_search_cooldown_bulk(self, user_ids: list, ts: int):
+        if not user_ids:
+            return
+        con = self.connect()
+        placeholders = ",".join("?" for _ in user_ids)
+        con.execute(f"UPDATE players SET last_black_heaven_search_ts = ? WHERE user_id IN ({placeholders})", [ts, *user_ids])
+        con.commit()
+        con.close()
 
     # -- Farming -----------------------------------------------------------------
 
