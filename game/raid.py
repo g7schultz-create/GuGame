@@ -381,7 +381,7 @@ class RaidView(TeamBattleEngine, GameView):
             # -- one independent 1/5000 roll per participant, same as canon_drop just above,
             # only ever eligible against a White Heaven boss (detected via its own realm field).
             if self.enemies[0].monster.realm == "White Heaven":
-                bonus_gu = self.game.roll_white_heaven_bonus_gu()
+                bonus_gu = self.game.roll_white_heaven_bonus_gu(self.game.WHITE_HEAVEN_RAID_BONUS_GU_CHANCE)
                 if bonus_gu:
                     loot[bonus_gu] = loot.get(bonus_gu, 0) + 1
                     self._log(f"🌟 A Rank 8 Unique Gu descends from White Heaven itself for **{p['name']}** — **{bonus_gu}**!")

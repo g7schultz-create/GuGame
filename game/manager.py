@@ -1217,17 +1217,21 @@ class GameManager:
     # White Heaven's own 20 Rank 8 Unique Gu (see game/content/canon_gu_white_heaven.py) --
     # a SEPARATE roll from canon_gu.roll_canon_gu_drop's normal weighted mechanism (these 20
     # are drop_weight=0, so that roll always skips them entirely, same as the 2 pre-existing
-    # Uniques). Confirmed via explicit request: ONE combined 1/5000 roll per White-Heaven
-    # kill decides if ANY of the 20 drops at all, not each independently.
-    WHITE_HEAVEN_BONUS_GU_CHANCE = 1 / 5000
+    # Uniques). ONE combined roll per White-Heaven kill decides if ANY of the 20 drops at
+    # all, not each independently -- hunt and raid get their own separate rate (raid rolls
+    # once per participant, so it's kept lower-odds-per-attempt than hunt's single roll per
+    # kill, per explicit request).
+    WHITE_HEAVEN_HUNT_BONUS_GU_CHANCE = 1 / 10000
+    WHITE_HEAVEN_RAID_BONUS_GU_CHANCE = 1 / 5000
 
-    def roll_white_heaven_bonus_gu(self) -> Optional[str]:
-        """Called once per White-Heaven hunt/raid kill (see hunt.py's/raid.py's own victory
-        handling, gated on the defeated monster's realm == "White Heaven"). Always rolls at
-        Common quality/star 1, same "a newly obtained Gu starts at 1 star" convention
-        canon_gu.roll_canon_gu_drop uses. Returns an item_name, or None on a miss (by far the
-        common case at 1/5000)."""
-        if random.random() >= self.WHITE_HEAVEN_BONUS_GU_CHANCE:
+    def roll_white_heaven_bonus_gu(self, chance: float) -> Optional[str]:
+        """Called once per White-Heaven hunt kill or once per raid participant (see hunt.py's/
+        raid.py's own victory handling, gated on the defeated monster's realm == "White
+        Heaven", passing WHITE_HEAVEN_HUNT_BONUS_GU_CHANCE/WHITE_HEAVEN_RAID_BONUS_GU_CHANCE
+        respectively). Always rolls at Common quality/star 1, same "a newly obtained Gu
+        starts at 1 star" convention canon_gu.roll_canon_gu_drop uses. Returns an item_name,
+        or None on a miss (by far the common case)."""
+        if random.random() >= chance:
             return None
         name = random.choice(canon_gu_white_heaven.WHITE_HEAVEN_CANON_GU_NAMES)
         return equipment.gu_item_name(name, "Common")

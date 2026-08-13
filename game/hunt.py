@@ -600,11 +600,11 @@ class HuntView(GameView):
         if canon_drop:
             self.loot[canon_drop] = self.loot.get(canon_drop, 0) + 1
         # White Heaven's own 20 Rank 8 Unique Gu (see GameManager.roll_white_heaven_bonus_gu)
-        # -- a completely separate 1/5000 roll, only ever eligible against a White Heaven
+        # -- a completely separate 1/10000 roll, only ever eligible against a White Heaven
         # monster (detected via its own realm field, set on every White Heaven Monster
         # instance -- see content/monsters/white_heaven.py).
         if self.monster.realm == "White Heaven":
-            bonus_gu = self.game.roll_white_heaven_bonus_gu()
+            bonus_gu = self.game.roll_white_heaven_bonus_gu(self.game.WHITE_HEAVEN_HUNT_BONUS_GU_CHANCE)
             if bonus_gu:
                 self.loot[bonus_gu] = self.loot.get(bonus_gu, 0) + 1
                 self._log_line(f"🌟 A Rank 8 Unique Gu descends from White Heaven itself — **{bonus_gu}**!")
