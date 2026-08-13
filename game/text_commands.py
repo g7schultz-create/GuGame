@@ -27,7 +27,7 @@ class _ShimResponse:
         self._ctx = ctx
         self.message: discord.Message = None
 
-    async def send_message(self, content=None, embed=None, view=None, ephemeral: bool = False):
+    async def send_message(self, content=None, embed=None, view=None, file=None, ephemeral: bool = False):
         # ephemeral has no equivalent for a plain text message — just post normally.
         kwargs = {}
         if content is not None:
@@ -36,6 +36,8 @@ class _ShimResponse:
             kwargs["embed"] = embed
         if view is not None:
             kwargs["view"] = view
+        if file is not None:
+            kwargs["file"] = file
         self.message = await self._ctx.send(**kwargs)
 
     async def defer(self):
@@ -51,7 +53,7 @@ class _ShimFollowup:
     def __init__(self, ctx: commands.Context):
         self._ctx = ctx
 
-    async def send(self, content=None, embed=None, view=None, ephemeral: bool = False):
+    async def send(self, content=None, embed=None, view=None, file=None, ephemeral: bool = False):
         kwargs = {}
         if content is not None:
             kwargs["content"] = content
@@ -59,6 +61,8 @@ class _ShimFollowup:
             kwargs["embed"] = embed
         if view is not None:
             kwargs["view"] = view
+        if file is not None:
+            kwargs["file"] = file
         await self._ctx.send(**kwargs)
 
 
