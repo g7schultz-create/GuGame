@@ -93,6 +93,38 @@ def validate_white_heaven() -> List[str]:
     return errors
 
 
+def validate_black_heaven() -> List[str]:
+    """Checks game/content/monsters/black_heaven.py's own battle-bubble roster -- reuses the
+    same per-monster checks validate_monsters()/validate_white_heaven() use, but against
+    ALL_MONSTERS_BY_RARITY directly. Unlike White Heaven's own hunt/raid roster, this one is
+    NEVER registered into monsters.MONSTERS/BOSS_GROUPS at all (roll_black_heaven_battle_
+    monster reads straight from ALL_MONSTERS_BY_RARITY by rarity tier, not by name lookup),
+    so the dict-membership checks validate_white_heaven() does don't apply here -- this is
+    also net-new validator coverage for the underlying rarity-tiered-roster pattern:
+    content/monsters/blood_sea_ancestor.py (Inheritance Ground's own battle-bubble roster,
+    the template this file's own shape was copied from) has never had validator coverage
+    either."""
+    from .monsters import black_heaven as black_heaven_monsters
+    from ..equipment import EQUIPMENT
+    from ..items import ITEMS
+
+    known_items = set(ITEMS) | set(EQUIPMENT)
+    errors: List[str] = []
+    seen_names = set()
+
+    for rarity, roster in black_heaven_monsters.ALL_MONSTERS_BY_RARITY.items():
+        if not roster:
+            errors.append(f"[black_heaven] ALL_MONSTERS_BY_RARITY['{rarity}'] has no monsters.")
+        for monster in roster:
+            context = f"black_heaven battle ({rarity})"
+            _check_duplicate(monster, context, errors, seen_names, "ALL_MONSTERS_BY_RARITY")
+            _validate_one_monster(monster, context, errors, known_items)
+            if black_heaven_monsters.RARITY_BY_NAME.get(monster.name) != rarity:
+                errors.append(f"[black_heaven] '{monster.name}': RARITY_BY_NAME doesn't map back to '{rarity}' — grant_black_heaven_battle_loot's rarity lookup would misfire.")
+
+    return errors
+
+
 def _check_duplicate(monster, context: str, errors: List[str], seen_names: set, dict_name: str) -> None:
     name = getattr(monster, "name", None)
     if name and name in seen_names:
@@ -593,6 +625,7 @@ def validate_all_content() -> List[str]:
     errors: List[str] = []
     errors.extend(validate_monsters())
     errors.extend(validate_white_heaven())
+    errors.extend(validate_black_heaven())
     errors.extend(validate_discoveries())
     errors.extend(validate_manual_pages())
     errors.extend(validate_gu_families())
