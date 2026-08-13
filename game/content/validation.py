@@ -56,6 +56,43 @@ def validate_monsters() -> List[str]:
     return errors
 
 
+def validate_white_heaven() -> List[str]:
+    """Checks game/content/monsters/white_heaven.py's fixed-difficulty roster -- reuses the
+    exact same per-monster checks validate_monsters() uses, but against
+    WHITE_HEAVEN_HUNT_MONSTERS/WHITE_HEAVEN_RAID_GROUP directly, since those are
+    deliberately NOT folded into HUNT_MONSTERS_BY_REALM/RAID_GROUPS_BY_REALM (fixed
+    difficulty, not realm-indexed) and so validate_monsters()'s own realm-keyed loops never
+    see them at all."""
+    from .. import monsters as monsters_module
+    from ..equipment import EQUIPMENT
+    from ..items import ITEMS
+
+    known_items = set(ITEMS) | set(EQUIPMENT)
+    errors: List[str] = []
+    seen_names = set()
+
+    if not monsters_module.WHITE_HEAVEN_HUNT_MONSTERS:
+        errors.append("[white_heaven] WHITE_HEAVEN_HUNT_MONSTERS has no monsters.")
+    for monster in monsters_module.WHITE_HEAVEN_HUNT_MONSTERS:
+        _check_duplicate(monster, "white_heaven hunt", errors, seen_names, "MONSTERS")
+        _validate_one_monster(monster, "white_heaven hunt", errors, known_items)
+        if monster.name not in monsters_module.MONSTERS:
+            errors.append(f"[white_heaven] '{monster.name}' missing from the flat MONSTERS dict — HuntView's lookup would fail.")
+
+    group = monsters_module.WHITE_HEAVEN_RAID_GROUP
+    if not group:
+        errors.append("[white_heaven] WHITE_HEAVEN_RAID_GROUP has no enemies.")
+    for i, monster in enumerate(group):
+        context = "white_heaven raid" + (" (main boss)" if i == 0 else " (mini)")
+        if i == 0:
+            _check_duplicate(monster, context, errors, seen_names, "BOSSES/BOSS_GROUPS")
+        _validate_one_monster(monster, context, errors, known_items)
+    if group and group[0].name not in monsters_module.BOSS_GROUPS:
+        errors.append(f"[white_heaven] raid main boss '{group[0].name}' missing from BOSS_GROUPS — RaidView's lookup would fail.")
+
+    return errors
+
+
 def _check_duplicate(monster, context: str, errors: List[str], seen_names: set, dict_name: str) -> None:
     name = getattr(monster, "name", None)
     if name and name in seen_names:
@@ -545,6 +582,7 @@ def validate_physique_specs() -> List[str]:
 def validate_all_content() -> List[str]:
     errors: List[str] = []
     errors.extend(validate_monsters())
+    errors.extend(validate_white_heaven())
     errors.extend(validate_discoveries())
     errors.extend(validate_manual_pages())
     errors.extend(validate_gu_families())

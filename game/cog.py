@@ -22,7 +22,10 @@ from .split_body_view import SplitBodyView
 from .hunt import AbandonHuntView, HuntView
 from .pvp_view import PvPView
 from .leaderboard_view import LeaderboardView
-from .monsters import hunt_monster_name_for_realm, raid_boss_name_for_realm
+from .monsters import (
+    hunt_monster_name_for_realm, hunt_monster_name_for_white_heaven,
+    raid_boss_name_for_realm, raid_boss_name_for_white_heaven,
+)
 from .shop import ShopView
 from .premium_view import PremiumView
 from .gu_upgrade import GuUpgradeView
@@ -1015,9 +1018,18 @@ class GameCog(commands.Cog):
             abandon_view = AbandonHuntView(interaction.user.id, self.game)
             await interaction.response.send_message("🐾 Finish your current hunt first!", view=abandon_view, ephemeral=True)
             return
-        great_realm_index = int(realm.value) if realm else _default_great_realm_index(player)
-        monster_name = hunt_monster_name_for_realm(great_realm_index)
-        region_modifiers = await asyncio.to_thread(self.game.region_encounter_modifiers, interaction.user.id, interaction.user.display_name)
+        # White Heaven (see game/white_heaven.py) -- while present, /hunt draws from its own
+        # fixed, far more dangerous pool instead of the normal realm ladder, and the `realm`
+        # Choice parameter is ignored entirely (not opt-out-able while there). No region
+        # modifiers either -- White Heaven's own difficulty is already fully self-contained.
+        in_white_heaven = player["white_heaven_status"] == "present"
+        if in_white_heaven:
+            monster_name = hunt_monster_name_for_white_heaven()
+            region_modifiers = None
+        else:
+            great_realm_index = int(realm.value) if realm else _default_great_realm_index(player)
+            monster_name = hunt_monster_name_for_realm(great_realm_index)
+            region_modifiers = await asyncio.to_thread(self.game.region_encounter_modifiers, interaction.user.id, interaction.user.display_name)
         # Constructed directly, NOT via asyncio.to_thread -- HuntView.__init__ itself calls
         # asyncio.create_task (to start the round timer), which requires a running loop on the
         # CURRENT thread; a to_thread worker thread never has one. The __init__ DB reads are
@@ -1122,12 +1134,20 @@ class GameCog(commands.Cog):
             abandon_view = AbandonRaidView(interaction.user.id, self.game)
             await interaction.response.send_message("🐉 Finish your current raid first!", view=abandon_view, ephemeral=True)
             return
-        great_realm_index = int(realm.value) if realm else _default_great_realm_index(player)
-        boss_name = raid_boss_name_for_realm(great_realm_index)
-        region_modifiers = await asyncio.to_thread(self.game.region_encounter_modifiers, interaction.user.id, interaction.user.display_name)
+        # White Heaven -- see the identical branch on /hunt above. No hard minimum-team-size
+        # gate (per explicit decision): the boss is simply tuned strong enough that a solo
+        # attempt (including via /solo_raid below) is impractical.
+        if player["white_heaven_status"] == "present":
+            boss_name = raid_boss_name_for_white_heaven()
+            stat_multiplier = 1.0
+        else:
+            great_realm_index = int(realm.value) if realm else _default_great_realm_index(player)
+            boss_name = raid_boss_name_for_realm(great_realm_index)
+            region_modifiers = await asyncio.to_thread(self.game.region_encounter_modifiers, interaction.user.id, interaction.user.display_name)
+            stat_multiplier = region_modifiers["stat_multiplier"]
         # Constructed directly, NOT via asyncio.to_thread -- see the identical note on
         # HuntView's construction above (RaidView.__init__ also calls asyncio.create_task).
-        view = RaidView(self.game, boss_name, stat_multiplier=region_modifiers["stat_multiplier"])
+        view = RaidView(self.game, boss_name, stat_multiplier=stat_multiplier)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
@@ -1149,12 +1169,20 @@ class GameCog(commands.Cog):
             abandon_view = AbandonRaidView(interaction.user.id, self.game)
             await interaction.response.send_message("🐉 Finish your current raid first!", view=abandon_view, ephemeral=True)
             return
-        great_realm_index = int(realm.value) if realm else _default_great_realm_index(player)
-        boss_name = raid_boss_name_for_realm(great_realm_index)
-        region_modifiers = await asyncio.to_thread(self.game.region_encounter_modifiers, interaction.user.id, interaction.user.display_name)
+        # White Heaven -- see the identical branch on /raid above. Note this means
+        # /solo_raid CAN be used against a White Heaven boss (no hard gate, per explicit
+        # decision) -- its own tuned toughness is what makes that impractical, not a refusal.
+        if player["white_heaven_status"] == "present":
+            boss_name = raid_boss_name_for_white_heaven()
+            stat_multiplier = 1.0
+        else:
+            great_realm_index = int(realm.value) if realm else _default_great_realm_index(player)
+            boss_name = raid_boss_name_for_realm(great_realm_index)
+            region_modifiers = await asyncio.to_thread(self.game.region_encounter_modifiers, interaction.user.id, interaction.user.display_name)
+            stat_multiplier = region_modifiers["stat_multiplier"]
         # Constructed directly, NOT via asyncio.to_thread -- see the identical note on /raid
         # above (RaidView.__init__ also calls asyncio.create_task).
-        view = RaidView(self.game, boss_name, stat_multiplier=region_modifiers["stat_multiplier"])
+        view = RaidView(self.game, boss_name, stat_multiplier=stat_multiplier)
         # Skips the whole "starting" join-window countdown -- join the caller immediately and
         # move straight to "fighting". RaidView.__init__ already scheduled its own
         # _start_countdown background task, but that harmlessly no-ops once it eventually

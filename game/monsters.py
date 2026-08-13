@@ -398,6 +398,7 @@ from .content.monsters.dao_seeking import (
     HEAVEN_DEFYING_DAO_TYRANT_RAID_GROUP,
     WORLD_SUNDERING_INTENT_COLOSSUS_RAID_GROUP,
 )
+from .content.monsters.white_heaven import WHITE_HEAVEN_HUNT_MONSTERS, WHITE_HEAVEN_RAID_GROUP
 
 # HUNT_MONSTERS_BY_REALM: realm_index -> [Monster, ...], the pool hunt_monster_name_for_realm
 # picks from. Every realm except 0, 1, 2, 3, and 5 still has exactly one generic generated
@@ -448,6 +449,28 @@ BOSSES = {group[0].name: group[0] for groups in RAID_GROUPS_BY_REALM.values() fo
 # Boss name -> [main boss, *minis] — the full enemy roster a /raid spawns. Index 0's
 # drop table is what the raid pays out on total victory; the rest are support adds.
 BOSS_GROUPS = {group[0].name: group for groups in RAID_GROUPS_BY_REALM.values() for group in groups}
+
+# White Heaven (see white_heaven.py, content/monsters/white_heaven.py) — deliberately NOT
+# folded into HUNT_MONSTERS_BY_REALM/RAID_GROUPS_BY_REALM above (those are keyed by
+# great_realm_index for the per-player-realm ladder; White Heaven's difficulty is fixed and
+# realm-INDEPENDENT, reachable by anyone Dao Seeking+). HuntView/RaidView both do a flat
+# MONSTERS[name]/BOSS_GROUPS[name] lookup regardless of which pool a name came from, so this
+# still needs registering into the same flat dicts those two just built.
+MONSTERS.update({monster.name: monster for monster in WHITE_HEAVEN_HUNT_MONSTERS})
+BOSSES[WHITE_HEAVEN_RAID_GROUP[0].name] = WHITE_HEAVEN_RAID_GROUP[0]
+BOSS_GROUPS[WHITE_HEAVEN_RAID_GROUP[0].name] = WHITE_HEAVEN_RAID_GROUP
+
+
+def hunt_monster_name_for_white_heaven() -> str:
+    """Weighted-random pick from White Heaven's own fixed hunt pool (see
+    hunt_monster_name_for_realm above, same shape, just not realm-indexed)."""
+    return random.choices(WHITE_HEAVEN_HUNT_MONSTERS, weights=[m.encounter_weight for m in WHITE_HEAVEN_HUNT_MONSTERS])[0].name
+
+
+def raid_boss_name_for_white_heaven() -> str:
+    """White Heaven currently has exactly one raid group — trivial today, but keeps the same
+    shape raid_boss_name_for_realm uses in case a second group is ever added."""
+    return WHITE_HEAVEN_RAID_GROUP[0].name
 
 
 def hunt_monster_name_for_realm(great_realm_index: int) -> str:
