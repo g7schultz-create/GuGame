@@ -6,8 +6,8 @@ import time
 from typing import Optional
 
 from . import (
-    accessories_data, accessories_gen, alchemy, avatar, avatar_gear, blacksmith, canon_gu, chargen, combat,
-    dao_companion, dao_paths, discovery_gen, equipment, exploration, gathering, gu_types,
+    accessories_data, accessories_gen, alchemy, avatar, avatar_gear, black_heaven, blacksmith, canon_gu, chargen,
+    combat, dao_companion, dao_paths, discovery_gen, equipment, exploration, gathering, gu_types,
     inheritance_ground_data, items, killer_move_gen, manual_data, manual_gen, monsters, professions, realms,
     search_data, sects, split_body, tournament, treasure_hunt, white_heaven, world_boss, world_regions,
 )
@@ -2414,6 +2414,81 @@ class GameManager:
             self.db.complete_white_heaven_travel(player["user_id"], "present" if arrived else "away")
             completed.append({"user_id": player["user_id"], "name": player["name"], "arrived": arrived})
         return completed
+
+    # -- Black Heaven: /black_heaven (see game/black_heaven.py) -- a second, deadlier Dao
+    # Seeking+ endgame region alongside White Heaven, reached via a real 2h travel delay each
+    # way (double White Heaven's own 1h). Same eligibility gate and auto-complete-on-sweep
+    # shape as White Heaven's own travel block above -- unlike White Heaven, /hunt and /raid
+    # are untouched while present; the entire region is /search_black_heaven (see
+    # ACTIVE_BLACK_HEAVEN_SEARCH_STALE_SECONDS/has_active_black_heaven_search below, and the
+    # full bubble-board block added in a later phase).
+
+    # No travel-discount Gu exists in this batch (unlike White Heaven's Heaven's Wing Gu), so
+    # this is a flat passthrough rather than an equipped-Gu lookup.
+    def _black_heaven_travel_seconds(self, user_id: int) -> int:
+        return black_heaven.BLACK_HEAVEN_TRAVEL_SECONDS
+
+    def get_black_heaven_status(self, user_id: int, name: str) -> dict:
+        player = self.db.get_or_create_player(user_id, name)
+        great_realm_index = realms.STAGES[player["realm_index"]].great_realm_index
+        started = player["black_heaven_travel_started_ts"]
+        remaining = max(0, self._black_heaven_travel_seconds(user_id) - (int(time.time()) - started)) if started else 0
+        return {
+            "player": player,
+            "eligible": black_heaven.is_eligible(great_realm_index),
+            "status": player["black_heaven_status"],
+            "remaining_seconds": remaining,
+        }
+
+    def start_black_heaven_travel(self, user_id: int, name: str) -> dict:
+        """'Depart for Black Heaven' -- only from 'away', only realm-eligible, only when no
+        trip is already in progress."""
+        status = self.get_black_heaven_status(user_id, name)
+        if not status["eligible"]:
+            return {"ok": False, "reason": "ineligible"}
+        if status["status"] != "away":
+            return {"ok": False, "reason": "busy", "status": status["status"]}
+        self.db.start_black_heaven_travel(user_id, "traveling_there")
+        return {"ok": True}
+
+    def start_black_heaven_return(self, user_id: int, name: str) -> dict:
+        """'Return Home' -- only from 'present', only when no trip is already in progress,
+        and only when no Search Black Heaven run is currently active (mirrors /inheritance_
+        ground's own "finish or abandon first" gating shape -- can't wander off mid-encounter)."""
+        status = self.get_black_heaven_status(user_id, name)
+        if status["status"] != "present":
+            return {"ok": False, "reason": "not_present", "status": status["status"]}
+        if self.has_active_black_heaven_search(status["player"]):
+            return {"ok": False, "reason": "active_search"}
+        self.db.start_black_heaven_travel(user_id, "traveling_back")
+        return {"ok": True}
+
+    def check_and_complete_black_heaven_travel(self) -> list:
+        """Periodic sweep (see GameCog.black_heaven_tick) -- auto-completes any Black Heaven
+        trip that's crossed BLACK_HEAVEN_TRAVEL_SECONDS, mirroring check_and_complete_white_
+        heaven_travel exactly. Returns [{"user_id", "name", "arrived"}, ...] for the caller to
+        DM."""
+        completed = []
+        now = int(time.time())
+        for player in self.db.get_players_with_pending_black_heaven_travel():
+            if now - player["black_heaven_travel_started_ts"] < self._black_heaven_travel_seconds(player["user_id"]):
+                continue
+            arrived = player["black_heaven_status"] == "traveling_there"
+            self.db.complete_black_heaven_travel(player["user_id"], "present" if arrived else "away")
+            completed.append({"user_id": player["user_id"], "name": player["name"], "arrived": arrived})
+        return completed
+
+    # -- Search Black Heaven's own "one at a time" busy flag + leader-only cooldown (see
+    # game/black_heaven_search_view.py) -- same shape as Inheritance Ground's own pair above.
+    # The full bubble-board generation/reward-grant block is added in a later phase; this much
+    # is needed now so start_black_heaven_return (above) can refuse to let a player wander off
+    # mid-Search.
+    ACTIVE_BLACK_HEAVEN_SEARCH_STALE_SECONDS = 2 * 3600
+    BLACK_HEAVEN_SEARCH_COOLDOWN_SECONDS = 4 * 3600
+
+    def has_active_black_heaven_search(self, player: dict) -> bool:
+        started = player["active_black_heaven_started_ts"]
+        return bool(started) and (time.time() - started) < self.ACTIVE_BLACK_HEAVEN_SEARCH_STALE_SECONDS
 
     # -- Gathering: /mine, /gather, /explore -----------------------------------
     # All three share a 15-minute cooldown (tracked independently per action) and let Luck

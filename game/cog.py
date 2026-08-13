@@ -54,6 +54,7 @@ from .inheritance_ground_view import (
 )
 from .region_view import RegionView
 from .white_heaven_view import WhiteHeavenView, build_white_heaven_image_file
+from .black_heaven_view import BlackHeavenView, build_black_heaven_image_file
 from .battlefield_view import BattlefieldView
 from .world_boss_view import WorldBossView
 from .manual_view import ManualView
@@ -124,6 +125,7 @@ class GameCog(commands.Cog):
         self.study_tick.start()
         self.essence_exchange_timeout_tick.start()
         self.white_heaven_tick.start()
+        self.black_heaven_tick.start()
 
     async def cog_unload(self):
         self.world_boss_tick.cancel()
@@ -133,6 +135,7 @@ class GameCog(commands.Cog):
         self.study_tick.cancel()
         self.essence_exchange_timeout_tick.cancel()
         self.white_heaven_tick.cancel()
+        self.black_heaven_tick.cancel()
 
     # World Boss respawn scheduler (see world_boss.py's own module docstring) -- checks every
     # 5 minutes whether the current boss expired and/or a fresh one is due; GameManager.
@@ -432,6 +435,36 @@ class GameCog(commands.Cog):
             if completed["arrived"] else
             "🏠 You've made it back home from White Heaven — `/hunt`, `/raid`, `/explore`, and "
             "`/search_forgotten_blessed_land` are back to normal."
+        )
+        try:
+            user = self.bot.get_user(completed["user_id"]) or await self.bot.fetch_user(completed["user_id"])
+            await user.send(message)
+        except discord.HTTPException:
+            pass
+
+    # Black Heaven travel (see game/black_heaven.py) -- same 5-minute cadence/shape as
+    # white_heaven_tick above, just a 2h trip instead of 1h. Same name-shadowing trap applies
+    # (this class also defines an app_commands method named black_heaven further down), so this
+    # is a plain literal too, not black_heaven.BLACK_HEAVEN_TICK_INTERVAL_SECONDS.
+    BLACK_HEAVEN_TICK_INTERVAL_SECONDS = 300
+
+    @tasks.loop(seconds=BLACK_HEAVEN_TICK_INTERVAL_SECONDS)
+    async def black_heaven_tick(self):
+        for completed in await asyncio.to_thread(self.game.check_and_complete_black_heaven_travel):
+            await self._dm_black_heaven_travel_complete(completed)
+
+    @black_heaven_tick.before_loop
+    async def _before_black_heaven_tick(self):
+        await self.bot.wait_until_ready()
+
+    async def _dm_black_heaven_travel_complete(self, completed: dict):
+        """Best-effort, same shape as _dm_white_heaven_travel_complete above."""
+        message = (
+            "☠️ You've arrived in **Black Heaven** — run `/search_black_heaven` to pop bubbles "
+            "for a chance at rare Gu, essence rewards, and Rank 8 materials (some bubbles hide "
+            "very dangerous guardians instead). Run `/black_heaven` any time to head back."
+            if completed["arrived"] else
+            "🏠 You've made it back home from Black Heaven."
         )
         try:
             user = self.bot.get_user(completed["user_id"]) or await self.bot.fetch_user(completed["user_id"])
@@ -1430,6 +1463,23 @@ class GameCog(commands.Cog):
         view = WhiteHeavenView(interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         file = await asyncio.to_thread(build_white_heaven_image_file)
+        if file:
+            await interaction.response.send_message(embed=embed, view=view, file=file)
+        else:
+            await interaction.response.send_message(embed=embed, view=view)
+
+    @app_commands.command(name="black_heaven", description="Travel to Black Heaven (Dao Seeking realm+) -- a real 2h journey each way")
+    @app_commands.guilds(GUILD)
+    async def black_heaven(self, interaction: discord.Interaction):
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
+        if not player["character_confirmed"]:
+            await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
+            return
+        # Constructed directly, NOT via asyncio.to_thread -- see every other View's own
+        # construction note in this file for why (commit 45e239a).
+        view = BlackHeavenView(interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        file = await asyncio.to_thread(build_black_heaven_image_file)
         if file:
             await interaction.response.send_message(embed=embed, view=view, file=file)
         else:
