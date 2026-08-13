@@ -1573,6 +1573,12 @@ class GameManager:
         # _monster_turn, team_battle.py's _resolve_enemy_hit) adds this on top of the normal
         # combat.MAX_DODGE_CHANCE instead of leaving that cap hardcoded.
         "dodge_cap_bonus_pct",
+        # Void Burial Gu / Nightmare Web Gu (see content/canon_gu_black_heaven.py) -- a
+        # player-freezes-enemy chance, additive with any class-ability freeze_chance already
+        # in play (e.g. Frostbinder's own Freeze action). The monster_frozen_rounds/frozen_
+        # rounds mechanism itself already existed for that class ability; this key just makes
+        # it Gu-grantable too (see hunt.py's _do_attack, team_battle.py's _resolve_round).
+        "freeze_chance_pct",
     )
 
     # A manual's essence_recovery_pct (see manual_view.EFFECT_LABELS) is the exact same

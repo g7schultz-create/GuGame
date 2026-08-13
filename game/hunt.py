@@ -563,7 +563,12 @@ class HuntView(GameView):
                 self._sunfire_burn_damage_per_tick = tick_damage
                 self._sunfire_burn_ticks_remaining = dao_paths.FIRE_BURN_TICKS
                 self._log_line(f"☀️ Sunfire catches hold of {self.monster.name}!")
-            if freeze_chance and self.monster_hp > 0 and random.random() < freeze_chance:
+            # Void Burial Gu / Nightmare Web Gu (see content/canon_gu_black_heaven.py) --
+            # freeze_chance_pct is additive on top of any class-ability freeze_chance already
+            # passed in (e.g. Frostbinder's own Freeze action), not a replacement, so the two
+            # sources roll independently.
+            total_freeze_chance = freeze_chance + self._trait_bonus("freeze_chance_pct")
+            if total_freeze_chance and self.monster_hp > 0 and random.random() < total_freeze_chance:
                 self.monster_frozen_rounds = max(self.monster_frozen_rounds, 1)
                 self._log_line(f"❄️ {self.monster.name} is frozen solid and will miss its next attack!")
         if self.monster_hp <= 0:

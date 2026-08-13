@@ -140,6 +140,27 @@ GU_TYPE_BY_NAME: Dict[str, str] = {
     "World-Crossing Wind Gu": "wind",
     "Heavenly Cloud Sea Gu": "cloud",
     "White Heaven Sovereign Gu": "heaven",
+
+    # Black Heaven's 15 Rank 7/8 Unique Gu (see content/canon_gu_black_heaven.py) -- same
+    # reuse-the-path-field convention. "dark" is a genuinely new type tag (see TYPE_AFFINITY
+    # below); "soul"/"poison"/"dream"/"star"/"wind"/"cloud" already existed and just get new
+    # name entries; "information"/"transformation" existed as tags elsewhere in the codebase
+    # but are bucketed as Gu types for the first time here.
+    "Endless Night Gu": "dark",
+    "Soul Devouring Gu": "soul",
+    "Black Heaven Star Gu": "star",
+    "Void Burial Gu": "dark",
+    "Ten Thousand Venoms Gu": "poison",
+    "Night Sky Gu": "star",
+    "Shadowless Perception Gu": "information",
+    "Dark Venom Gu": "poison",
+    "Astral Wind Gu": "wind",
+    "Soul Shackle Gu": "soul",
+    "Black Cloud Gu": "cloud",
+    "Falling Star Gu": "star",
+    "Nightmare Web Gu": "dream",
+    "Night Predator Gu": "transformation",
+    "Dark Reflection Gu": "dark",
 }
 
 # Every type tag actually used above -> which Killer Move "kind" it pushes toward. A Killer
@@ -162,6 +183,13 @@ TYPE_AFFINITY: Dict[str, str] = {
     # earth/blood/metal/bone), "yin_yang" and "qi" (restorative/essence themes, alongside
     # moon/light/food/water) -- "qi" already existed as a tag but was never bucketed here.
     "cloud": "buff", "yin_yang": "essence", "qi": "essence",
+    # Black Heaven's own 3 additions (see content/canon_gu_black_heaven.py): "dark" is a
+    # genuinely new tag, bucketed alongside "cloud" (defensive/domain themes). "information"
+    # and "transformation" already existed as tags elsewhere (manual_data.ALL_PATH_TAGS) but
+    # are bucketed as Gu-type affinities for the first time here -- "information" alongside
+    # storage/movement/luck/space (its one real mechanic, clue_chance_bonus_pct, is a
+    # discovery/loot stat), "transformation" alongside the aggressive damage themes above.
+    "dark": "buff", "information": "loot", "transformation": "damage",
 }
 
 

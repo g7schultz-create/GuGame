@@ -661,6 +661,14 @@ class TeamBattleEngine:
                     elif is_freeze and random.random() < FREEZE_PROC_CHANCE:
                         target.frozen_rounds = max(target.frozen_rounds, 1)
                         self._log(f"❄️ {target.monster.name} is frozen solid and will miss its next attack!")
+                    # Void Burial Gu / Nightmare Web Gu (see content/canon_gu_black_heaven.py)
+                    # -- an unconditional freeze roll on top of any class-ability freeze above
+                    # (Frostbinder's own is_freeze branch), rolled independently so the two
+                    # sources don't cancel each other out.
+                    freeze_pct = self._trait_bonus(p, "freeze_chance_pct")
+                    if freeze_pct > 0 and target.hp > 0 and random.random() < freeze_pct:
+                        target.frozen_rounds = max(target.frozen_rounds, 1)
+                        self._log(f"❄️ **{p['name']}** freezes {target.monster.name} solid — it will miss its next attack!")
             # Heavenly Solar/Lunar Physique stack growth -- ONCE per action if at least one
             # target was hit, never once per target, so a Lunar Physique AOE swing that lands
             # on several enemies at once doesn't grow stacks several times faster than a
