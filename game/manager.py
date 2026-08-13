@@ -12,7 +12,9 @@ from . import (
     search_data, sects, split_body, tournament, treasure_hunt, white_heaven, world_boss, world_regions,
 )
 from .content.monsters import blood_sea_ancestor
+from .content.monsters import black_heaven as black_heaven_monsters
 from .content import canon_gu_white_heaven
+from .content import canon_gu_black_heaven
 from .character_data import PATHS, PHYSIQUE_TIER_ORDER, RACES, ROOT_TIER_ORDER
 from .database import GameDatabase
 from .items import ITEMS, roll_essence_restoration_pill_drop
@@ -2495,6 +2497,74 @@ class GameManager:
     def has_active_black_heaven_search(self, player: dict) -> bool:
         started = player["active_black_heaven_started_ts"]
         return bool(started) and (time.time() - started) < self.ACTIVE_BLACK_HEAVEN_SEARCH_STALE_SECONDS
+
+    # -- Search Black Heaven's own battle-bubble roster (see content/monsters/black_heaven.py)
+    # -- weighted by TIER same as Inheritance Ground's own Blood Sea Ancestor roll
+    # (BLOOD_SEA_RARITY_TIER_WEIGHT above), each rarer tier both tougher (that file's own
+    # _RARITY_MULTIPLIER) and better-rewarding below. Steeper per-battle escalation than
+    # Inheritance Ground's own 0.20 (BATTLE_STAT_MULTIPLIER_PER_BATTLE) -- fewer, scarier
+    # fights per run, matching "very very strong mobs" / "could get absolutely destroyed".
+    BLACK_HEAVEN_RARITY_TIER_WEIGHT = {"Common": 45, "Uncommon": 27, "Rare": 12, "Elite": 4}
+    BLACK_HEAVEN_RARITY_CANON_GU_ENCOUNTER = {"Common": "normal", "Uncommon": "elite", "Rare": "mini_boss", "Elite": "world_boss"}
+    # A small independent shot at one of the 15 Black Heaven canon Gu on a battle-bubble
+    # victory (see content/canon_gu_black_heaven.py) -- these are drop_weight=0, so the
+    # generic canon_gu.roll_canon_gu_drop call just above can never actually surface one
+    # (mirrors White Heaven's own roll_white_heaven_bonus_gu problem/solution). Scaled by the
+    # monster's own rarity tier so an Elite kill has meaningfully better odds than a Common one.
+    BLACK_HEAVEN_RARITY_BONUS_GU_CHANCE = {"Common": 1 / 200, "Uncommon": 1 / 120, "Rare": 1 / 60, "Elite": 1 / 25}
+    BLACK_HEAVEN_BATTLE_STAT_MULTIPLIER_PER_BATTLE = 0.35
+
+    def roll_black_heaven_battle_monster(self, battle_number: int):
+        """battle_number is 1-indexed (the Nth battle bubble revealed this Search run), scaled
+        up progressively via dataclasses.replace -- mirrors roll_inheritance_ground_battle_
+        monster's own "blood_sea_ancestor" branch exactly, just against Black Heaven's own
+        fixed roster (there's only ever one Black Heaven, so no ground_key branching needed)."""
+        rarities = list(black_heaven_monsters.ALL_MONSTERS_BY_RARITY)
+        rarity = random.choices(rarities, weights=[self.BLACK_HEAVEN_RARITY_TIER_WEIGHT[r] for r in rarities])[0]
+        base = random.choice(black_heaven_monsters.ALL_MONSTERS_BY_RARITY[rarity])
+        multiplier = 1.0 + self.BLACK_HEAVEN_BATTLE_STAT_MULTIPLIER_PER_BATTLE * (battle_number - 1)
+        if multiplier == 1.0:
+            return base
+        return dataclasses.replace(
+            base,
+            hp=max(1, round(base.hp * multiplier)), atk_stat=max(1, round(base.atk_stat * multiplier)),
+            str_stat=max(1, round(base.str_stat * multiplier)), def_stat=max(1, round(base.def_stat * multiplier)),
+            spd_stat=max(1, round(base.spd_stat * multiplier)),
+        )
+
+    def roll_black_heaven_battle_bonus_gu(self, rarity: str) -> Optional[str]:
+        """Called once per team member on a battle-bubble victory (see grant_black_heaven_
+        battle_loot below). Always rolls at Common quality/star 1, same "a newly obtained Gu
+        starts at 1 star" convention every other drop mechanism in this codebase uses."""
+        chance = self.BLACK_HEAVEN_RARITY_BONUS_GU_CHANCE.get(rarity, 0)
+        if random.random() >= chance:
+            return None
+        name = random.choice(canon_gu_black_heaven.BLACK_HEAVEN_CANON_GU_NAMES)
+        return equipment.gu_item_name(name, "Common")
+
+    def grant_black_heaven_battle_loot(self, team: list, monster) -> list:
+        """Called once a battle bubble's guardian is actually defeated -- one independent roll
+        per team member: the monster's own beast-material drops (monsters.roll_loot, same as
+        /hunt), a rarity-scaled shot at the generic canon-Gu roll, and a separate rarity-scaled
+        shot at one of Black Heaven's own 15 Gu. Returns [(name, summary_text), ...]."""
+        rarity = black_heaven_monsters.RARITY_BY_NAME.get(monster.name)
+        results = []
+        for user_id, name in team:
+            material_loot = monsters.roll_loot(monster)
+            for item_name, qty in material_loot.items():
+                self.db.add_item(user_id, item_name, qty)
+            parts = [f"{qty}x {item_name}" for item_name, qty in material_loot.items()]
+            if rarity:
+                canon_drop = canon_gu.roll_canon_gu_drop(monster.gu_rank, self.BLACK_HEAVEN_RARITY_CANON_GU_ENCOUNTER[rarity])
+                if canon_drop:
+                    self.db.add_item(user_id, canon_drop, 1)
+                    parts.append(f"🐛 {canon_drop}")
+                bonus_gu = self.roll_black_heaven_battle_bonus_gu(rarity)
+                if bonus_gu:
+                    self.db.add_item(user_id, bonus_gu, 1)
+                    parts.append(f"🌑 {bonus_gu}")
+            results.append((name, ", ".join(parts) if parts else "nothing this time"))
+        return results
 
     # -- Gathering: /mine, /gather, /explore -----------------------------------
     # All three share a 15-minute cooldown (tracked independently per action) and let Luck
