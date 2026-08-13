@@ -47,6 +47,16 @@ ORE_COST = 2
 BEAST_MATERIAL_COST = 1
 BEAST_CORE_COST = 1
 
+# Tier 8 (White Heaven materials only, see content/materials_white_heaven.py) deliberately
+# costs MORE materials per craft, not just higher-tier ones — the flat cost above would make
+# a Tier 8 piece feel as disposable as a Tier 1 one the moment a player has the Blacksmith
+# rank for it, even though White Heaven's own drop economy is scarce and dangerous. A real
+# per-piece investment, not a hard wall (Ore is deliberately the tightest of the three — see
+# content/monsters/white_heaven.py's own drop chances — so it sets the real pace here).
+TIER_8_ORE_COST = 6
+TIER_8_BEAST_MATERIAL_COST = 4
+TIER_8_BEAST_CORE_COST = 3
+
 MIN_TIER = 1
 MAX_TIER = 8
 
@@ -87,6 +97,12 @@ def beast_core_name(tier: int) -> str:
 
 def recipe(tier: int) -> dict:
     """{item_name: quantity} needed to craft any gear type at this tier."""
+    if tier >= MAX_TIER:
+        return {
+            ore_name(tier): TIER_8_ORE_COST,
+            beast_material_name(tier): TIER_8_BEAST_MATERIAL_COST,
+            beast_core_name(tier): TIER_8_BEAST_CORE_COST,
+        }
     return {
         ore_name(tier): ORE_COST,
         beast_material_name(tier): BEAST_MATERIAL_COST,
