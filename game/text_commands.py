@@ -125,6 +125,7 @@ ALIASES = {
     "inheritance_ground": ["ig"],
     "white_heaven": ["wh"],
     "black_heaven": ["bh"],
+    "search_black_heaven": ["sbh"],
 }
 
 
@@ -401,4 +402,15 @@ def register_text_commands(bot: commands.Bot, cog):
     bot.add_command(commands.Command(
         text_inheritance_ground, name="inheritance_ground", aliases=ALIASES["inheritance_ground"],
         help=f"{cog.inheritance_ground.description} Usage: i inheritance_ground [@member1 @member2 [@member3]]",
+    ))
+
+    async def text_search_black_heaven(
+        ctx: commands.Context, member1: discord.Member = None, member2: discord.Member = None, member3: discord.Member = None,
+    ):
+        # Both blank -> solo start (see cog.search_black_heaven's own handling).
+        await cog.search_black_heaven.callback(cog, ShimInteraction(ctx), member1, member2, member3)
+
+    bot.add_command(commands.Command(
+        text_search_black_heaven, name="search_black_heaven", aliases=ALIASES["search_black_heaven"],
+        help=f"{cog.search_black_heaven.description} Usage: i search_black_heaven [@member1 @member2 [@member3]]",
     ))

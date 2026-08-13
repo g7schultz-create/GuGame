@@ -55,6 +55,7 @@ from .inheritance_ground_view import (
 from .region_view import RegionView
 from .white_heaven_view import WhiteHeavenView, build_white_heaven_image_file
 from .black_heaven_view import BlackHeavenView, build_black_heaven_image_file
+from .black_heaven_search_view import AbandonBlackHeavenSearchView, BlackHeavenSearchLobbyView, BlackHeavenSearchView
 from .battlefield_view import BattlefieldView
 from .world_boss_view import WorldBossView
 from .manual_view import ManualView
@@ -1365,6 +1366,114 @@ class GameCog(commands.Cog):
         mentions = " ".join(m.mention for m in invitees)
         await interaction.response.send_message(
             content=f"{mentions} — **{leader.display_name}** invites you on an inheritance ground run!",
+            embed=embed, view=view, ephemeral=False,
+        )
+        view.message = await interaction.original_response()
+
+    @app_commands.command(
+        name="search_black_heaven",
+        description="Invite up to 3 others (must already be in Black Heaven) to pop a 20-bubble board (leave blank to run solo)",
+    )
+    @app_commands.describe(
+        member1="First required teammate, must already be in Black Heaven (leave blank along with member2 to run solo)",
+        member2="Second required teammate, must already be in Black Heaven (leave blank along with member1 to run solo)",
+        member3="Optional 4th teammate, must already be in Black Heaven",
+    )
+    @app_commands.guilds(GUILD)
+    async def search_black_heaven(
+        self, interaction: discord.Interaction, member1: Optional[discord.Member] = None,
+        member2: Optional[discord.Member] = None, member3: Optional[discord.Member] = None,
+    ):
+        leader = interaction.user
+        # Solo mode: leaving BOTH member1/member2 blank skips the invite lobby entirely and
+        # starts immediately as a 1-person team -- mirrors /inheritance_ground's own solo
+        # bypass exactly.
+        if member1 is None and member2 is None:
+            leader_player = await asyncio.to_thread(self.game.get_player_stats, leader.id, leader.display_name)
+            if not leader_player["character_confirmed"]:
+                await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
+                return
+            if self.game.has_active_black_heaven_search(leader_player):
+                abandon_view = AbandonBlackHeavenSearchView(leader.id, self.game)
+                await interaction.response.send_message("🌑 Finish your current Search Black Heaven run first!", view=abandon_view, ephemeral=True)
+                return
+            if leader_player["black_heaven_status"] != "present":
+                await interaction.response.send_message("🌑 You need to be in Black Heaven first — run `/black_heaven` to travel there.", ephemeral=True)
+                return
+            leader_cooldown = self.game.black_heaven_search_cooldown_remaining(leader_player)
+            if leader_cooldown > 0:
+                await interaction.response.send_message(
+                    f"🌑 You're still recovering from your last Search Black Heaven run — try again in **{format_duration(leader_cooldown)}**.",
+                    ephemeral=True,
+                )
+                return
+
+            team = [(leader.id, leader.display_name)]
+            # Constructed directly, NOT via asyncio.to_thread -- see BlackHeavenSearchLobbyView's
+            # own construction note for why this is a hard rule for every View/Modal here.
+            view = BlackHeavenSearchView(self.game, team)
+            await asyncio.to_thread(self.game.start_active_black_heaven_search, [leader.id])
+            embed = await asyncio.to_thread(view.build_embed)
+            await interaction.response.send_message(embed=embed, view=view)
+            view.message = await interaction.original_response()
+            return
+
+        if member1 is None or member2 is None:
+            await interaction.response.send_message(
+                "Pick both `member1` and `member2` for a real team, or leave both blank to start solo.",
+                ephemeral=True,
+            )
+            return
+
+        invitees = [member1, member2] + ([member3] if member3 else [])
+        if any(m.bot for m in invitees):
+            await interaction.response.send_message("You can't invite a bot.", ephemeral=True)
+            return
+        if len({leader.id, *[m.id for m in invitees]}) != len(invitees) + 1:
+            await interaction.response.send_message("Pick 2-3 different teammates — not yourself, and not each other twice.", ephemeral=True)
+            return
+
+        leader_player = await asyncio.to_thread(self.game.get_player_stats, leader.id, leader.display_name)
+        if not leader_player["character_confirmed"]:
+            await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
+            return
+        if self.game.has_active_black_heaven_search(leader_player):
+            abandon_view = AbandonBlackHeavenSearchView(leader.id, self.game)
+            await interaction.response.send_message("🌑 Finish your current Search Black Heaven run first!", view=abandon_view, ephemeral=True)
+            return
+        if leader_player["black_heaven_status"] != "present":
+            await interaction.response.send_message("🌑 You need to be in Black Heaven first — run `/black_heaven` to travel there.", ephemeral=True)
+            return
+        leader_cooldown = self.game.black_heaven_search_cooldown_remaining(leader_player)
+        if leader_cooldown > 0:
+            await interaction.response.send_message(
+                f"🌑 You're still recovering from your last Search Black Heaven run — try again in **{format_duration(leader_cooldown)}**.",
+                ephemeral=True,
+            )
+            return
+
+        # Third-person here (about each invitee), unlike BlackHeavenSearchLobbyView's own
+        # accept-time re-check of this exact same eligibility, which is "you"-phrased. This
+        # is where the presence requirement actually bites for a real team invite -- "not_
+        # present" is included in check_black_heaven_search_eligibility itself.
+        for m in invitees:
+            ok, reason_code, _reason_remaining = await asyncio.to_thread(self.game.check_black_heaven_search_eligibility, m.id, m.display_name)
+            if not ok:
+                messages = {
+                    "not_confirmed": f"**{m.display_name}** hasn't confirmed a character yet.",
+                    "already_active": f"**{m.display_name}** is already in another Search Black Heaven run.",
+                    "not_present": f"**{m.display_name}** isn't in Black Heaven right now.",
+                }
+                await interaction.response.send_message(f"Can't invite them right now: {messages[reason_code]}", ephemeral=True)
+                return
+
+        # Constructed directly, NOT via asyncio.to_thread -- see BlackHeavenSearchLobbyView's
+        # own construction note for why this is a hard rule for every View/Modal here.
+        view = BlackHeavenSearchLobbyView(self.game, leader, invitees)
+        embed = await asyncio.to_thread(view.build_embed)
+        mentions = " ".join(m.mention for m in invitees)
+        await interaction.response.send_message(
+            content=f"{mentions} — **{leader.display_name}** invites you to Search Black Heaven!",
             embed=embed, view=view, ephemeral=False,
         )
         view.message = await interaction.original_response()
