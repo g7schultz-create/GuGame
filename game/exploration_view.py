@@ -18,6 +18,8 @@ def _found_text(node: dict) -> str:
     if node.get("bonus_qi_ascension_pill"):
         pill_name, pill_qty = node["bonus_qi_ascension_pill"]
         main += f" ...and 🌟 **{pill_qty}x {pill_name}**!"
+    if node.get("bonus_white_heaven_gu"):
+        main += f" ...and ☁️ **{node['bonus_white_heaven_gu']}**!"
     return main
 
 
@@ -81,6 +83,9 @@ class ExplorationHuntView(GameView):
         if node.get("bonus_qi_ascension_pill"):
             pill_name, pill_qty = node["bonus_qi_ascension_pill"]
             self.collected_items[pill_name] = self.collected_items.get(pill_name, 0) + pill_qty
+        if node.get("bonus_white_heaven_gu"):
+            gu_name = node["bonus_white_heaven_gu"]
+            self.collected_items[gu_name] = self.collected_items.get(gu_name, 0) + 1
         self.current_index += 1
         if self.current_index >= len(self.nodes):
             await asyncio.to_thread(self._finish)
@@ -131,7 +136,7 @@ class ExplorationHuntView(GameView):
             node = self.nodes[self.current_index]
             embed.title = "🧭 Trail Discovered!"
             embed.description = "_You pick up a promising trail through the wilds..._"
-            if node.get("bonus_core") or node.get("bonus_essence_pill") or node.get("bonus_qi_ascension_pill") or node["band"] in HIGH_BANDS:
+            if node.get("bonus_core") or node.get("bonus_essence_pill") or node.get("bonus_qi_ascension_pill") or node.get("bonus_white_heaven_gu") or node["band"] in HIGH_BANDS:
                 embed.color = discord.Color.gold()
             embed.add_field(
                 name=f"🔍 Hunt {self.current_index + 1}/{len(self.nodes)}",

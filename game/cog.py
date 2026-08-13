@@ -918,11 +918,11 @@ class GameCog(commands.Cog):
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        ok, message, board = await asyncio.to_thread(self.game.start_treasure_hunt, interaction.user.id, interaction.user.display_name)
+        ok, message, board, white_heaven = await asyncio.to_thread(self.game.start_treasure_hunt, interaction.user.id, interaction.user.display_name)
         if not ok:
             await interaction.response.send_message(message, ephemeral=True)
             return
-        view = TreasureHuntView( interaction.user.id, self.game, interaction.user.display_name, board)
+        view = TreasureHuntView( interaction.user.id, self.game, interaction.user.display_name, board, white_heaven=white_heaven)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(content=message, embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()

@@ -33,6 +33,18 @@ SMALL_MATERIAL_NAME = "Tier 1 Beast Material"
 SMALL_STONE_RANGE = (50, 200)
 TREASURE_ESSENCE_CRYSTAL_QTY = 200
 
+# White Heaven's own board (see game/white_heaven.py, GameManager.start_treasure_hunt) --
+# same TILE_CATEGORY_WEIGHTS/board shape, but every reward tier is shifted up to match the
+# region's Tier 8/Rank 8 ceiling (see blacksmith.MAX_TIER, manual_data.MAX_MANUAL_RANK)
+# instead of the base game's Tier 7 ceiling. MANUAL_PAGE_RANK_WEIGHTS/BEAST_CORE_TIER_WEIGHTS
+# only have 3 rungs of headroom left above the old ceiling (6-8, not a full 4-wide window like
+# the base tables), so both are renormalized to 3 entries rather than simply shifted.
+WHITE_HEAVEN_MANUAL_PAGE_RANK_WEIGHTS = {6: 700, 7: 250, 8: 50}
+WHITE_HEAVEN_BEAST_CORE_TIER_WEIGHTS = {6: 45, 7: 35, 8: 20}
+SMALL_MATERIAL_NAME_WHITE_HEAVEN = "Tier 6 Beast Material"
+SMALL_STONE_RANGE_WHITE_HEAVEN = (300, 900)
+TREASURE_ESSENCE_CRYSTAL_QTY_WHITE_HEAVEN = 500
+
 
 def _weighted_choice(weights: dict, rng: random.Random):
     return rng.choices(list(weights.keys()), weights=list(weights.values()), k=1)[0]
@@ -62,14 +74,16 @@ def roll_board(rng: Optional[random.Random] = None) -> list:
     return board
 
 
-def grant_tile_reward(game, user_id: int, name: str, category: str, rng: Optional[random.Random] = None) -> tuple:
+def grant_tile_reward(game, user_id: int, name: str, category: str, rng: Optional[random.Random] = None, white_heaven: bool = False) -> tuple:
     """Grants whatever `category` rolls and returns (emoji, label) for the revealed tile.
     `game` is a GameManager instance -- reuses its db/roll_and_grant_* methods the same way
     every other reward path in this codebase already does. Layers an independent Qi Ascension
     Pill bonus roll on top of EVERY dig (including a "dud"), one of only three drop sources
-    for that pill -- see items.roll_qi_ascension_pill_drop's own docstring."""
+    for that pill -- see items.roll_qi_ascension_pill_drop's own docstring. white_heaven=True
+    (see GameManager.start_treasure_hunt) shifts every reward tier's tables up to the region's
+    own Tier 8/Rank 8 ceiling -- see WHITE_HEAVEN_MANUAL_PAGE_RANK_WEIGHTS et al above."""
     rng = rng or random.Random()
-    emoji, label = _roll_base_tile_reward(game, user_id, name, category, rng)
+    emoji, label = _roll_base_tile_reward(game, user_id, name, category, rng, white_heaven)
     qi_ascension_pill = items.roll_qi_ascension_pill_drop(rng)
     if qi_ascension_pill:
         pill_name, pill_qty = qi_ascension_pill
@@ -80,35 +94,40 @@ def grant_tile_reward(game, user_id: int, name: str, category: str, rng: Optiona
     return emoji, label
 
 
-def _roll_base_tile_reward(game, user_id: int, name: str, category: str, rng: random.Random) -> tuple:
+def _roll_base_tile_reward(game, user_id: int, name: str, category: str, rng: random.Random, white_heaven: bool = False) -> tuple:
     db = game.db
 
     if category == "dud":
-        return "🕳️", "Nothing"
+        return ("🕳️", "An empty, long-sealed grotto") if white_heaven else ("🕳️", "Nothing")
 
     if category == "small":
-        db.add_item(user_id, SMALL_MATERIAL_NAME, 1)
-        stones = rng.randint(*SMALL_STONE_RANGE)
+        material_name = SMALL_MATERIAL_NAME_WHITE_HEAVEN if white_heaven else SMALL_MATERIAL_NAME
+        stone_range = SMALL_STONE_RANGE_WHITE_HEAVEN if white_heaven else SMALL_STONE_RANGE
+        db.add_item(user_id, material_name, 1)
+        stones = rng.randint(*stone_range)
         db.add_spirit_stones(user_id, stones)
-        return "🪨", f"{SMALL_MATERIAL_NAME} + {stones:,} 🪙"
+        return "🪨", f"{material_name} + {stones:,} 🪙"
 
     if category == "decent":
         sub = _weighted_choice(DECENT_SUB_WEIGHTS, rng)
         if sub == "manual_page":
-            rank = _weighted_choice(MANUAL_PAGE_RANK_WEIGHTS, rng)
+            rank_weights = WHITE_HEAVEN_MANUAL_PAGE_RANK_WEIGHTS if white_heaven else MANUAL_PAGE_RANK_WEIGHTS
+            rank = _weighted_choice(rank_weights, rng)
             page = rng.choice([p for p in manual_data.PAGES.values() if p.rank == rank])
             db.add_player_page(user_id, page.page_id, 1)
-            return "📄", f"{page.name} (Rank {rank} page)"
+            label = f"{page.name} (Rank {rank} page)"
+            return ("📜", f"An ancient Immortal's forgotten ledger page -- {label}") if white_heaven else ("📄", label)
         if sub == "beast_core":
-            tier = _weighted_choice(BEAST_CORE_TIER_WEIGHTS, rng)
+            tier_weights = WHITE_HEAVEN_BEAST_CORE_TIER_WEIGHTS if white_heaven else BEAST_CORE_TIER_WEIGHTS
+            tier = _weighted_choice(tier_weights, rng)
             item_name = f"Tier {tier} Beast Core"
             db.add_item(user_id, item_name, 1)
             return "💠", item_name
         if sub == "essence_stone":
-            qty = rng.randint(3, 8)
+            qty = rng.randint(15, 30) if white_heaven else rng.randint(3, 8)
             db.add_item(user_id, "Primeval Essence Crystal", qty)
             return "💎", f"{qty}x Primeval Essence Crystal"
-        tier = _essence_pill_tier(1, 5, rng)
+        tier = _essence_pill_tier(4, 7, rng) if white_heaven else _essence_pill_tier(1, 5, rng)
         item_name = f"Essence Restoration Pill (T{tier})"
         db.add_item(user_id, item_name, 1)
         return "💊", item_name
@@ -130,8 +149,9 @@ def _roll_base_tile_reward(game, user_id: int, name: str, category: str, rng: ra
 
     # "treasure" -- the guaranteed tile: always the big essence crystal payout, plus one bonus
     # roll from a separate pool (immortal_gu is the rare jackpot-within-the-jackpot at 1/50).
-    db.add_item(user_id, "Primeval Essence Crystal", TREASURE_ESSENCE_CRYSTAL_QTY)
-    label = f"{TREASURE_ESSENCE_CRYSTAL_QTY}x Primeval Essence Crystal"
+    crystal_qty = TREASURE_ESSENCE_CRYSTAL_QTY_WHITE_HEAVEN if white_heaven else TREASURE_ESSENCE_CRYSTAL_QTY
+    db.add_item(user_id, "Primeval Essence Crystal", crystal_qty)
+    label = f"{crystal_qty}x Primeval Essence Crystal"
     bonus = _weighted_choice(TREASURE_BONUS_WEIGHTS, rng)
     if bonus == "accessory":
         granted = game.roll_and_grant_accessory_artifact(user_id, name, "treasure_hunt", 7, [])

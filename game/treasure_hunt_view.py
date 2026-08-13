@@ -8,11 +8,12 @@ UNREVEALED_EMOJI = "🫧"
 
 
 class TreasureHuntView(GameView):
-    def __init__(self, user_id: int, game, display_name: str, board: list):
+    def __init__(self, user_id: int, game, display_name: str, board: list, white_heaven: bool = False):
         super().__init__(timeout=300)
         self.user_id = user_id
         self.game = game
         self.display_name = display_name
+        self.white_heaven = white_heaven
         self.board = board  # 25 tile categories, index -> row-major grid position
         self.revealed = [False] * len(board)
         self.revealed_emoji = [None] * len(board)
@@ -59,7 +60,7 @@ class TreasureHuntView(GameView):
             # defer() above, THEN the DB work -- see MiningVeinView._on_strike's identical
             # comment for why (a chain of asyncio.to_thread hops can exceed Discord's ~3s ACK
             # window under real load).
-            emoji, label = await asyncio.to_thread(treasure_hunt.grant_tile_reward, self.game, self.user_id, self.display_name, category)
+            emoji, label = await asyncio.to_thread(treasure_hunt.grant_tile_reward, self.game, self.user_id, self.display_name, category, None, self.white_heaven)
             self.revealed[index] = True
             self.revealed_emoji[index] = emoji
             self.revealed_labels[index] = category.title()
@@ -72,11 +73,13 @@ class TreasureHuntView(GameView):
 
     def build_embed(self) -> discord.Embed:
         max_digs = treasure_hunt.MAX_CLICKS_PER_BOARD
+        title = "🏯 Hidden Grotto-Heaven" if self.white_heaven else "🗺️ Forgotten Blessed Land"
+        site_desc = "an ancient Gu Immortal's sealed grotto-heaven cache" if self.white_heaven else "a hidden site brimming with buried treasure"
         embed = discord.Embed(
-            title="🗺️ Forgotten Blessed Land",
+            title=title,
             description=(
                 "You've used up all your digs at this site!" if self._digs_exhausted() else
-                f"A hidden site brimming with buried treasure. You get {max_digs} digs — click a "
+                f"You've found {site_desc}. You get {max_digs} digs — click a "
                 "bubble to spend one. One tile somewhere on the site hides a real treasure."
             ),
             color=discord.Color.gold(),

@@ -1238,18 +1238,26 @@ class GameManager:
 
     def start_treasure_hunt(self, user_id: int, name: str):
         """Realm + cooldown gate, then rolls a fresh 25-tile board (see treasure_hunt.
-        roll_board) -- returns (ok, message, board). board is None on refusal."""
+        roll_board) -- returns (ok, message, board, white_heaven). board is None on refusal.
+        While present in White Heaven (see white_heaven.py), the board's own rewards swap to
+        the region's Tier 8/Rank 8 ceiling via treasure_hunt.grant_tile_reward's white_heaven
+        flag (see TreasureHuntView) -- the realm/cooldown gate above is unaffected, since
+        reaching White Heaven at all already implies clearing the (much lower) Core Formation
+        gate here."""
         player = self.db.get_or_create_player(user_id, name)
         if realms.STAGES[player["realm_index"]].great_realm_index < self.TREASURE_HUNT_REALM_GATE:
-            return False, "The Forgotten Blessed Land only reveals itself to Core Formation cultivators and above.", None
+            return False, "The Forgotten Blessed Land only reveals itself to Core Formation cultivators and above.", None, False
         now = int(time.time())
         elapsed = now - player["treasure_hunt_last_ts"]
         if elapsed < self.TREASURE_HUNT_COOLDOWN_SECONDS:
             remaining = self.TREASURE_HUNT_COOLDOWN_SECONDS - elapsed
-            return False, f"The Blessed Land hasn't revealed a new site yet — {remaining} seconds left.", None
+            return False, f"The Blessed Land hasn't revealed a new site yet — {remaining} seconds left.", None, False
         self.db.set_treasure_hunt_last_ts(user_id, now)
         board = treasure_hunt.roll_board()
-        return True, "You stumble into the Forgotten Blessed Land — a hidden site full of buried treasure!", board
+        in_white_heaven = player["white_heaven_status"] == "present"
+        if in_white_heaven:
+            return True, "You uncover a sealed grotto-heaven cache, hidden since long before this realm had a name!", board, True
+        return True, "You stumble into the Forgotten Blessed Land — a hidden site full of buried treasure!", board, False
 
     def is_avatar_unlocked(self, user_id: int, name: str) -> bool:
         player = self.db.get_or_create_player(user_id, name)
@@ -2672,7 +2680,8 @@ class GameManager:
         # character_data.CharacterTraitSpec) — folded in as extra effective luck, the same
         # trick Rogue's own path passive already uses just above.
         effective_luck += self._trait_bonus(player, "explore_luck_bonus_flat")
-        nodes = [exploration.roll_explore(player["explorer_rank"], effective_luck) for _ in range(self.EXPLORE_HUNT_NODE_COUNT)]
+        in_white_heaven = player["white_heaven_status"] == "present"
+        nodes = [exploration.roll_explore(player["explorer_rank"], effective_luck, white_heaven=in_white_heaven) for _ in range(self.EXPLORE_HUNT_NODE_COUNT)]
         stone_mult = self._region_bonus_dict(player).get("explore_stone_multiplier", 1.0)
         if stone_mult != 1.0:
             for node in nodes:
