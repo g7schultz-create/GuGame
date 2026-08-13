@@ -2,7 +2,7 @@ import random
 from dataclasses import dataclass
 from typing import Callable, Optional, Tuple
 
-from . import gathering
+from . import gathering, realms
 from .database import GameDatabase
 
 # Tunable numbers for rank 1 pills — expect these to be rebalanced as more ranks are added.
@@ -261,14 +261,20 @@ def _use_qi_ascension_pill(tier: int):
     def use(db: GameDatabase, user_id: int) -> str:
         result = db.use_qi_ascension_pill(user_id, tier)
         if not result["used"]:
+            if result["reason"] == "realm_locked":
+                required_realm_name = realms.GREAT_REALMS[tier - 1]["name"]
+                return (
+                    f"Your dantian isn't ready — a Tier {tier} Qi Ascension Pill requires "
+                    f"**{required_realm_name}** realm. Break through further before trying again."
+                )
             return (
-                f"Your dantian resists — you've already used **{result['max_uses']}** Qi Ascension "
-                f"Pills at your current Great Realm. Break through further to unlock more."
+                f"Your dantian resists — you've already used **{result['max_uses']}** Tier {tier} Qi "
+                f"Ascension Pills, the lifetime limit for this tier."
             )
         pct = db.QI_ASCENSION_PCT_PER_TIER * tier * 100
         return (
             f"Your qi aperture violently expands — qi multiplier surges **+{pct:.0f}%** to "
-            f"**x{result['new_multiplier']:.2f}** ({result['uses']}/{result['max_uses']} used this realm)!"
+            f"**x{result['new_multiplier']:.2f}** ({result['uses']}/{result['max_uses']} Tier {tier} uses)!"
         )
     return use
 
@@ -419,12 +425,15 @@ def roll_essence_restoration_pill_drop(rng: Optional[random.Random] = None) -> O
 
 # Qi Ascension Pill -- never Alchemist-craftable (unlike the flat, additive Qi Multiplier
 # Pill above, this one MULTIPLIES qi_multiplier, so a reliable herb-and-brew supply would
-# undermine its own per-realm use cap almost immediately). Rare drop only, per explicit
+# undermine its own per-tier use cap almost immediately). Rare drop only, per explicit
 # request, from /search_forgotten_blessed_land, /explore, and World Boss specifically (see
 # this function's own call sites) -- deliberately NOT wired into hunt/raid/secret realm/
 # dream realm/battlefield the way Essence Restoration Pill is, since this pill's own
 # use_qi_ascension_pill cap already bounds how much benefit stacking up a big stockpile
 # can buy; a narrower drop pool keeps it a genuinely occasional find on top of that.
+# Each tier also requires a matching Great Realm rank to use at all (Tier N needs realm
+# rank >= N) -- see use_qi_ascension_pill's own docstring for the full per-tier-lifetime-cap
+# mechanic this replaced a single shared per-realm-resetting pool with.
 # Shelved under the existing "Qi Multiplier" subcategory rather than a new one -- see
 # feedback_shared_category_lists_row_budget.md: growing a shared subcategory list can
 # silently blow out row budget in OTHER, unrelated renderers.
@@ -437,7 +446,8 @@ for _tier in range(1, 8):
         description=(
             f"A Tier {_tier} Qi Ascension Pill. MULTIPLIES your qi multiplier by "
             f"+{GameDatabase.QI_ASCENSION_PCT_PER_TIER * _tier * 100:.0f}% per use instead of adding to it -- "
-            f"capped at {GameDatabase.QI_ASCENSION_MAX_USES_PER_RANK} uses per Great Realm. A rare find -- no Alchemist can brew this one."
+            f"requires {realms.GREAT_REALMS[_tier - 1]['name']} realm, capped at "
+            f"{GameDatabase.QI_ASCENSION_MAX_USES_PER_TIER} uses of this tier, lifetime. A rare find -- no Alchemist can brew this one."
         ),
         use=_use_qi_ascension_pill(_tier),
         subcategory="Qi Multiplier",
