@@ -8,7 +8,7 @@ import discord
 from . import avatar, canon_gu, chargen, combat, dao_paths, white_heaven
 from .base_view import GameView
 from .equipment import EQUIPMENT, gear_power_score, parse_gu_name
-from .items import ITEMS, roll_essence_restoration_pill_drop
+from .items import ITEMS, item_emoji, roll_essence_restoration_pill_drop
 from .monsters import MONSTERS, roll_loot
 from .raid import (
     FREEZE_PROC_CHANCE,
@@ -1112,7 +1112,7 @@ class HuntView(GameView):
             embed.add_field(name="📜 Recent Combat", value="\n".join(self.log), inline=False)
 
         if self.status == "victory":
-            loot_text = "\n".join(f"{name} x{qty}" for name, qty in self.loot.items()) or "Nothing this time."
+            loot_text = "\n".join(f"{item_emoji(name)} {name} x{qty}" for name, qty in self.loot.items()) or "Nothing this time."
             embed.add_field(name="🎁 Loot", value=loot_text, inline=False)
         elif self.status == "defeat":
             embed.add_field(

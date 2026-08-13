@@ -41,7 +41,7 @@ from . import avatar, avatar_gear, canon_gu, chargen, dao_paths, white_heaven
 from .equipment import parse_gu_name
 from .base_view import GameView
 from .character_class import CLASS_EMOJI
-from .items import roll_essence_restoration_pill_drop
+from .items import item_emoji, roll_essence_restoration_pill_drop
 from .monsters import BOSS_GROUPS, roll_loot
 from .team_battle import (
     DEFEND_ALLY_DAMAGE_REDUCTION,
@@ -759,7 +759,7 @@ class RaidView(TeamBattleEngine, GameView):
             for uid, p in self.participants.items():
                 loot = self.result_loot.get(uid, {})
                 stones = self.stones_awarded.get(uid, 0)
-                loot_text = ", ".join(f"{name} x{qty}" for name, qty in loot.items()) or "nothing else"
+                loot_text = ", ".join(f"{item_emoji(name)} {name} x{qty}" for name, qty in loot.items()) or "nothing else"
                 loot_lines.append(f"**{p['name']}**: {stones} 🪙 + {loot_text}")
             embed.add_field(name="🎁 Loot (rolled per participant)", value="\n".join(loot_lines)[:1024], inline=False)
         elif self.status == "wiped":
