@@ -2763,6 +2763,11 @@ class GameManager:
             "battlefield_remaining": self._check_cooldown(player, "last_battlefield_ts", self.BATTLEFIELD_COOLDOWN_SECONDS),
             "world_boss_remaining": self._check_cooldown(player, "last_world_boss_attack_ts", world_boss.WORLD_BOSS_ATTACK_COOLDOWN_SECONDS),
             "inheritance_ground_remaining": self.inheritance_ground_cooldown_remaining(player),
+            # Search Black Heaven -- only meaningful once realm-eligible (see black_heaven.
+            # is_eligible), same "only show gated features once relevant" convention as
+            # treasure_hunt_eligible just below.
+            "black_heaven_search_eligible": black_heaven.is_eligible(realms.STAGES[player["realm_index"]].great_realm_index),
+            "black_heaven_search_remaining": self.black_heaven_search_cooldown_remaining(player),
             # /search_forgotten_blessed_land -- only meaningful once realm-eligible (see
             # start_treasure_hunt's own gate), same "only show gated features once relevant"
             # convention as has_dao_companion/sect_disciple_count/personal_disciple_count below.

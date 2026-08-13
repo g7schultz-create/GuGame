@@ -24,10 +24,12 @@ Three views:
 """
 
 import asyncio
+import os
 
 import discord
 
-from . import avatar
+from . import avatar, black_heaven
+from .black_heaven_view import build_black_heaven_image_file
 from .base_view import GameView
 from .team_battle import EMPOWER_QI_COST, RaidEnemy, TeamBattleEngine
 from .ui_utils import render_bar
@@ -155,7 +157,13 @@ class BlackHeavenSearchLobbyView(GameView):
         run_view = BlackHeavenSearchView(self.game, team)
         await asyncio.to_thread(self.game.start_active_black_heaven_search, [uid for uid, _ in team])
         embed = await asyncio.to_thread(run_view.build_embed)
-        await interaction.response.edit_message(embed=embed, view=run_view)
+        # The lobby's own invite embed never shows the shared image (mirrors Inheritance
+        # Ground's identical choice) -- it's only attached once the run actually starts here.
+        file = await asyncio.to_thread(build_black_heaven_image_file)
+        if file:
+            await interaction.response.edit_message(embed=embed, view=run_view, attachments=[file])
+        else:
+            await interaction.response.edit_message(embed=embed, view=run_view)
         run_view.message = await interaction.original_response()
 
     async def on_timeout(self):
@@ -469,6 +477,19 @@ class BlackHeavenSearchView(TeamBattleEngine, GameView):
                 pass
 
     def build_embed(self) -> discord.Embed:
+        """Builds this phase's embed, then points it at the shared Black Heaven image (if the
+        file exists) so it stays visible below every phase's own content -- the actual
+        discord.File is only ATTACHED once, at send time (see cog.py's /search_black_heaven),
+        but it physically stays on the message across every subsequent edit that doesn't
+        explicitly clear attachments (none of this view's edit_message/message.edit calls do),
+        so every later embed just needs to keep pointing at that same attachment to render it
+        (mirrors hunt.py/raid.py's identical White Heaven convention)."""
+        embed = self._build_phase_embed()
+        if os.path.exists(black_heaven.BLACK_HEAVEN_IMAGE_PATH):
+            embed.set_image(url=f"attachment://{os.path.basename(black_heaven.BLACK_HEAVEN_IMAGE_PATH)}")
+        return embed
+
+    def _build_phase_embed(self) -> discord.Embed:
         team_names = ", ".join(name for _, name in self.team)
 
         if self.phase == "intro":

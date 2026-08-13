@@ -1414,7 +1414,12 @@ class GameCog(commands.Cog):
             view = BlackHeavenSearchView(self.game, team)
             await asyncio.to_thread(self.game.start_active_black_heaven_search, [leader.id])
             embed = await asyncio.to_thread(view.build_embed)
-            await interaction.response.send_message(embed=embed, view=view)
+            # See the identical White Heaven image note on /hunt above.
+            file = await asyncio.to_thread(build_black_heaven_image_file)
+            if file:
+                await interaction.response.send_message(embed=embed, view=view, file=file)
+            else:
+                await interaction.response.send_message(embed=embed, view=view)
             view.message = await interaction.original_response()
             return
 
@@ -1644,15 +1649,18 @@ class GameCog(commands.Cog):
             tournament_remaining = cooldown_remaining_seconds(tournament_row)
             tournament_line = cd_line("Tournament", "🏆", tournament_remaining)
 
+        combat_cooldown_lines = [
+            cd_line("PvP", "🗡️", cooldowns["pvp_remaining"]),
+            cd_line("Battlefield", "⚔️", cooldowns["battlefield_remaining"]),
+            cd_line("World Boss", "🐗", cooldowns["world_boss_remaining"]),
+            cd_line("Inheritance Ground", "🗺️", cooldowns["inheritance_ground_remaining"]),
+            tournament_line,
+        ]
+        if cooldowns["black_heaven_search_eligible"]:
+            combat_cooldown_lines.append(cd_line("Search Black Heaven", "🌑", cooldowns["black_heaven_search_remaining"]))
         embed.add_field(
             name="Combat Cooldowns",
-            value="\n".join([
-                cd_line("PvP", "🗡️", cooldowns["pvp_remaining"]),
-                cd_line("Battlefield", "⚔️", cooldowns["battlefield_remaining"]),
-                cd_line("World Boss", "🐗", cooldowns["world_boss_remaining"]),
-                cd_line("Inheritance Ground", "🗺️", cooldowns["inheritance_ground_remaining"]),
-                tournament_line,
-            ]),
+            value="\n".join(combat_cooldown_lines),
             inline=False,
         )
 
