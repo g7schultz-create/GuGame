@@ -2566,6 +2566,137 @@ class GameManager:
             results.append((name, ", ".join(parts) if parts else "nothing this time"))
         return results
 
+    def black_heaven_search_cooldown_remaining(self, player: dict) -> int:
+        return self._check_cooldown(player, "last_black_heaven_search_ts", self.BLACK_HEAVEN_SEARCH_COOLDOWN_SECONDS)
+
+    def check_black_heaven_search_eligibility(self, user_id: int, name: str) -> tuple:
+        """Used both when the leader first invites AND when each invitee is about to accept --
+        mirrors check_inheritance_ground_eligibility's own shape (re-checked fresh at both
+        points, doesn't gate on the invitee's own cooldown), plus ONE real addition per
+        explicit request: every invitee must ALSO currently be black_heaven_status == "present"
+        -- unlike Inheritance Ground, which can invite anyone regardless of location, Search
+        Black Heaven can only ever include players already there. Returns (ok, reason_code, 0)
+        -- reason_code is one of "not_confirmed"/"already_active"/"not_present"/None (ok)."""
+        player = self.db.get_or_create_player(user_id, name)
+        if not player["character_confirmed"]:
+            return False, "not_confirmed", 0
+        if self.has_active_black_heaven_search(player):
+            return False, "already_active", 0
+        if player["black_heaven_status"] != "present":
+            return False, "not_present", 0
+        return True, None, 0
+
+    def start_active_black_heaven_search(self, user_ids: list):
+        self.db.start_active_black_heaven_bulk(user_ids, int(time.time()))
+
+    def abandon_active_black_heaven_search(self, user_id: int):
+        """Self-service escape hatch, same reasoning as abandon_active_inheritance_ground above."""
+        self.db.clear_active_black_heaven_bulk([user_id])
+
+    def finish_black_heaven_search_run(self, user_ids: list, leader_id: int):
+        """Called at every terminal state (lobby cancelled/timed out before starting, board
+        exhausted, or a battle-bubble wipe) -- releases the active flag for the WHOLE team, but
+        only starts the cooldown for leader_id, same "invited teammates aren't gated behind
+        someone else's run" reasoning as finish_inheritance_ground_run."""
+        now = int(time.time())
+        self.db.clear_active_black_heaven_bulk(user_ids)
+        self.db.set_black_heaven_search_cooldown_bulk([leader_id], now)
+
+    # -- Search Black Heaven's own bubble board -- same "fixed 20-bubble board, team_size only
+    # affects how many the team gets to POP" shape generate_inheritance_ground_board uses, just
+    # with Black Heaven's own category set per explicit request: nothing/essence_crystal/
+    # essence_pill/materials as the weighted filler, one guaranteed "gu" bubble (instead of
+    # Inheritance Ground's "treasure") and BLACK_HEAVEN_MIN_BATTLE_BUBBLES (3, not 2) guaranteed
+    # "battle" bubbles -- "very very strong mobs" gets more encounters, not just scarier ones.
+    BLACK_HEAVEN_BOARD_SIZE = 20
+    BLACK_HEAVEN_BUBBLES_PER_TEAM_MEMBER = 2
+    BLACK_HEAVEN_MIN_BATTLE_BUBBLES = 3
+    BLACK_HEAVEN_BUBBLE_OUTCOME_WEIGHT = {"nothing": 40, "essence_crystal": 20, "essence_pill": 20, "materials": 20}
+    BLACK_HEAVEN_ESSENCE_CRYSTAL_QUANTITY_RANGE = (40, 150)
+    BLACK_HEAVEN_ESSENCE_PILL_MIN_TIER = 5
+    BLACK_HEAVEN_ESSENCE_PILL_MAX_TIER = 7
+
+    def generate_black_heaven_board(self, team_size: int) -> list:
+        """Returns BLACK_HEAVEN_BOARD_SIZE (20) bubble labels: BLACK_HEAVEN_MIN_BATTLE_BUBBLES
+        (3) guaranteed "battle", exactly ONE guaranteed "gu" (unpredictable position), and the
+        rest independently rolled via BLACK_HEAVEN_BUBBLE_OUTCOME_WEIGHT -- direct mirror of
+        generate_inheritance_ground_board's own shape."""
+        size = self.BLACK_HEAVEN_BOARD_SIZE
+        outcomes = list(self.BLACK_HEAVEN_BUBBLE_OUTCOME_WEIGHT.keys())
+        weights = list(self.BLACK_HEAVEN_BUBBLE_OUTCOME_WEIGHT.values())
+        filler_count = size - self.BLACK_HEAVEN_MIN_BATTLE_BUBBLES - 1  # -1 for the single guaranteed "gu" bubble
+        board = ["battle"] * self.BLACK_HEAVEN_MIN_BATTLE_BUBBLES + ["gu"] + random.choices(outcomes, weights=weights, k=filler_count)
+        random.shuffle(board)
+        return board
+
+    def max_black_heaven_pops(self, team_size: int) -> int:
+        return team_size * self.BLACK_HEAVEN_BUBBLES_PER_TEAM_MEMBER
+
+    def roll_black_heaven_bubble_gu(self) -> str:
+        """The guaranteed "gu" bubble's own resolution (see generate_black_heaven_board) --
+        unlike roll_black_heaven_battle_bonus_gu, this bubble already committed to the
+        outcome, so no chance gate is needed, just which of the 15 names. Always Common
+        quality/star 1, same convention every other drop mechanism in this codebase uses."""
+        name = random.choice(canon_gu_black_heaven.BLACK_HEAVEN_CANON_GU_NAMES)
+        return equipment.gu_item_name(name, "Common")
+
+    def grant_black_heaven_gu_reward(self, team: list) -> list:
+        """One independent Gu roll per team member (mirrors grant_inheritance_ground_pill_
+        reward's own "guaranteed grant, randomized which one" shape) -- each team member can
+        find a DIFFERENT one of the 15. Returns [(name, reward_str), ...]."""
+        results = []
+        for user_id, name in team:
+            gu_name = self.roll_black_heaven_bubble_gu()
+            self.db.add_item(user_id, gu_name, 1)
+            results.append((name, f"1x **{gu_name}**"))
+        return results
+
+    def grant_black_heaven_essence_crystal_reward(self, team: list) -> list:
+        results = []
+        for user_id, name in team:
+            qty = random.randint(*self.BLACK_HEAVEN_ESSENCE_CRYSTAL_QUANTITY_RANGE)
+            self.db.add_item(user_id, "Primeval Essence Crystal", qty)
+            results.append((name, f"{qty}x **Primeval Essence Crystal**"))
+        return results
+
+    def grant_black_heaven_essence_pill_reward(self, team: list) -> list:
+        sub_weights = {
+            t: w for t, w in items.ESSENCE_RESTORATION_PILL_TIER_WEIGHTS.items()
+            if self.BLACK_HEAVEN_ESSENCE_PILL_MIN_TIER <= t <= self.BLACK_HEAVEN_ESSENCE_PILL_MAX_TIER
+        }
+        tiers = list(sub_weights.keys())
+        weights = list(sub_weights.values())
+        results = []
+        for user_id, name in team:
+            tier = random.choices(tiers, weights=weights, k=1)[0]
+            pill_name = items.alchemy_pill_name("Essence Restoration", tier)
+            self.db.add_item(user_id, pill_name, 1)
+            results.append((name, f"1x **{pill_name}**"))
+        return results
+
+    def grant_black_heaven_material_reward(self, team: list) -> list:
+        """A "materials" bubble (see generate_black_heaven_board) -- rolls each of the existing
+        generic Tier 8 items independently per team member (mirrors content/monsters/white_
+        heaven.py's own multi-roll drop shape), no new named items. A guaranteed-minimum
+        fallback (Tier 8 Ore if every independent roll happens to miss) keeps this bubble from
+        ever reading identically to "nothing"."""
+        results = []
+        for user_id, name in team:
+            granted = {}
+            if random.random() < 0.55:
+                granted["Tier 8 Ore"] = random.randint(3, 8)
+            if random.random() < 0.55:
+                granted["Tier 8 Beast Material"] = random.randint(2, 6)
+            if random.random() < 0.35:
+                granted["Tier 8 Beast Core"] = random.randint(1, 3)
+            if not granted:
+                granted["Tier 8 Ore"] = random.randint(3, 8)
+            for item_name, qty in granted.items():
+                self.db.add_item(user_id, item_name, qty)
+            parts = [f"{qty}x {item_name}" for item_name, qty in granted.items()]
+            results.append((name, ", ".join(parts)))
+        return results
+
     # -- Gathering: /mine, /gather, /explore -----------------------------------
     # All three share a 15-minute cooldown (tracked independently per action) and let Luck
     # (base stat + equipment bonuses) nudge the tier/rarity roll toward better results.
