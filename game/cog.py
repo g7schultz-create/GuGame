@@ -1372,7 +1372,7 @@ class GameCog(commands.Cog):
 
     @app_commands.command(
         name="search_black_heaven",
-        description="Invite up to 3 others (must already be in Black Heaven) to pop a 20-bubble board (leave blank to run solo)",
+        description="Pop a 20-bubble board with up to 3 others already in Black Heaven (leave blank to run solo)",
     )
     @app_commands.describe(
         member1="First required teammate, must already be in Black Heaven (leave blank along with member2 to run solo)",
