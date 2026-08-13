@@ -116,6 +116,30 @@ GU_TYPE_BY_NAME: Dict[str, str] = {
     "Heavenly Web Gu": "heaven",
     "Worldly Escape Gu": "space",
     "Poison Gu": "poison",
+    # White Heaven's 20 Rank 8 Unique Gu (see content/canon_gu_white_heaven.py) -- reuse
+    # their own `path` field lowercased, same convention as every canon Gu above. "cloud" and
+    # "yin_yang" are genuinely new type tags (see TYPE_AFFINITY below); "qi" already existed
+    # in the shared tag vocabulary but had never been used as a Gu type before.
+    "Heavenly Sun Gu": "fire",
+    "Nine Heavens Thunder Gu": "lightning",
+    "Boundless Cloud Gu": "cloud",
+    "Heaven Crossing Gu": "space",
+    "Immemorial Heavenly Wind Gu": "wind",
+    "Primordial Heavenly Qi Gu": "qi",
+    "Heavenly Sight Gu": "light",
+    "Heaven's Wing Gu": "wind",
+    "Seven-Colored Heavenly Light Gu": "light",
+    "Great Sun Furnace Gu": "fire",
+    "Nine Cloud Palace Gu": "cloud",
+    "Tribulation Lightning Gu": "lightning",
+    "Falling Heaven Star Gu": "star",
+    "Void Cloud Gu": "space",
+    "Heavenly Reflection Gu": "light",
+    "Yang Extremity Gu": "yin_yang",
+    "White Heaven Escape Gu": "space",
+    "World-Crossing Wind Gu": "wind",
+    "Heavenly Cloud Sea Gu": "cloud",
+    "White Heaven Sovereign Gu": "heaven",
 }
 
 # Every type tag actually used above -> which Killer Move "kind" it pushes toward. A Killer
@@ -134,6 +158,10 @@ TYPE_AFFINITY: Dict[str, str] = {
     "star": "cultivation", "heaven": "cultivation", "time": "cultivation",
     # loot -- fortune/utility themes
     "storage": "loot", "movement": "loot", "luck": "loot", "space": "loot",
+    # White Heaven's 3 new-to-this-bucket types: "cloud" (defensive/domain themes, alongside
+    # earth/blood/metal/bone), "yin_yang" and "qi" (restorative/essence themes, alongside
+    # moon/light/food/water) -- "qi" already existed as a tag but was never bucketed here.
+    "cloud": "buff", "yin_yang": "essence", "qi": "essence",
 }
 
 

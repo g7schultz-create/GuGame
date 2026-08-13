@@ -6,7 +6,7 @@ import discord
 
 from . import avatar, canon_gu, chargen, combat, dao_paths
 from .base_view import GameView
-from .equipment import EQUIPMENT, gear_power_score
+from .equipment import EQUIPMENT, gear_power_score, parse_gu_name
 from .items import ITEMS, roll_essence_restoration_pill_drop
 from .monsters import MONSTERS, roll_loot
 from .raid import (
@@ -198,10 +198,17 @@ class HuntView(GameView):
 
     def _trait_bonus(self, key: str) -> float:
         """A named root's AND a named physique's own stat_bonuses value for `key` (see
-        character_data.CharacterTraitSpec), summed — mirrors GameManager's own _trait_bonus."""
+        character_data.CharacterTraitSpec), PLUS the equipped Gu's own stat_bonuses value for
+        it — mirrors GameManager._trait_bonus's own root/physique/Gu fold-in exactly (that
+        version already included Gu; this one didn't until White Heaven's Heavenly
+        Reflection Gu needed retaliation_damage_pct to actually work through a Gu, not just
+        root/physique)."""
         root_value = self.root_spec.stat_bonuses.get(key, 0) if self.root_spec else 0
         physique_value = self.physique_spec.stat_bonuses.get(key, 0) if self.physique_spec else 0
-        return root_value + physique_value
+        gu_item_name = self.game.db.get_equipped(self.user_id).get("gu_ability")
+        gu = EQUIPMENT.get(gu_item_name) if gu_item_name else None
+        gu_value = gu.stat_bonuses.get(key, 0) if gu else 0
+        return root_value + physique_value + gu_value
 
     def _player_combat_stats(self) -> dict:
         bonuses = self._equipment_bonuses()
@@ -406,6 +413,7 @@ class HuntView(GameView):
             str_multiplier=self.monster.ability.str_multiplier, incoming_reduction=incoming_reduction,
             ignore_chance=bonuses.get("ignore_attack_chance", 0) + sp.get("ignore_attack_chance", 0),
             dodge_chance_bonus=bonuses.get("dodge_chance_pct", 0) + sp.get("dodge_chance_pct", 0),
+            max_dodge_chance=combat.MAX_DODGE_CHANCE + bonuses.get("dodge_cap_bonus_pct", 0),
             lifesteal_percent=self.monster.ability.lifesteal_percent,
         )
         if not result.hit:
@@ -446,12 +454,13 @@ class HuntView(GameView):
             self._clear_active_hunt()
             self.player_hp = self.game.db.set_hp(self.user_id, 1)
             ward_name = self.game.check_and_consume_defeat_ward(self.user_id)
+            escape_gu_name = None if ward_name else self.game.check_and_consume_worldly_escape(self.user_id)
             if ward_name:
                 self.qi_lost_on_death = 0.0
                 self._log_line(f"✨ **{ward_name}** activates — you're struck down but the Qi loss is warded away!")
-            elif self.game.check_and_consume_worldly_escape(self.user_id):
+            elif escape_gu_name:
                 self.qi_lost_on_death = 0.0
-                self._log_line("✨ **Worldly Escape Gu** activates — you're struck down but the Qi loss is escaped entirely!")
+                self._log_line(f"✨ **{escape_gu_name}** activates — you're struck down but the Qi loss is escaped entirely!")
             else:
                 # Consolidated single read of the generic pool (root/physique/Gu/avatar
                 # soul/avatar gear all fold in there now — see
@@ -481,6 +490,10 @@ class HuntView(GameView):
         # — the offensive counterpart to Gu's existing beast_damage_reduction_pct (defensive).
         if self.monster.monster_type == "Beast":
             damage_pct_bonus += self._trait_bonus("beast_damage_pct")
+        # Tribulation Lightning Gu (see content/canon_gu_white_heaven.py) -- same elite-gated
+        # boss_damage_bonus_pct hookup as team_battle.py's identical addition.
+        if self.monster.elite:
+            damage_pct_bonus += bonuses.get("boss_damage_bonus_pct", 0)
         # Swift Foot-family physique's Momentum, consumed on whichever basic Attack comes
         # next after the triggering dodge (hit or miss, same convention as the Fire root's
         # own pending-bonus trigger); Strong Bone-family physique's every-3rd-basic-Attack
@@ -585,6 +598,15 @@ class HuntView(GameView):
         canon_drop = canon_gu.roll_canon_gu_drop(self.monster.gu_rank, "normal", luck_bonus=min(0.05, effective_luck * 0.001))
         if canon_drop:
             self.loot[canon_drop] = self.loot.get(canon_drop, 0) + 1
+        # White Heaven's own 20 Rank 8 Unique Gu (see GameManager.roll_white_heaven_bonus_gu)
+        # -- a completely separate 1/5000 roll, only ever eligible against a White Heaven
+        # monster (detected via its own realm field, set on every White Heaven Monster
+        # instance -- see content/monsters/white_heaven.py).
+        if self.monster.realm == "White Heaven":
+            bonus_gu = self.game.roll_white_heaven_bonus_gu()
+            if bonus_gu:
+                self.loot[bonus_gu] = self.loot.get(bonus_gu, 0) + 1
+                self._log_line(f"🌟 A Rank 8 Unique Gu descends from White Heaven itself — **{bonus_gu}**!")
         essence_pill = roll_essence_restoration_pill_drop()
         if essence_pill:
             pill_name, pill_qty = essence_pill
@@ -1050,6 +1072,23 @@ class HuntView(GameView):
         )
 
         equipped_gu_name = self.game.get_equipped(self.user_id).get("gu_ability")
+        # Heavenly Sight Gu (see content/canon_gu_white_heaven.py) -- "reveals enemy stats,
+        # hidden effects, traps, and weaknesses". A small, real presentation-only addition
+        # rather than new combat math: shows the monster's own raw stat block and lifesteal
+        # while equipped, same information a player could otherwise only infer from combat.
+        # Equipped Gu names carry a "(Quality)" suffix -- parse_gu_name strips it to recover
+        # the bare family name (see gu_types.gu_type_for's identical convention).
+        equipped_gu_family = (parse_gu_name(equipped_gu_name)[0] or equipped_gu_name) if equipped_gu_name else None
+        if equipped_gu_family == "Heavenly Sight Gu":
+            heal_note = f" • 💉 Self-heals {m.ability.lifesteal_percent:.0%} of damage dealt" if m.ability.lifesteal_percent > 0 else ""
+            embed.add_field(
+                name="👁️ Heavenly Sight",
+                value=(
+                    f"🎯 ATK `{m.atk_stat:,}` ⚔️ STR `{m.str_stat:,}` 🛡️ DEF `{m.def_stat:,}`\n"
+                    f"🏃 SPD `{m.spd_stat:,}` 🍀 LCK `{m.luck_stat:,}`{heal_note}"
+                ),
+                inline=False,
+            )
         empower_note = " • ✨ Empowered (next Attack/Guard)" if self.qi_empowered else ""
         embed.add_field(
             name=f"🧍 {self.display_name}",

@@ -302,12 +302,13 @@ class BattlefieldView(GameView):
             self.status = "defeat"
             self.player_hp = self.game.db.set_hp(self.user_id, 1)
             ward_name = self.game.check_and_consume_defeat_ward(self.user_id)
+            escape_gu_name = None if ward_name else self.game.check_and_consume_worldly_escape(self.user_id)
             if ward_name:
                 self.qi_lost_on_death = 0.0
                 self._log_line(f"✨ **{ward_name}** activates — you're struck down but the Qi loss is warded away!")
-            elif self.game.check_and_consume_worldly_escape(self.user_id):
+            elif escape_gu_name:
                 self.qi_lost_on_death = 0.0
-                self._log_line("✨ **Worldly Escape Gu** activates — you're struck down but the Qi loss is escaped entirely!")
+                self._log_line(f"✨ **{escape_gu_name}** activates — you're struck down but the Qi loss is escaped entirely!")
             else:
                 # Consolidated single read of the generic pool (root/physique/Gu/avatar
                 # soul/avatar gear all fold in there now — see

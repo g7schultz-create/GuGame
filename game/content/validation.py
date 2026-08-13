@@ -247,9 +247,19 @@ def validate_canon_gu() -> List[str]:
     real passive, see canon_gu.py's own module docstring) stay internally consistent with
     each other and with a real, known stat_bonuses key."""
     from .. import canon_gu, equipment, manual_data
+    from ..manager import GameManager
 
     errors: List[str] = []
-    known_stat_keys = set(equipment.FOUNDATION_STAT_LABELS) | set(equipment.SPECIAL_BONUS_POWER_WEIGHTS)
+    # equipment.SPECIAL_BONUS_POWER_WEIGHTS looks like the right source (validate_gu_families
+    # uses it) but turns out to be an incomplete, separate power-SCORING table, missing 15
+    # real SPECIAL_BONUS_KEYS entries (fire_burn_damage_pct, armor_penetration_pct,
+    # total_damage_pct, ...) that were never added there when they were added to the real
+    # pool. GameManager.SPECIAL_BONUS_KEYS is the actual authoritative "flows through
+    # compute_equipment_bonuses" list. retaliation_damage_pct is allowed separately -- it's
+    # root/physique/Gu-via-_trait_bonus only (HuntView/TeamBattleEngine's own local
+    # _trait_bonus, not the generic SPECIAL_BONUS_KEYS pool), which White Heaven's Heavenly
+    # Reflection Gu is the first Gu to use.
+    known_stat_keys = set(equipment.FOUNDATION_STAT_LABELS) | set(GameManager.SPECIAL_BONUS_KEYS) | {"retaliation_damage_pct"}
     known_rarities = set(manual_data.RARITY_ORDER)
     seen_names = set()
 

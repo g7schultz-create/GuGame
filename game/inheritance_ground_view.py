@@ -1019,8 +1019,9 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         if ward_name:
             self._log(f"✨ **{ward_name}** activates for **{p['name']}** — knocked out, but the Qi loss is warded away!")
             return
-        if self.game.check_and_consume_worldly_escape(user_id):
-            self._log(f"✨ **Worldly Escape Gu** activates for **{p['name']}** — knocked out, but the Qi loss is escaped entirely!")
+        escape_gu_name = self.game.check_and_consume_worldly_escape(user_id)
+        if escape_gu_name:
+            self._log(f"✨ **{escape_gu_name}** activates for **{p['name']}** — knocked out, but the Qi loss is escaped entirely!")
             return
         reduction = self.game.compute_equipment_bonuses(user_id).get("death_qi_loss_reduction_pct", 0)
         qi_lost, _ = self.game.db.apply_death_penalty(user_id, reduction_pct=reduction)

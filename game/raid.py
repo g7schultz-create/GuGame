@@ -37,6 +37,7 @@ import time
 import discord
 
 from . import avatar, avatar_gear, canon_gu, chargen, dao_paths
+from .equipment import parse_gu_name
 from .base_view import GameView
 from .character_class import CLASS_EMOJI
 from .items import roll_essence_restoration_pill_drop
@@ -375,6 +376,14 @@ class RaidView(TeamBattleEngine, GameView):
             )
             if canon_drop:
                 loot[canon_drop] = loot.get(canon_drop, 0) + 1
+            # White Heaven's own 20 Rank 8 Unique Gu (see GameManager.roll_white_heaven_bonus_gu)
+            # -- one independent 1/5000 roll per participant, same as canon_drop just above,
+            # only ever eligible against a White Heaven boss (detected via its own realm field).
+            if self.enemies[0].monster.realm == "White Heaven":
+                bonus_gu = self.game.roll_white_heaven_bonus_gu()
+                if bonus_gu:
+                    loot[bonus_gu] = loot.get(bonus_gu, 0) + 1
+                    self._log(f"🌟 A Rank 8 Unique Gu descends from White Heaven itself for **{p['name']}** — **{bonus_gu}**!")
 
             # Thieving Heaven Inheritor Root's Otherworldly Theft — once daily, one extra
             # roll from a plain tiered-material pool. By construction this never touches Gu,
@@ -689,6 +698,25 @@ class RaidView(TeamBattleEngine, GameView):
             )
         alive_count = sum(1 for e in self.enemies if e.alive)
         embed.add_field(name=f"⚔️ Enemies ({alive_count}/{len(self.enemies)} alive)", value="\n".join(enemy_lines)[:1024], inline=False)
+
+        # Heavenly Sight Gu (see content/canon_gu_white_heaven.py) -- this embed is shared
+        # across the whole party (one message, not personalized per viewer, see
+        # equipment_view.py's own "shared render" note for the same constraint), so if ANY
+        # participant has it equipped, the reveal is shown to the whole party rather than
+        # trying to build a per-viewer variant. Equipped Gu names carry a "(Quality)" suffix
+        # -- parse_gu_name strips it to recover the bare family name.
+        def _has_heavenly_sight(uid):
+            gu_name = self.game.db.get_equipped(uid).get("gu_ability")
+            return gu_name and (parse_gu_name(gu_name)[0] or gu_name) == "Heavenly Sight Gu"
+
+        if any(_has_heavenly_sight(uid) for uid in self.participants):
+            sight_lines = [
+                f"**{e.monster.name}** — 🎯 ATK `{e.monster.atk_stat:,}` ⚔️ STR `{e.monster.str_stat:,}` 🛡️ DEF `{e.monster.def_stat:,}` 🏃 SPD `{e.monster.spd_stat:,}`"
+                + (f" • 💉 heals {e.monster.ability.lifesteal_percent:.0%} of damage dealt" if e.monster.ability.lifesteal_percent > 0 else "")
+                for e in self.enemies if e.alive
+            ]
+            if sight_lines:
+                embed.add_field(name="👁️ Heavenly Sight", value="\n".join(sight_lines)[:1024], inline=False)
 
         if self.participants:
             lines = []

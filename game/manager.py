@@ -12,6 +12,7 @@ from . import (
     search_data, sects, split_body, tournament, treasure_hunt, white_heaven, world_boss, world_regions,
 )
 from .content.monsters import blood_sea_ancestor
+from .content import canon_gu_white_heaven
 from .character_data import PATHS, PHYSIQUE_TIER_ORDER, RACES, ROOT_TIER_ORDER
 from .database import GameDatabase
 from .items import ITEMS, roll_essence_restoration_pill_drop
@@ -1213,6 +1214,24 @@ class GameManager:
         self.db.add_item(user_id, gu_name, 1)
         return gu_name
 
+    # White Heaven's own 20 Rank 8 Unique Gu (see game/content/canon_gu_white_heaven.py) --
+    # a SEPARATE roll from canon_gu.roll_canon_gu_drop's normal weighted mechanism (these 20
+    # are drop_weight=0, so that roll always skips them entirely, same as the 2 pre-existing
+    # Uniques). Confirmed via explicit request: ONE combined 1/5000 roll per White-Heaven
+    # kill decides if ANY of the 20 drops at all, not each independently.
+    WHITE_HEAVEN_BONUS_GU_CHANCE = 1 / 5000
+
+    def roll_white_heaven_bonus_gu(self) -> Optional[str]:
+        """Called once per White-Heaven hunt/raid kill (see hunt.py's/raid.py's own victory
+        handling, gated on the defeated monster's realm == "White Heaven"). Always rolls at
+        Common quality/star 1, same "a newly obtained Gu starts at 1 star" convention
+        canon_gu.roll_canon_gu_drop uses. Returns an item_name, or None on a miss (by far the
+        common case at 1/5000)."""
+        if random.random() >= self.WHITE_HEAVEN_BONUS_GU_CHANCE:
+            return None
+        name = random.choice(canon_gu_white_heaven.WHITE_HEAVEN_CANON_GU_NAMES)
+        return equipment.gu_item_name(name, "Common")
+
     # -- /search_forgotten_blessed_land treasure-hunt board (see game/treasure_hunt.py) --------
     TREASURE_HUNT_REALM_GATE = 2  # Core Formation's great_realm_index
     TREASURE_HUNT_COOLDOWN_SECONDS = 1 * 3600  # 1 hour between boards, no stone/item cost
@@ -1536,6 +1555,12 @@ class GameManager:
         # consumed in use_item).
         "fire_burn_damage_pct", "meditate_cooldown_reduction_pct", "alchemy_bonus_pill_chance_pct",
         "crafting_success_pct", "pill_save_chance_pct",
+        # White Heaven Gu (see game/content/canon_gu_white_heaven.py) -- Void Cloud Gu's
+        # literal "dodge over the cap" ask. combat.resolve_attack already accepts a
+        # max_dodge_chance override parameter; every player-defends call site (hunt.py's
+        # _monster_turn, team_battle.py's _resolve_enemy_hit) adds this on top of the normal
+        # combat.MAX_DODGE_CHANCE instead of leaving that cap hardcoded.
+        "dodge_cap_bonus_pct",
     )
 
     # A manual's essence_recovery_pct (see manual_view.EFFECT_LABELS) is the exact same
@@ -2314,11 +2339,27 @@ class GameManager:
     # world_regions.py above: that's an instant-switch mortal-realm playstyle choice, this is
     # a real journey gated at the opposite end of the realm ladder.
 
+    # Heaven's Wing Gu (see game/content/canon_gu_white_heaven.py) -- "faster White Heaven
+    # travel time" is checked live (not snapshotted at trip start) since equipping/
+    # unequipping mid-trip to change your own travel time isn't a meaningful exploit, and
+    # this avoids a second persisted "effective duration for this specific trip" column.
+    HEAVENS_WING_GU_TRAVEL_DISCOUNT_PCT = 0.5
+
+    def _white_heaven_travel_seconds(self, user_id: int) -> int:
+        gu_name = self.db.get_equipped(user_id).get("gu_ability")
+        # Equipped Gu names carry a "(Quality)" suffix (e.g. "Heaven's Wing Gu (Immortal)")
+        # -- parse_gu_name strips it to recover the bare family name, falling back to the
+        # raw name for flat/unsuffixed items (same gu_types.gu_type_for convention).
+        family = equipment.parse_gu_name(gu_name)[0] or gu_name if gu_name else None
+        if family == "Heaven's Wing Gu":
+            return round(white_heaven.WHITE_HEAVEN_TRAVEL_SECONDS * (1 - self.HEAVENS_WING_GU_TRAVEL_DISCOUNT_PCT))
+        return white_heaven.WHITE_HEAVEN_TRAVEL_SECONDS
+
     def get_white_heaven_status(self, user_id: int, name: str) -> dict:
         player = self.db.get_or_create_player(user_id, name)
         great_realm_index = realms.STAGES[player["realm_index"]].great_realm_index
         started = player["white_heaven_travel_started_ts"]
-        remaining = max(0, white_heaven.WHITE_HEAVEN_TRAVEL_SECONDS - (int(time.time()) - started)) if started else 0
+        remaining = max(0, self._white_heaven_travel_seconds(user_id) - (int(time.time()) - started)) if started else 0
         return {
             "player": player,
             "eligible": white_heaven.is_eligible(great_realm_index),
@@ -2355,7 +2396,7 @@ class GameManager:
         completed = []
         now = int(time.time())
         for player in self.db.get_players_with_pending_white_heaven_travel():
-            if now - player["white_heaven_travel_started_ts"] < white_heaven.WHITE_HEAVEN_TRAVEL_SECONDS:
+            if now - player["white_heaven_travel_started_ts"] < self._white_heaven_travel_seconds(player["user_id"]):
                 continue
             arrived = player["white_heaven_status"] == "traveling_there"
             self.db.complete_white_heaven_travel(player["user_id"], "present" if arrived else "away")
@@ -3511,7 +3552,13 @@ class GameManager:
             return affix.name
         return None
 
-    def check_and_consume_worldly_escape(self, user_id: int) -> bool:
+    # White Heaven Escape Gu (see game/content/canon_gu_white_heaven.py) is a "near-perfect
+    # escape Gu" by explicit request -- the closest existing mechanic is Worldly Escape Gu's
+    # own once-daily death-penalty negation, so it shares that exact check rather than
+    # inventing a second, parallel daily-flag system for what's functionally the same ask.
+    WORLDLY_ESCAPE_GU_NAMES = ("Worldly Escape Gu", "White Heaven Escape Gu")
+
+    def check_and_consume_worldly_escape(self, user_id: int) -> Optional[str]:
         """Worldly Escape Gu (see world_boss.py) — "once per day, ignore the penalty from
         one PvP defeat or failed dangerous exploration." Retargeted to hunt/raid/battlefield's
         real death Qi-loss penalty instead of PvP specifically: PvP defeat in this game
@@ -3519,11 +3566,20 @@ class GameManager:
         so there's no PvP penalty left to negate — this is the actual, existing combat-defeat
         penalty the doc's flavor text was gesturing at. Checked alongside (and after)
         check_and_consume_defeat_ward — an accessory ward still takes priority since it's the
-        more specific, pre-existing mechanic."""
+        more specific, pre-existing mechanic. Returns the equipped Gu's own name (Worldly
+        Escape Gu or White Heaven Escape Gu) on activation, so callers can log the real name
+        instead of a hardcoded one, or None if it didn't trigger."""
         gu_name = self.db.get_equipped(user_id).get("gu_ability")
-        if gu_name != "Worldly Escape Gu":
-            return False
-        return self.db.try_use_daily_gu_penalty_negation(user_id)
+        if not gu_name:
+            return None
+        # Equipped Gu names carry a "(Quality)" suffix (e.g. "White Heaven Escape Gu
+        # (Immortal)") -- parse_gu_name strips it for the comparison, same convention as
+        # _white_heaven_travel_seconds above; the RETURNED name stays the full display name
+        # (gu_name itself), which reads better in a log line either way.
+        family = equipment.parse_gu_name(gu_name)[0] or gu_name
+        if family not in self.WORLDLY_ESCAPE_GU_NAMES:
+            return None
+        return gu_name if self.db.try_use_daily_gu_penalty_negation(user_id) else None
 
     def roll_bonus_discovery_reward(self, user_id: int, name: str, reward_grant_fn) -> Optional[str]:
         """Called after a discovery's FINAL-step reward is granted (see resolve_discovery_step)

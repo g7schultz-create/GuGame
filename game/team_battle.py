@@ -169,13 +169,18 @@ class TeamBattleEngine:
 
     def _trait_bonus(self, p: dict, key: str) -> float:
         """A participant's named root AND named physique own stat_bonuses value for `key`
-        (see character_data.CharacterTraitSpec), summed — mirrors hunt.py's identical helper,
-        just reading off the participant dict instead of self."""
+        (see character_data.CharacterTraitSpec), PLUS their equipped Gu's own stat_bonuses
+        value for it — mirrors hunt.py's identical helper (same White Heaven Heavenly
+        Reflection Gu motivation for adding the Gu fold-in), reading off the participant
+        dict instead of self. Uses _equipped_gu(p["user_id"]) rather than a second, separate
+        DB-lookup pattern."""
         root_spec = chargen.get_root_spec(p.get("root_name"))
         physique_spec = chargen.get_physique_spec(p.get("physique_name"))
         root_value = root_spec.stat_bonuses.get(key, 0) if root_spec else 0
         physique_value = physique_spec.stat_bonuses.get(key, 0) if physique_spec else 0
-        return root_value + physique_value
+        gu = self._equipped_gu(p["user_id"]) if "user_id" in p else None
+        gu_value = gu.stat_bonuses.get(key, 0) if gu else 0
+        return root_value + physique_value + gu_value
 
     def _attacker_stats(self, user_id: int, p: dict) -> tuple:
         """Returns (stats, bonuses, soul_projection_bonuses) — the third element is computed
@@ -277,6 +282,11 @@ class TeamBattleEngine:
         alive = self._alive_enemies()
         default_target = self.enemies.index(alive[0]) if alive else 0
         state = {
+            # Not read by most combat code (every existing call site already has user_id in
+            # scope as the self.participants dict KEY) -- only added so _trait_bonus below
+            # can resolve the equipped Gu without threading user_id through its own signature
+            # and 20+ call sites across team_battle.py/raid.py/inheritance_ground_view.py.
+            "user_id": user_id,
             "name": name, "hp": hp_settled["hp"] + hp_bonus, "max_hp": hp_settled["max_hp"] + hp_bonus, "down": False,
             "qi": qi_settled["battle_qi"] + qi_bonus, "max_qi": qi_settled["qi_stat"] + qi_bonus, "empowered": False,
             "target_index": default_target, "potions_used": 0,
@@ -555,6 +565,12 @@ class TeamBattleEngine:
                 # enemies — the offensive counterpart to Gu's existing beast_damage_reduction_pct.
                 if target.monster.monster_type == "Beast":
                     damage_pct_bonus += self._trait_bonus(p, "beast_damage_pct")
+                # Tribulation Lightning Gu (see content/canon_gu_white_heaven.py) --
+                # boss_damage_bonus_pct previously only ever applied in attack_world_boss
+                # (manager.py); this is its first hookup in raid/team combat, gated on the
+                # SAME elite flag every raid boss/tougher hunt mob already carries.
+                if target.monster.elite:
+                    damage_pct_bonus += bonuses.get("boss_damage_bonus_pct", 0)
                 # Demon Soul's execute_damage_pct (passive + Soul Projection's amplified delta)
                 # only applies once the target's already below half HP, mirroring hunt.py's
                 # identical caller-side pattern.
@@ -699,10 +715,11 @@ class TeamBattleEngine:
                 p["down"] = True
                 self.game.db.set_hp(user_id, 1)
                 ward_name = self.game.check_and_consume_defeat_ward(user_id)
+                escape_gu_name = None if ward_name else self.game.check_and_consume_worldly_escape(user_id)
                 if ward_name:
                     self._log(f"✨ **{ward_name}** activates for **{p['name']}** — knocked out, but the Qi loss is warded away!")
-                elif self.game.check_and_consume_worldly_escape(user_id):
-                    self._log(f"✨ **Worldly Escape Gu** activates for **{p['name']}** — knocked out, but the Qi loss is escaped entirely!")
+                elif escape_gu_name:
+                    self._log(f"✨ **{escape_gu_name}** activates for **{p['name']}** — knocked out, but the Qi loss is escaped entirely!")
                 else:
                     bonuses = self.game.compute_equipment_bonuses(user_id)
                     reduction = bonuses.get("death_qi_loss_reduction_pct", 0)
@@ -861,6 +878,7 @@ class TeamBattleEngine:
             enemy.stats(), attacker_stats, str_multiplier=str_multiplier, incoming_reduction=total_reduction,
             guaranteed_hit=guaranteed_hit, ignore_chance=bonuses.get("ignore_attack_chance", 0) + sp.get("ignore_attack_chance", 0),
             dodge_chance_bonus=bonuses.get("dodge_chance_pct", 0) + sp.get("dodge_chance_pct", 0) - debuff_dodge_pct,
+            max_dodge_chance=combat.MAX_DODGE_CHANCE + bonuses.get("dodge_cap_bonus_pct", 0),
             lifesteal_percent=enemy.monster.ability.lifesteal_percent, damage_pct_bonus=damage_pct_bonus,
         )
         if not result.hit:
@@ -898,10 +916,11 @@ class TeamBattleEngine:
                 p["down"] = True
                 self.game.db.set_hp(target_id, 1)
                 ward_name = self.game.check_and_consume_defeat_ward(target_id)
+                escape_gu_name = None if ward_name else self.game.check_and_consume_worldly_escape(target_id)
                 if ward_name:
                     self._log(f"✨ **{ward_name}** activates for **{p['name']}** — knocked out, but the Qi loss is warded away!")
-                elif self.game.check_and_consume_worldly_escape(target_id):
-                    self._log(f"✨ **Worldly Escape Gu** activates for **{p['name']}** — knocked out, but the Qi loss is escaped entirely!")
+                elif escape_gu_name:
+                    self._log(f"✨ **{escape_gu_name}** activates for **{p['name']}** — knocked out, but the Qi loss is escaped entirely!")
                 else:
                     # Consolidated single read of the generic pool (root/physique/Gu/avatar
                     # soul/avatar gear all fold in there now — see

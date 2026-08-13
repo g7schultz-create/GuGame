@@ -26,6 +26,9 @@ still be granted for events) but are never eligible in roll_canon_gu_drop.
 import random
 
 from . import equipment
+from .content.canon_gu_white_heaven import (
+    WHITE_HEAVEN_CANON_GU, WHITE_HEAVEN_FUNCTIONAL_EFFECT_BY_STAR, WHITE_HEAVEN_FUNCTIONAL_STAT_KEY,
+)
 
 # From the spec's STAR_EFFECT_MULTIPLIER table.
 STAR_EFFECT_MULTIPLIER = {1: 1.00, 2: 1.12, 3: 1.25, 4: 1.40, 5: 1.58, 6: 1.80, 7: 2.05}
@@ -42,6 +45,9 @@ _FUNCTIONAL_EFFECT_BY_STAR = {
     "Footprint Gu": [10, 11, 12, 14, 16, 18, 20],
     "Heavenly Essence Treasure Lotus": [12, 13, 15, 17, 19, 22, 25],
 }
+# White Heaven's own 18 functional Gu (see content/canon_gu_white_heaven.py's own module
+# docstring for the calibration approach) -- merged in before _register_canon_gu() runs.
+_FUNCTIONAL_EFFECT_BY_STAR.update(WHITE_HEAVEN_FUNCTIONAL_EFFECT_BY_STAR)
 
 # Which equipment stat_bonuses key each functional Gu's effect feeds, and whether the
 # transcribed value is a flat number (permanent_strength) or a fraction of a percent
@@ -55,6 +61,7 @@ _FUNCTIONAL_STAT_KEY = {
     "Footprint Gu": ("loot_chance_bonus_pct", "percent"),
     "Heavenly Essence Treasure Lotus": ("essence_regen_pct", "percent"),
 }
+_FUNCTIONAL_STAT_KEY.update(WHITE_HEAVEN_FUNCTIONAL_STAT_KEY)
 
 CANON_GU = [
     {"name": "Moonlight Gu", "gu_rank": 1, "path": "Moon", "role": "Attack", "rarity": "Common", "drop_weight": 130, "base_power": 12, "is_passive": False,
@@ -123,6 +130,11 @@ CANON_GU = [
     {"name": "Fortune Rivalling Heaven Gu", "gu_rank": 8, "path": "Luck", "role": "Luck", "rarity": "Unique", "drop_weight": 0, "base_power": 900, "is_passive": True,
      "description": "An extraordinary luck-path Immortal Gu; event-only in this game.", "effect_text": "Event-only Immortal Gu. Never drops normally. Greatly improves rare drops and encounters. (Not modeled yet.)"},
 ]
+
+# White Heaven's own 20 Rank 8 Unique Gu (see content/canon_gu_white_heaven.py) -- also
+# drop_weight=0 like the 2 entries just above, but reachable through a SEPARATE roll
+# (GameManager.roll_white_heaven_bonus_gu) rather than event-only manual grants.
+CANON_GU.extend(WHITE_HEAVEN_CANON_GU)
 
 CANON_GU_BY_NAME = {gu["name"]: gu for gu in CANON_GU}
 

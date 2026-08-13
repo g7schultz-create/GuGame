@@ -56,7 +56,10 @@ class WhiteHeavenView(GameView):
                 else "You're already traveling or already there."
             )
         else:
-            self.last_message = f"🧳 You set out for White Heaven — arriving in {format_duration(white_heaven.WHITE_HEAVEN_TRAVEL_SECONDS)}."
+            # Live-computed (not the raw WHITE_HEAVEN_TRAVEL_SECONDS constant) -- Heaven's
+            # Wing Gu (see GameManager._white_heaven_travel_seconds) can shorten this.
+            remaining = (await asyncio.to_thread(self._status))["remaining_seconds"]
+            self.last_message = f"🧳 You set out for White Heaven — arriving in {format_duration(remaining)}."
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -66,7 +69,8 @@ class WhiteHeavenView(GameView):
         if not result["ok"]:
             self.last_message = "You're not currently in White Heaven."
         else:
-            self.last_message = f"🧳 You start the journey home — arriving in {format_duration(white_heaven.WHITE_HEAVEN_TRAVEL_SECONDS)}."
+            remaining = (await asyncio.to_thread(self._status))["remaining_seconds"]
+            self.last_message = f"🧳 You start the journey home — arriving in {format_duration(remaining)}."
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
