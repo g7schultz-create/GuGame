@@ -373,6 +373,18 @@ class GameDatabase:
         "equipped_combat_killer_move_id": "INTEGER DEFAULT NULL",
         "equipped_support_killer_move_id": "INTEGER DEFAULT NULL",
         "last_killer_move_swap_ts": "INTEGER DEFAULT 0",
+
+        # Gu Pet (see game/gu_pet.py / /gu_pet) -- a player has at most one ACTIVE Gu Pet at a
+        # time (they may own several, dormant ones sit in gu_pets unaffected -- see
+        # GameDatabase.get_player_gu_pets), so a single pointer column here is enough, same
+        # "exactly one of these at a time" idiom world_region/sect_id/master_id above already
+        # use. last_gu_pet_mode_switch_ts gates the Combat/Cultivation toggle's own 10-minute
+        # cooldown -- deliberately its own column rather than routed through GameManager.
+        # _check_cooldown, since that helper's cooldown_reduction_pct fold-in is for player-
+        # action cooldowns (mine/gather/explore/...), not something either Gu Pet spec asked
+        # to apply here.
+        "active_gu_pet_id": "INTEGER DEFAULT NULL",
+        "last_gu_pet_mode_switch_ts": "INTEGER DEFAULT 0",
     }
 
     def __init__(self, db_path: str = DB_PATH):
@@ -589,6 +601,47 @@ class GameDatabase:
             tier INTEGER,
             stat_bonuses TEXT,
             power_score REAL,
+            created_ts INTEGER
+        )
+        """)
+
+        # Gu Pet (see game/gu_pet.py / /gu_pet) -- ownership IS the row, same shape as
+        # avatar_gear_instances/crafted_gear above (a rolled, per-instance entity, not a
+        # flat item_name+quantity stack). A player may own several (players.active_gu_pet_id
+        # picks which one is currently active) -- growth-phase state (fed_totals,
+        # growth_days_fed/required, feed_streak_days, last_fed_ts) is only ever read/written
+        # while stage='growth'; satiety/last_satiety_update_ts only matter once stage='mature'
+        # (see GameManager._settle_gu_pet_satiety). species/path/mode are NULL until
+        # crystallization locks them in -- see GameManager.crystallize_gu_pet.
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS gu_pets (
+            pet_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER,
+            rank INTEGER,
+            stage TEXT DEFAULT 'growth',
+            species TEXT DEFAULT NULL,
+            path TEXT DEFAULT NULL,
+            mode TEXT DEFAULT 'cultivation',
+            stat_bonuses TEXT DEFAULT '{}',
+            fed_totals TEXT DEFAULT '{}',
+            growth_days_required INTEGER,
+            growth_days_fed INTEGER DEFAULT 0,
+            feed_streak_days INTEGER DEFAULT 0,
+            last_fed_ts INTEGER DEFAULT 0,
+            satiety REAL DEFAULT 100.0,
+            last_satiety_update_ts INTEGER DEFAULT 0,
+            image_path TEXT DEFAULT NULL,
+            created_ts INTEGER
+        )
+        """)
+        # Shared-art cache for Common/Uncommon/Rare Gu Pets (see game/gu_pet_images.py's
+        # get_pet_cache_key) -- Epic+ pets never touch this table, their portrait is unique
+        # and lives on the gu_pets row's own image_path instead (see GameManager.
+        # should_generate_unique_image).
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS gu_pet_image_cache (
+            cache_key TEXT PRIMARY KEY,
+            image_path TEXT,
             created_ts INTEGER
         )
         """)
@@ -3785,6 +3838,100 @@ class GameDatabase:
     def delete_avatar_gear_instance(self, instance_id: int):
         con = self.connect()
         con.execute("DELETE FROM avatar_gear_instances WHERE instance_id = ?", (instance_id,))
+        con.commit()
+        con.close()
+
+    # -- Gu Pet (see game/gu_pet.py / /gu_pet) -----------------------------------------------
+
+    @staticmethod
+    def _gu_pet_row_to_dict(row) -> dict:
+        return {
+            "pet_id": row["pet_id"], "owner_id": row["owner_id"], "rank": row["rank"],
+            "stage": row["stage"], "species": row["species"], "path": row["path"], "mode": row["mode"],
+            "stat_bonuses": json.loads(row["stat_bonuses"]), "fed_totals": json.loads(row["fed_totals"]),
+            "growth_days_required": row["growth_days_required"], "growth_days_fed": row["growth_days_fed"],
+            "feed_streak_days": row["feed_streak_days"], "last_fed_ts": row["last_fed_ts"],
+            "satiety": row["satiety"], "last_satiety_update_ts": row["last_satiety_update_ts"],
+            "image_path": row["image_path"], "created_ts": row["created_ts"],
+        }
+
+    def create_gu_pet(self, owner_id: int, rank: int, growth_days_required: int) -> int:
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute(
+            "INSERT INTO gu_pets (owner_id, rank, growth_days_required, created_ts) VALUES (?, ?, ?, ?)",
+            (owner_id, rank, growth_days_required, int(time.time())),
+        )
+        con.commit()
+        pet_id = cur.lastrowid
+        con.close()
+        return pet_id
+
+    def get_gu_pet(self, pet_id: int) -> Optional[dict]:
+        con = self.connect()
+        row = con.execute("SELECT * FROM gu_pets WHERE pet_id = ?", (pet_id,)).fetchone()
+        con.close()
+        return self._gu_pet_row_to_dict(row) if row else None
+
+    def get_player_gu_pets(self, owner_id: int) -> list:
+        con = self.connect()
+        rows = con.execute("SELECT * FROM gu_pets WHERE owner_id = ? ORDER BY pet_id", (owner_id,)).fetchall()
+        con.close()
+        return [self._gu_pet_row_to_dict(row) for row in rows]
+
+    # Whitelist of real gu_pets columns a caller may set -- same "column comes from a fixed
+    # known-name list, never built from raw user input" guard set_timestamp_column already
+    # uses for the players table, generalized here to one column-set updater instead of a
+    # bespoke setter per field, since this table's many independent phases (Feed/Crystallize/
+    # Satiety-settle/Mode-toggle) each touch a different subset of columns together.
+    _GU_PET_UPDATABLE_COLUMNS = {
+        "rank", "stage", "species", "path", "mode", "stat_bonuses", "fed_totals",
+        "growth_days_required", "growth_days_fed", "feed_streak_days", "last_fed_ts",
+        "satiety", "last_satiety_update_ts", "image_path",
+    }
+
+    def update_gu_pet(self, pet_id: int, **fields):
+        if not fields:
+            return
+        unknown = set(fields) - self._GU_PET_UPDATABLE_COLUMNS
+        if unknown:
+            raise ValueError(f"update_gu_pet: unknown column(s) {unknown}")
+        set_clause = ", ".join(f"{col} = ?" for col in fields)
+        values = [json.dumps(v) if col in ("stat_bonuses", "fed_totals") else v for col, v in fields.items()]
+        con = self.connect()
+        con.execute(f"UPDATE gu_pets SET {set_clause} WHERE pet_id = ?", (*values, pet_id))
+        con.commit()
+        con.close()
+
+    def delete_gu_pet(self, pet_id: int):
+        con = self.connect()
+        con.execute("DELETE FROM gu_pets WHERE pet_id = ?", (pet_id,))
+        con.commit()
+        con.close()
+
+    def set_active_gu_pet(self, user_id: int, pet_id: Optional[int]):
+        con = self.connect()
+        con.execute("UPDATE players SET active_gu_pet_id = ? WHERE user_id = ?", (pet_id, user_id))
+        con.commit()
+        con.close()
+
+    # -- Gu Pet image cache (see game/gu_pet_images.py) --------------------------------------
+    # Shared-art cache only -- Epic+ (unique-image) pets store their own path directly on
+    # their gu_pets row instead, see should_generate_unique_image.
+
+    def get_cached_gu_pet_image(self, cache_key: str) -> Optional[str]:
+        con = self.connect()
+        row = con.execute("SELECT image_path FROM gu_pet_image_cache WHERE cache_key = ?", (cache_key,)).fetchone()
+        con.close()
+        return row["image_path"] if row else None
+
+    def set_cached_gu_pet_image(self, cache_key: str, image_path: str):
+        con = self.connect()
+        con.execute(
+            "INSERT INTO gu_pet_image_cache (cache_key, image_path, created_ts) VALUES (?, ?, ?) "
+            "ON CONFLICT(cache_key) DO UPDATE SET image_path = excluded.image_path",
+            (cache_key, image_path, int(time.time())),
+        )
         con.commit()
         con.close()
 
