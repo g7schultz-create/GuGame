@@ -561,3 +561,55 @@ FLAVOR_RANK_INTENSITY: Dict[int, str] = {
     5: "a powerful, battle-tested", 6: "an ancient, legendary",
     7: "a mythical, world-shaking",
 }
+
+
+def should_generate_unique_image(pet: dict) -> bool:
+    return pet["rank"] >= 4  # Epic+ (see GU_PET_RANK_TO_RARITY)
+
+
+# Rank I-III (shared-cache tier, see gu_pet_images.get_pet_cache_key) pools its art into this
+# many distinct looks PER species+rank, instead of exactly one -- bounded on purpose (this
+# tier's whole point is capping API cost by reusing art across many players' pets), but
+# "everyone's Rank 1 Vampiric Beetle looks the literal same" was a real complaint once that
+# bound was 1. Rank IV+ (unique tier) needs no such bound -- every pet already gets its own
+# real generation, so it uses the pet's own full pet_id instead (see pet_flavor_seed).
+PORTRAIT_VARIANT_COUNT = 6
+
+
+def pet_flavor_seed(pet: dict) -> int:
+    """Deterministic per-pet seed feeding every random.Random pick in this module's own
+    generate_pet_name AND gu_pet_images.build_pet_prompt/get_pet_cache_key -- a pet's name and
+    its portrait are generated from the SAME seed, so the two read as thematically coherent
+    with each other (drawn from one random space) rather than two independently-random
+    systems, and the same pet always reproduces the same combination (e.g. if its stored image
+    ever needs regenerating). Rank I-III is deliberately bounded (see PORTRAIT_VARIANT_COUNT)
+    since that tier's art is shared/cached across players; Rank IV+ uses the unbounded real
+    pet_id."""
+    if should_generate_unique_image(pet):
+        return pet["pet_id"]
+    return pet["pet_id"] % PORTRAIT_VARIANT_COUNT
+
+
+# -- Pet naming -----------------------------------------------------------------------------
+
+# Same "prefix + core word" idiom manual_gen.generate_manual_name already uses for scripture
+# names (see manual_data.NAME_PREFIXES/NAME_CORE_IMAGES) -- generated ONCE at crystallization
+# (see GameManager.crystallize_gu_pet) from pet_flavor_seed above, the same seed build_pet_
+# prompt's own flavor picks use. Deliberately a broader, SPECIES-AGNOSTIC pool (not gated per
+# species like FLAVOR_ELEMENT_OPTIONS above) -- keeping every prefix/core combination reachable
+# for every species maximizes the combinatorial variety this exists to add, rather than
+# narrowing it back down to a small per-species subset.
+PET_NAME_PREFIXES = [
+    "Ninefold", "Silent", "Crimson", "Boundless", "Hollow", "Jade", "Starfall", "Heaven-Defying",
+    "Ashen", "Frostbound", "Ember", "Moonlit", "Thousand-Year", "Void-Touched", "Verdant", "Storm-Wreathed",
+    "Nine-Hidden", "Duskborn", "Glacier", "Thunderclap",
+]
+PET_NAME_CORE_WORDS = [
+    "Fang", "Claw", "Shell", "Wing", "Coil", "Thorn", "Talon", "Maw",
+    "Husk", "Sigil", "Whisper", "Shard", "Root", "Blade", "Eye", "Heart",
+    "Cinder", "Frost", "Echo", "Omen",
+]
+
+
+def generate_pet_name(rng: random.Random) -> str:
+    return f"{rng.choice(PET_NAME_PREFIXES)} {rng.choice(PET_NAME_CORE_WORDS)}"

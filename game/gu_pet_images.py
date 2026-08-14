@@ -35,31 +35,19 @@ OPENAI_IMAGE_MODEL = "gpt-image-1"
 OPENAI_IMAGE_SIZE = "1024x1024"
 OPENAI_REQUEST_TIMEOUT_SECONDS = 60
 
-# Rank I-III (shared-cache tier, see get_pet_cache_key) pools its art into this many distinct
-# looks PER species+rank, instead of exactly one -- bounded on purpose (this tier's whole
-# point is capping API cost by reusing art across many players' pets), but "everyone's Rank 1
-# Vampiric Beetle looks the literal same" was a real complaint once that bound was 1. Rank IV+
-# (unique tier) needs no such bound -- every pet already gets its own real generation, so it
-# uses the pet's own full pet_id instead (see _flavor_seed) for maximum variety.
-PORTRAIT_VARIANT_COUNT = 6
-
-
-def _flavor_seed(pet: dict) -> int:
-    """Deterministic per-pet seed feeding every random.Random pick in build_pet_prompt/
-    get_pet_cache_key -- same pet always reproduces the same flavor combination (e.g. if its
-    stored image ever needs regenerating), but two different pets very rarely land on the
-    exact same one. Rank I-III is deliberately bounded (see PORTRAIT_VARIANT_COUNT) since that
-    tier's art is shared/cached across players; Rank IV+ uses the unbounded real pet_id."""
-    if should_generate_unique_image(pet):
-        return pet["pet_id"]
-    return pet["pet_id"] % PORTRAIT_VARIANT_COUNT
+# should_generate_unique_image/PORTRAIT_VARIANT_COUNT/pet_flavor_seed all now live in gu_pet.py
+# itself (moved there so GameManager.crystallize_gu_pet can generate a pet's NAME from the
+# exact same seed this module's own build_pet_prompt uses -- see gu_pet.pet_flavor_seed's own
+# docstring) -- re-exported here so existing callers of gu_pet_images.should_generate_unique_
+# image don't need to change.
+should_generate_unique_image = gu_pet.should_generate_unique_image
 
 
 def build_pet_prompt(pet: dict) -> str:
     """pet needs species/path/rank/pet_id set (i.e. already crystallized -- see GameManager.
     crystallize_gu_pet) -- a still-growing pet has no species yet to portray."""
     species = gu_pet.SPECIES[pet["species"]]
-    rng = random.Random(_flavor_seed(pet))
+    rng = random.Random(gu_pet.pet_flavor_seed(pet))
     element = rng.choice(gu_pet.FLAVOR_ELEMENT_OPTIONS.get(pet["species"], ["spirit qi"]))
     palette = rng.choice(gu_pet.FLAVOR_COLOR_PALETTE_OPTIONS.get(pet["species"], ["muted earth tones"]))
     temperament = rng.choice(gu_pet.FLAVOR_TEMPERAMENT_OPTIONS.get(pet["path"], ["calm"]))
@@ -67,24 +55,27 @@ def build_pet_prompt(pet: dict) -> str:
     pose = rng.choice(gu_pet.FLAVOR_POSE)
     intensity = gu_pet.FLAVOR_RANK_INTENSITY.get(pet["rank"], "a")
     rarity = gu_pet.rank_to_rarity(pet["rank"])
+    # The pet's own generated name (see gu_pet.generate_pet_name) is drawn from this exact
+    # same seed -- threading it into the prompt too means the name's own random prefix/core
+    # words (Frost/Ember/Crimson/Shell/Fang/...) become additional descriptive material for
+    # the model to draw on, not just a display label, widening the image's own random space
+    # further without introducing a second, uncoordinated source of randomness.
+    name = pet.get("name") or gu_pet.generate_pet_name(random.Random(gu_pet.pet_flavor_seed(pet)))
     return (
-        f"A detailed xianxia (Chinese cultivation fantasy) portrait of {intensity} {species.name}, "
-        f"a Gu-beast spirit companion infused with {element}, marked with {markings}. "
-        f"Color palette: {palette}. Temperament: {temperament}. Pose: {pose}. {species.tagline} "
-        f"Rarity tier: {rarity}. Square composition, single centered subject, dramatic lighting, "
-        f"painterly fantasy game-art style. No text, no watermark, no UI elements, no borders, no frame."
+        f"A detailed xianxia (Chinese cultivation fantasy) portrait of {intensity} {species.name} "
+        f"known among cultivators as the \"{name}\", a Gu-beast spirit companion infused with "
+        f"{element}, marked with {markings}. Color palette: {palette}. Temperament: {temperament}. "
+        f"Pose: {pose}. {species.tagline} Rarity tier: {rarity}. Square composition, single "
+        f"centered subject, dramatic lighting, painterly fantasy game-art style. No text, no "
+        f"watermark, no UI elements, no borders, no frame."
     )
 
 
 def get_pet_cache_key(pet: dict) -> str:
     """Deterministic across every Rank I-III pet that lands on the same species+path+rank+
-    variant bucket (see _flavor_seed/PORTRAIT_VARIANT_COUNT) -- nothing else feeds
+    variant bucket (see gu_pet.pet_flavor_seed/PORTRAIT_VARIANT_COUNT) -- nothing else feeds
     build_pet_prompt for this tier, so this fully determines its prompt."""
-    return f"{pet['species']}|{pet['path']}|{pet['rank']}|{_flavor_seed(pet)}"
-
-
-def should_generate_unique_image(pet: dict) -> bool:
-    return pet["rank"] >= 4  # Epic+ (see gu_pet.GU_PET_RANK_TO_RARITY)
+    return f"{pet['species']}|{pet['path']}|{pet['rank']}|{gu_pet.pet_flavor_seed(pet)}"
 
 
 async def generate_pet_image(pet: dict) -> Optional[bytes]:

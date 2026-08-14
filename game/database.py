@@ -623,6 +623,7 @@ class GameDatabase:
             species TEXT DEFAULT NULL,
             path TEXT DEFAULT NULL,
             mode TEXT DEFAULT 'cultivation',
+            name TEXT DEFAULT NULL,
             stat_bonuses TEXT DEFAULT '{}',
             fed_totals TEXT DEFAULT '{}',
             growth_days_required INTEGER,
@@ -635,6 +636,25 @@ class GameDatabase:
             created_ts INTEGER
         )
         """)
+        # name is generated at crystallization time (see gu_pet.generate_pet_name), same as
+        # species/path -- NULL until then, same as those two. Guarded ALTER TABLE (not the
+        # PLAYER_COLUMNS dict, which only covers the players table) since this table already
+        # existed on the live DB before this column did.
+        gu_pets_columns = {row[1] for row in cur.execute("PRAGMA table_info(gu_pets)").fetchall()}
+        if "name" not in gu_pets_columns:
+            cur.execute("ALTER TABLE gu_pets ADD COLUMN name TEXT DEFAULT NULL")
+        # One-time backfill: any pet that crystallized BEFORE the name column existed gets a
+        # real generated name now (the same gu_pet.generate_pet_name/pet_flavor_seed a
+        # freshly-crystallized pet already gets) instead of staying nameless forever. Local
+        # import, same idiom _qi_rate_components already uses to pull in gu_pet -- avoids a
+        # module-level dependency edge for the one function here that needs it.
+        unnamed_mature = cur.execute("SELECT pet_id, rank FROM gu_pets WHERE stage = 'mature' AND name IS NULL").fetchall()
+        if unnamed_mature:
+            from . import gu_pet as _gu_pet
+            for row in unnamed_mature:
+                pet_stub = {"pet_id": row["pet_id"], "rank": row["rank"]}
+                name = _gu_pet.generate_pet_name(random.Random(_gu_pet.pet_flavor_seed(pet_stub)))
+                cur.execute("UPDATE gu_pets SET name = ? WHERE pet_id = ?", (name, row["pet_id"]))
         # Shared-art cache for Common/Uncommon/Rare Gu Pets (see game/gu_pet_images.py's
         # get_pet_cache_key) -- Epic+ pets never touch this table, their portrait is unique
         # and lives on the gu_pets row's own image_path instead (see GameManager.
@@ -3872,6 +3892,7 @@ class GameDatabase:
         return {
             "pet_id": row["pet_id"], "owner_id": row["owner_id"], "rank": row["rank"],
             "stage": row["stage"], "species": row["species"], "path": row["path"], "mode": row["mode"],
+            "name": row["name"],
             "stat_bonuses": json.loads(row["stat_bonuses"]), "fed_totals": json.loads(row["fed_totals"]),
             "growth_days_required": row["growth_days_required"], "growth_days_fed": row["growth_days_fed"],
             "feed_streak_days": row["feed_streak_days"], "last_fed_ts": row["last_fed_ts"],
@@ -3909,7 +3930,7 @@ class GameDatabase:
     # bespoke setter per field, since this table's many independent phases (Feed/Crystallize/
     # Satiety-settle/Mode-toggle) each touch a different subset of columns together.
     _GU_PET_UPDATABLE_COLUMNS = {
-        "rank", "stage", "species", "path", "mode", "stat_bonuses", "fed_totals",
+        "rank", "stage", "species", "path", "mode", "name", "stat_bonuses", "fed_totals",
         "growth_days_required", "growth_days_fed", "feed_streak_days", "last_fed_ts",
         "satiety", "last_satiety_update_ts", "image_path",
     }

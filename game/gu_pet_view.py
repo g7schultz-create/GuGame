@@ -304,7 +304,8 @@ class GuPetView(GameView):
         if p["stage"] == gu_pet.STAGE_GROWTH:
             return f"Rank {p['rank']} Gu Pet #{p['pet_id']} — growing (day {p['growth_days_fed']}/{p['growth_days_required']})"
         species = gu_pet.SPECIES[p["species"]]
-        return f"{species.emoji} Rank {p['rank']} {species.name} #{p['pet_id']} — {p['mode'].title()} Mode"
+        name_part = f"'{p['name']}' " if p.get("name") else ""
+        return f"{species.emoji} {name_part}Rank {p['rank']} {species.name} #{p['pet_id']} — {p['mode'].title()} Mode"
 
     # -- action handlers ------------------------------------------------------------------
 
@@ -512,11 +513,14 @@ class GuPetView(GameView):
             embed.add_field(name="Success Chance", value=f"**~{chance * 100:.0f}%** (sacrificing {preview_quantity})", inline=True)
         owned_pets = self.game.get_player_gu_pets(self.user_id)
         if owned_pets:
-            lines = [
-                f"{'⭐ ' if pet['pet_id'] == player['active_gu_pet_id'] else ''}"
-                f"Rank {pet['rank']} ({gu_pet.rank_to_rarity(pet['rank'])}) — {pet['species'] or 'still growing'}"
-                for pet in owned_pets
-            ]
+            lines = []
+            for pet in owned_pets:
+                species_text = gu_pet.SPECIES[pet["species"]].name if pet["species"] else "still growing"
+                name_part = f"'{pet['name']}' " if pet.get("name") else ""
+                lines.append(
+                    f"{'⭐ ' if pet['pet_id'] == player['active_gu_pet_id'] else ''}"
+                    f"{name_part}Rank {pet['rank']} ({gu_pet.rank_to_rarity(pet['rank'])}) — {species_text}"
+                )
             embed.add_field(name=f"Owned Gu Pets ({len(owned_pets)})", value="\n".join(lines)[:1024], inline=False)
         embed.set_footer(text="Higher Gu Refiner rank improves your success chance at every rank, and removes the penalty for reaching above your level.")
 
@@ -560,7 +564,8 @@ class GuPetView(GameView):
             return
         pet = next((p for p in pets if p["pet_id"] == self.selected_status_pet_id), pets[0])
         is_active = pet["pet_id"] == player["active_gu_pet_id"]
-        header = f"{'⭐ ' if is_active else ''}Rank {pet['rank']} ({gu_pet.rank_to_rarity(pet['rank'])}) Gu Pet #{pet['pet_id']}"
+        name_part = f"'{pet['name']}' — " if pet.get("name") else ""
+        header = f"{'⭐ ' if is_active else ''}{name_part}Rank {pet['rank']} ({gu_pet.rank_to_rarity(pet['rank'])}) Gu Pet #{pet['pet_id']}"
         if pet["stage"] == gu_pet.STAGE_GROWTH:
             embed.add_field(
                 name=header,

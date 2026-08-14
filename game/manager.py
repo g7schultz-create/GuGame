@@ -2270,13 +2270,18 @@ class GameManager:
         mode = gu_pet.MODE_COMBAT if path == gu_pet.PATH_COMBAT else gu_pet.MODE_CULTIVATION
         stat_bonuses = dict(pet["stat_bonuses"])
         stat_bonuses.update(gu_pet.roll_specialty_bonus(species_key, pet["rank"]))
+        # Generated from pet_flavor_seed -- the SAME seed gu_pet_images.build_pet_prompt uses
+        # for this pet's own portrait, so the name and the image stay thematically coherent
+        # (see gu_pet.pet_flavor_seed's own docstring) rather than two independently-random
+        # systems producing an unrelated name and an unrelated look.
+        pet_name = gu_pet.generate_pet_name(random.Random(gu_pet.pet_flavor_seed(pet)))
         self.db.update_gu_pet(
-            pet_id, stage=gu_pet.STAGE_MATURE, species=species_key, path=path, mode=mode,
+            pet_id, stage=gu_pet.STAGE_MATURE, species=species_key, path=path, mode=mode, name=pet_name,
             stat_bonuses=stat_bonuses, satiety=gu_pet.SATIETY_MAX, last_satiety_update_ts=int(time.time()),
         )
         species = gu_pet.SPECIES[species_key]
-        message = f"✨ {species.emoji} Your Gu Pet crystallizes into a **{species.name}** ({path})! {species.role_text}"
-        return {"ok": True, "message": message, "species": species_key, "path": path}
+        message = f"✨ {species.emoji} **{pet_name}** crystallizes into a **{species.name}** ({path})! {species.role_text}"
+        return {"ok": True, "message": message, "species": species_key, "path": path, "name": pet_name}
 
     async def get_or_create_gu_pet_image(self, pet_id: int) -> Optional[str]:
         """The only async method on GameManager -- see game/gu_pet_images.py's own module
