@@ -22,6 +22,7 @@ is ever called.
 """
 
 import base64
+import random
 from typing import Optional
 
 import aiohttp
@@ -34,29 +35,52 @@ OPENAI_IMAGE_MODEL = "gpt-image-1"
 OPENAI_IMAGE_SIZE = "1024x1024"
 OPENAI_REQUEST_TIMEOUT_SECONDS = 60
 
+# Rank I-III (shared-cache tier, see get_pet_cache_key) pools its art into this many distinct
+# looks PER species+rank, instead of exactly one -- bounded on purpose (this tier's whole
+# point is capping API cost by reusing art across many players' pets), but "everyone's Rank 1
+# Vampiric Beetle looks the literal same" was a real complaint once that bound was 1. Rank IV+
+# (unique tier) needs no such bound -- every pet already gets its own real generation, so it
+# uses the pet's own full pet_id instead (see _flavor_seed) for maximum variety.
+PORTRAIT_VARIANT_COUNT = 6
+
+
+def _flavor_seed(pet: dict) -> int:
+    """Deterministic per-pet seed feeding every random.Random pick in build_pet_prompt/
+    get_pet_cache_key -- same pet always reproduces the same flavor combination (e.g. if its
+    stored image ever needs regenerating), but two different pets very rarely land on the
+    exact same one. Rank I-III is deliberately bounded (see PORTRAIT_VARIANT_COUNT) since that
+    tier's art is shared/cached across players; Rank IV+ uses the unbounded real pet_id."""
+    if should_generate_unique_image(pet):
+        return pet["pet_id"]
+    return pet["pet_id"] % PORTRAIT_VARIANT_COUNT
+
 
 def build_pet_prompt(pet: dict) -> str:
-    """pet needs species/path/rank set (i.e. already crystallized -- see GameManager.
+    """pet needs species/path/rank/pet_id set (i.e. already crystallized -- see GameManager.
     crystallize_gu_pet) -- a still-growing pet has no species yet to portray."""
     species = gu_pet.SPECIES[pet["species"]]
-    element = gu_pet.FLAVOR_ELEMENT.get(pet["species"], "spirit qi")
-    palette = gu_pet.FLAVOR_COLOR_PALETTE.get(pet["species"], "muted earth tones")
-    temperament = gu_pet.FLAVOR_TEMPERAMENT_BY_PATH.get(pet["path"], "calm")
+    rng = random.Random(_flavor_seed(pet))
+    element = rng.choice(gu_pet.FLAVOR_ELEMENT_OPTIONS.get(pet["species"], ["spirit qi"]))
+    palette = rng.choice(gu_pet.FLAVOR_COLOR_PALETTE_OPTIONS.get(pet["species"], ["muted earth tones"]))
+    temperament = rng.choice(gu_pet.FLAVOR_TEMPERAMENT_OPTIONS.get(pet["path"], ["calm"]))
+    markings = rng.choice(gu_pet.FLAVOR_MARKINGS)
+    pose = rng.choice(gu_pet.FLAVOR_POSE)
     intensity = gu_pet.FLAVOR_RANK_INTENSITY.get(pet["rank"], "a")
     rarity = gu_pet.rank_to_rarity(pet["rank"])
     return (
         f"A detailed xianxia (Chinese cultivation fantasy) portrait of {intensity} {species.name}, "
-        f"a Gu-beast spirit companion infused with {element}. Color palette: {palette}. "
-        f"Temperament: {temperament}. {species.tagline} Rarity tier: {rarity}. Square composition, "
-        f"single centered subject, dramatic lighting, painterly fantasy game-art style. "
-        f"No text, no watermark, no UI elements, no borders, no frame."
+        f"a Gu-beast spirit companion infused with {element}, marked with {markings}. "
+        f"Color palette: {palette}. Temperament: {temperament}. Pose: {pose}. {species.tagline} "
+        f"Rarity tier: {rarity}. Square composition, single centered subject, dramatic lighting, "
+        f"painterly fantasy game-art style. No text, no watermark, no UI elements, no borders, no frame."
     )
 
 
 def get_pet_cache_key(pet: dict) -> str:
-    """Deterministic across every Rank I-III pet with the same species+path+rank -- nothing
-    else feeds build_pet_prompt, so this fully determines the prompt for the shared tier."""
-    return f"{pet['species']}|{pet['path']}|{pet['rank']}"
+    """Deterministic across every Rank I-III pet that lands on the same species+path+rank+
+    variant bucket (see _flavor_seed/PORTRAIT_VARIANT_COUNT) -- nothing else feeds
+    build_pet_prompt for this tier, so this fully determines its prompt."""
+    return f"{pet['species']}|{pet['path']}|{pet['rank']}|{_flavor_seed(pet)}"
 
 
 def should_generate_unique_image(pet: dict) -> bool:

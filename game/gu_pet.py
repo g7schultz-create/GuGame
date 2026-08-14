@@ -28,7 +28,7 @@ RARITY_ORDER exactly (the only existing rarity ladder with no leftover tier once
 
 import random
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from . import accessories_data, gathering, items
 
@@ -476,32 +476,53 @@ MODE_SWITCH_FEE_SPIRIT_STONES = 50
 
 # -- AI portrait flavor traits (see game/gu_pet_images.py's build_pet_prompt) ------------
 
-# Neither source spec defines where an image prompt's element/color-palette/temperament
-# should come from -- these are small fixed word-bank tables derived from species+path,
-# the same idiom accessories_data.py's own NAME_MATERIALS/NAME_CONCEPTS use for accessory/
-# artifact name generation, rather than a separate trait-roll system.
-FLAVOR_ELEMENT: Dict[str, str] = {
-    SPECIES_GRAND_FORGE_BEETLE: "earth and molten metal",
-    SPECIES_INK_SPITTER_CICADA: "ink and starlight",
-    SPECIES_BALANCE_FURNACE_TOAD: "balanced yin-yang qi",
-    SPECIES_UNBOUND: "raw, undirected spirit qi",
-    SPECIES_VAMPIRIC_BEETLE: "crimson blood qi",
-    SPECIES_FLAME_SPIT_MANTIS: "searing flame",
-    SPECIES_CRAG_SHELL_TURTLE: "ancient stone",
+# Neither source spec defines where an image prompt's element/color-palette/temperament/
+# markings/pose should come from -- these are small fixed word-bank tables derived from
+# species+path, the same idiom accessories_data.py's own NAME_MATERIALS/NAME_CONCEPTS use for
+# accessory/artifact name generation, rather than a separate trait-roll system. Each axis is a
+# LIST of options (not one fixed phrase) -- gu_pet_images.build_pet_prompt picks one per axis
+# via a per-pet deterministic seed (see gu_pet_images._flavor_seed), so two pets of the same
+# species/rank read as visibly different individuals instead of every player's Rank 1 Vampiric
+# Beetle carrying the literal same description (the original single-string version of these
+# tables). MARKINGS/POSE aren't species-specific -- any creature can carry either.
+FLAVOR_ELEMENT_OPTIONS: Dict[str, List[str]] = {
+    SPECIES_GRAND_FORGE_BEETLE: ["earth and molten metal", "forge-cinder and hammered ore", "white-hot slag and tempered steel", "deep mountain iron"],
+    SPECIES_INK_SPITTER_CICADA: ["ink and starlight", "moonlit calligraphy qi", "silver dew and night mist", "brushstroke shadow-ink"],
+    SPECIES_BALANCE_FURNACE_TOAD: ["balanced yin-yang qi", "twin-current elemental balance", "still-water equilibrium qi", "dawn-and-dusk dual qi"],
+    SPECIES_UNBOUND: ["raw, undirected spirit qi", "formless drifting qi", "unshaped primal essence", "wandering wild qi"],
+    SPECIES_VAMPIRIC_BEETLE: ["crimson blood qi", "hungering blood essence", "dark iron and fresh blood", "seething crimson vapor"],
+    SPECIES_FLAME_SPIT_MANTIS: ["searing flame", "white-hot war-flame", "cinder and scorched air", "molten battle-fire"],
+    SPECIES_CRAG_SHELL_TURTLE: ["ancient stone", "weathered granite and lichen", "deep-earth bedrock qi", "glacier-worn boulder"],
 }
-FLAVOR_COLOR_PALETTE: Dict[str, str] = {
-    SPECIES_GRAND_FORGE_BEETLE: "burnished bronze and ember-orange",
-    SPECIES_INK_SPITTER_CICADA: "midnight indigo and pale jade",
-    SPECIES_BALANCE_FURNACE_TOAD: "amber and deep teal",
-    SPECIES_UNBOUND: "shifting silver-grey",
-    SPECIES_VAMPIRIC_BEETLE: "black carapace veined with crimson",
-    SPECIES_FLAME_SPIT_MANTIS: "obsidian and molten gold",
-    SPECIES_CRAG_SHELL_TURTLE: "mossy grey stone and jade",
+FLAVOR_COLOR_PALETTE_OPTIONS: Dict[str, List[str]] = {
+    SPECIES_GRAND_FORGE_BEETLE: ["burnished bronze and ember-orange", "dull iron and forge-red", "hammered copper and soot-black", "brass and glowing coal"],
+    SPECIES_INK_SPITTER_CICADA: ["midnight indigo and pale jade", "deep violet and silver", "charcoal-black and moon-white", "ink-blue and pearl"],
+    SPECIES_BALANCE_FURNACE_TOAD: ["amber and deep teal", "gold and slate-blue", "copper and forest-green", "warm ochre and cool cyan"],
+    SPECIES_UNBOUND: ["shifting silver-grey", "translucent pale blue", "smoky ash-grey", "dim opal-white"],
+    SPECIES_VAMPIRIC_BEETLE: ["black carapace veined with crimson", "deep maroon and obsidian", "blood-red and jet black", "dark violet-red"],
+    SPECIES_FLAME_SPIT_MANTIS: ["obsidian and molten gold", "charred black and burning orange", "dark bronze and firelight yellow", "ash-grey and ember-red"],
+    SPECIES_CRAG_SHELL_TURTLE: ["mossy grey stone and jade", "weathered brown and moss-green", "slate-grey and copper-lichen", "pale granite and deep emerald"],
 }
-FLAVOR_TEMPERAMENT_BY_PATH: Dict[str, str] = {
-    PATH_CULTIVATION: "serene and contemplative",
-    PATH_COMBAT: "fierce and battle-worn",
+FLAVOR_TEMPERAMENT_OPTIONS: Dict[str, List[str]] = {
+    PATH_CULTIVATION: ["serene and contemplative", "quietly attentive", "patient and unhurried", "meditative and composed"],
+    PATH_COMBAT: ["fierce and battle-worn", "coiled and predatory", "grim and unyielding", "restless and aggressive"],
 }
+FLAVOR_MARKINGS: List[str] = [
+    "faint glowing runes tracing its form",
+    "jagged battle-scars from a past trial",
+    "delicate frost-like patterns along its limbs",
+    "a scattering of small luminous spots",
+    "cracked, ember-lit fissures across its surface",
+    "fine spiral etchings along its shell/carapace",
+]
+FLAVOR_POSE: List[str] = [
+    "coiled and ready to strike",
+    "standing alert atop a jagged outcrop",
+    "caught mid-motion in a burst of qi",
+    "calmly poised, eyes half-closed in focus",
+    "rearing back with its full form flared wide",
+    "crouched low, watching something unseen",
+]
 # Rank-scaled framing, echoing GU_PET_RANK_TO_RARITY's own 7-tier ladder without duplicating
 # its wording -- a Rank I pet reads as freshly hatched, a Rank VII pet as a legend.
 FLAVOR_RANK_INTENSITY: Dict[int, str] = {
