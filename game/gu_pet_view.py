@@ -451,10 +451,12 @@ class GuPetView(GameView):
         """Reuses the exact same cache-check/generate pipeline as _resolve_gu_pet_portrait's
         own post-Crystallize reveal (see GameManager.get_or_create_gu_pet_image) -- this is
         just a way to pull that same portrait back up on demand later, since neither the
-        Status tab nor anywhere else persistently displays it otherwise. Deferred ephemeral
-        since generation can take a few real seconds on a cache miss, and this button can be
-        clicked repeatedly without wanting to spam the channel each time."""
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        Status tab nor anywhere else persistently displays it otherwise. Deferred (non-
+        ephemeral, since generation can take a few real seconds on a cache miss) -- the actual
+        portrait posts publicly so the rest of the channel can see it, same as the original
+        Crystallize reveal. Only the no-portrait-available failure stays ephemeral, since
+        that's a personal troubleshooting note, not something worth showing everyone."""
+        await interaction.response.defer(thinking=True)
         image_path = await self.game.get_or_create_gu_pet_image(self.selected_status_pet_id)
         if image_path is None:
             await interaction.followup.send(
@@ -468,7 +470,7 @@ class GuPetView(GameView):
         file = discord.File(image_path, filename="gu_pet_portrait.png")
         embed = discord.Embed(title=f"🖼️ {pet_name}", color=discord.Color.dark_purple())
         embed.set_image(url="attachment://gu_pet_portrait.png")
-        await interaction.followup.send(embed=embed, file=file, ephemeral=True)
+        await interaction.followup.send(embed=embed, file=file)
 
     async def _on_pick_status_feed_item(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 2)
