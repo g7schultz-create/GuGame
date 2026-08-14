@@ -62,12 +62,14 @@ def build_pet_prompt(pet: dict) -> str:
     # further without introducing a second, uncoordinated source of randomness.
     name = pet.get("name") or gu_pet.generate_pet_name(random.Random(gu_pet.pet_flavor_seed(pet)))
     return (
-        f"A detailed xianxia (Chinese cultivation fantasy) portrait of {intensity} {species.name} "
-        f"known among cultivators as the \"{name}\", a Gu-beast spirit companion infused with "
-        f"{element}, marked with {markings}. Color palette: {palette}. Temperament: {temperament}. "
-        f"Pose: {pose}. {species.tagline} Rarity tier: {rarity}. Square composition, single "
-        f"centered subject, dramatic lighting, painterly fantasy game-art style. No text, no "
-        f"watermark, no UI elements, no borders, no frame."
+        f"A detailed dark xianxia Gu-cultivation portrait, in the grim, insect-and-beast Gu "
+        f"aesthetic of the novel Reverend Insanity -- ancient, eldritch, and sinister rather "
+        f"than bright or whimsical -- of {intensity} {species.name} known among cultivators as "
+        f"the \"{name}\", a Gu-beast spirit companion infused with {element}, marked with "
+        f"{markings}. Color palette: {palette}. Temperament: {temperament}. Pose: {pose}. "
+        f"{species.tagline} Rarity tier: {rarity}. Square composition, single centered subject, "
+        f"dramatic moody lighting, painterly dark-fantasy game-art style. No text, no watermark, "
+        f"no UI elements, no borders, no frame."
     )
 
 

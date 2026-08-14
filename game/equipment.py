@@ -426,6 +426,18 @@ SPECIAL_STAT_TEXT = {
     "gear_budget_bonus_pct": lambda v: f"+{v * 100:.1f}% Blacksmith Gear Budget",
     "manual_rarity_bonus_pct": lambda v: f"+{v * 100:.1f}% Manual Rarity Odds",
     "gu_pet_bleed_damage_pct": lambda v: f"+{v * 100:.0f}% Bleed Damage",
+    # White Heaven / Black Heaven canon Gu (see content/canon_gu_white_heaven.py and
+    # content/canon_gu_black_heaven.py's own _FUNCTIONAL_STAT_KEY tables) -- these were real,
+    # already-wired stat_bonuses keys (confirmed by content/validation.py's own
+    # GameManager.SPECIAL_BONUS_KEYS check) that just never got a display label here, so an
+    # item like Night Predator Gu showed its raw key name ("execute_damage_pct: +0.23")
+    # instead of real text wherever describe_stat_bonuses is used.
+    "execute_damage_pct": lambda v: f"+{v * 100:.0f}% Execute Damage",
+    "total_damage_pct": lambda v: f"+{v * 100:.0f}% Total Damage",
+    "freeze_chance_pct": lambda v: f"+{v * 100:.0f}% Freeze Chance",
+    "retaliation_damage_pct": lambda v: f"+{v * 100:.0f}% Damage Reflected",
+    "boss_damage_bonus_pct": lambda v: f"+{v * 100:.0f}% Boss Damage",
+    "dodge_cap_bonus_pct": lambda v: f"+{v * 100:.0f}% Dodge Cap",
 }
 
 

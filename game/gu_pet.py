@@ -104,21 +104,57 @@ def refine_catalyst_recipe(target_rank: int) -> Dict[str, int]:
     return GU_PET_REFINE_CATALYST_RECIPE[max(MIN_RANK, min(target_rank, MAX_RANK))]
 
 
-# No hard Gu Refiner rank GATE on the target pet rank -- any player can attempt any Rank
-# I-VII pet at any Gu Refiner rank (by explicit request: "any pet at any gu refiner level,
-# but the chance gets better the higher your refiner level is"). The success formula's base
-# is anchored on the TARGET rank's own required Gu Refiner rank (professions.
-# craft_success_chance(gu_refiner_rank_required(target_rank)) -- "how hard is this pet,
-# intrinsically"), then shifted by the GAP between the player's real Gu Refiner rank and that
-# requirement: a positive gap (over-ranked for an easy target) adds REFINE_RANK_ABOVE_
-# REQUIRED_BONUS_PCT per rank of headroom; a negative gap (under-ranked for a hard target)
-# subtracts REFINE_RANK_BELOW_REQUIRED_PENALTY_PCT per rank of shortfall -- steeper than the
-# bonus on purpose (reaching above your level should cost more than being over-qualified
-# gains), floored at REFINE_MIN_SUCCESS_CHANCE_FLOOR so an extreme mismatch (e.g. a Novice
-# attempting a Rank VII pet) is still POSSIBLE, just a real gamble, never impossible.
+# No hard Gu Refiner rank GATE on the target pet rank -- the target rank is no longer even
+# player-chosen at all (see roll_target_rank below, by explicit later request: "make it so you
+# cant choose what type of pet you are going for and instead get a random one based on your gu
+# refining level" -- superseding the earlier "any pet at any gu refiner level, but the chance
+# gets better the higher your refiner level is" design this formula was originally built for).
+# The success formula's base is anchored on the (now-rolled) TARGET rank's own required Gu
+# Refiner rank (professions.craft_success_chance(gu_refiner_rank_required(target_rank)) -- "how
+# hard is this pet, intrinsically"), then shifted by the GAP between the player's real Gu
+# Refiner rank and that requirement: a positive gap (the roll landed on an easy target) adds
+# REFINE_RANK_ABOVE_REQUIRED_BONUS_PCT per rank of headroom; a negative gap (the roll landed on
+# a hard target) subtracts REFINE_RANK_BELOW_REQUIRED_PENALTY_PCT per rank of shortfall --
+# steeper than the bonus on purpose, floored at REFINE_MIN_SUCCESS_CHANCE_FLOOR so an extreme
+# mismatch (e.g. a Novice's roll landing on a Rank VII pet) is still POSSIBLE, just a real
+# gamble, never impossible.
 REFINE_RANK_ABOVE_REQUIRED_BONUS_PCT = 0.05
 REFINE_RANK_BELOW_REQUIRED_PENALTY_PCT = 0.12
 REFINE_MIN_SUCCESS_CHANCE_FLOOR = 0.05
+
+# roll_target_rank's own weighting -- each pet rank a step away from the player's own natively-
+# qualified rank (see natively_qualified_rank) is this much less likely than the step before
+# it, geometric falloff centered on that rank. Every rank 1-7 always stays reachable (a
+# beginner CAN get lucky into a high rank, an expert CAN still roll low), just increasingly
+# rare the further it sits from the player's own level.
+GU_PET_RANK_ROLL_DECAY_PER_STEP = 0.4
+
+
+def natively_qualified_rank(player_gu_refiner_rank: int) -> int:
+    """The highest pet rank this player's OWN Gu Refiner rank already qualifies for outright
+    (gu_refiner_rank_required(rank) <= player_gu_refiner_rank) -- the center point roll_target_
+    rank's own distribution is built around, and also what catalyst costs are now priced off of
+    (see GameManager.refine_gu_pet) now that the player no longer hand-picks a target rank up
+    front."""
+    qualified = MIN_RANK
+    for rank in range(MIN_RANK, MAX_RANK + 1):
+        if player_gu_refiner_rank >= GU_PET_RANK_REQUIRED[rank]:
+            qualified = rank
+    return qualified
+
+
+def roll_target_rank(player_gu_refiner_rank: int, rng: Optional[random.Random] = None) -> int:
+    """Which Gu Pet rank a Refine attempt goes for -- the player no longer picks this (see
+    GU_PET_RANK_ROLL_DECAY_PER_STEP's own comment for the rationale/request). Weighted around
+    natively_qualified_rank, so a higher Gu Refiner rank shifts the whole distribution toward
+    higher pet ranks without ever fully excluding the rest of the ladder. The actual success
+    odds for whatever rank this rolls are still handled entirely by refine_success_chance,
+    completely unchanged -- this only decides WHICH rank gets attempted."""
+    r = rng or random
+    qualified = natively_qualified_rank(player_gu_refiner_rank)
+    ranks = list(range(MIN_RANK, MAX_RANK + 1))
+    weights = [GU_PET_RANK_ROLL_DECAY_PER_STEP ** abs(rank - qualified) for rank in ranks]
+    return r.choices(ranks, weights=weights, k=1)[0]
 
 # Material Quality Bonus (design doc section 3.1) -- scales with how many of the 1-3
 # allowed Immortal Gu were actually sacrificed, 0% at the minimum up to this cap at the maximum.
@@ -130,11 +166,13 @@ def material_quality_bonus_pct(quantity: int) -> float:
     return REFINE_MAX_MATERIAL_QUALITY_BONUS_PCT * (max(0, min(quantity, REFINE_MAX_SACRIFICE) - REFINE_MIN_SACRIFICE) / span)
 
 
-def refine_success_chance(player_gu_refiner_rank: int, target_rank: int, quantity: int) -> float:
+def refine_success_chance(player_gu_refiner_rank: int, target_rank: int, quantity: int, race_bonus_pct: float = 0.0) -> float:
     """The real /gu_pet Refine success chance -- see the comment above REFINE_RANK_ABOVE_
     REQUIRED_BONUS_PCT for the full rationale. Shared by GameManager.refine_gu_pet (the real
     roll) and the Refine tab's rank-Select (a preview of the odds before committing), so the
-    two can never drift apart."""
+    two can never drift apart. race_bonus_pct is Hairy Man's own "gu_refiner_success_pct"
+    (see character_data.py) -- a flat additive bonus, passed in rather than looked up here
+    since this module stays pure data/rules with no DB/player access."""
     required_refiner_rank = gu_refiner_rank_required(target_rank)
     base_chance = professions.craft_success_chance(required_refiner_rank)
     rank_gap = player_gu_refiner_rank - required_refiner_rank
@@ -142,7 +180,7 @@ def refine_success_chance(player_gu_refiner_rank: int, target_rank: int, quantit
         rank_gap * REFINE_RANK_ABOVE_REQUIRED_BONUS_PCT if rank_gap >= 0
         else rank_gap * REFINE_RANK_BELOW_REQUIRED_PENALTY_PCT
     )
-    return max(REFINE_MIN_SUCCESS_CHANCE_FLOOR, min(1.0, base_chance + gap_adjustment + material_quality_bonus_pct(quantity)))
+    return max(REFINE_MIN_SUCCESS_CHANCE_FLOOR, min(1.0, base_chance + gap_adjustment + material_quality_bonus_pct(quantity) + race_bonus_pct))
 
 
 # Secondary banded roll splitting a success into Critical/Standard, or a failure into

@@ -162,7 +162,14 @@ RACES: Dict[str, Race] = {
             "💎 Resource Yield: +15%",
         ],
         passive="Failed Gu refinements refund 50% of the materials.",
-        stat_bonuses={"cultivation_speed_pct": 0.05, "breakthrough_chance_pct": 0.05},
+        # gu_refiner_success_pct/gu_refiner_failure_refund_pct were displayed here since this
+        # race's own introduction but never actually wired up -- /gu_pet's Refine action
+        # (game/gu_pet.py) didn't exist yet at the time, so there was nothing to hook into.
+        # See GameManager.refine_gu_pet for where these two now actually apply.
+        stat_bonuses={
+            "cultivation_speed_pct": 0.05, "breakthrough_chance_pct": 0.05,
+            "gu_refiner_success_pct": 0.30, "gu_refiner_failure_refund_pct": 0.50,
+        },
     ),
     "Rockman": Race(
         name="Rockman",

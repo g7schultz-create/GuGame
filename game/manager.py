@@ -2049,20 +2049,33 @@ class GameManager:
         candidates.sort(key=lambda c: -equipment.gear_power_score(equipment.EQUIPMENT[c[0]]))
         return candidates
 
-    def refine_gu_pet(self, user_id: int, name: str, item_name: str, quantity: int, target_rank: int, rng: Optional[random.Random] = None) -> dict:
+    def gu_pet_refine_race_bonus_pct(self, player: dict, key: str) -> float:
+        """Hairy Man's own 'unrivaled refiners of the Gu world' bonus (gu_refiner_success_pct/
+        gu_refiner_failure_refund_pct, see character_data.py) -- the only race with a Gu-
+        refinement-flavored bonus today, 0 for every other race. Kept as its own small race-
+        only lookup rather than folded into _trait_bonus (root/physique/Gu only, deliberately
+        never reads race -- see its own docstring), so this stays scoped to exactly the one
+        place it applies instead of silently changing every other _trait_bonus call site too."""
+        race = chargen.get_race(player["race"])
+        return race.stat_bonuses.get(key, 0) if race else 0
+
+    def refine_gu_pet(self, user_id: int, name: str, item_name: str, quantity: int, rng: Optional[random.Random] = None) -> dict:
         """Returns {"ok": False, "reason": ...} on a validation refusal (never spends
         anything), or {"ok": True, "outcome": "critical"|"standard"|"minor_failure"|
-        "major_failure", "message": ..., **outcome-specific fields} once the ritual actually
-        runs. Materials are ALWAYS consumed once validation passes (Minor Failure refunds the
-        sacrificed Gu specifically -- see below), matching craft_gear/craft_pill's own
-        "consume regardless of outcome" risk model."""
+        "major_failure", "message": ..., "target_rank": ..., **outcome-specific fields} once
+        the ritual actually runs. Materials are ALWAYS consumed once validation passes (Minor
+        Failure refunds the sacrificed Gu specifically -- see below), matching craft_gear/
+        craft_pill's own "consume regardless of outcome" risk model.
+
+        The Gu Pet's own rank is no longer player-chosen (see gu_pet.roll_target_rank) -- it's
+        rolled internally, weighted toward whatever rank the player's own Gu Refiner rank
+        already natively qualifies for (gu_pet.natively_qualified_rank), by explicit request
+        ("cant choose what type of pet you are going for, instead get a random one based on
+        your gu refining level"). Catalyst costs are priced off that SAME natively-qualified
+        rank (known upfront, unlike the roll) so the player always knows the cost before
+        committing, even though the actual rolled rank -- and therefore the real success
+        chance for THIS specific attempt -- isn't revealed until after."""
         player = self.db.get_or_create_player(user_id, name)
-        if not (gu_pet.MIN_RANK <= target_rank <= gu_pet.MAX_RANK):
-            return {"ok": False, "reason": f"Gu Pet rank must be between {gu_pet.MIN_RANK} and {gu_pet.MAX_RANK}."}
-        # No hard Gu Refiner rank gate on the target rank -- any player can attempt any pet
-        # rank at any Gu Refiner rank; being under-ranked for a hard target just tanks the
-        # success chance instead of blocking the attempt outright (see gu_pet.
-        # refine_success_chance's own comment for the full formula).
         if not (gu_pet.REFINE_MIN_SACRIFICE <= quantity <= gu_pet.REFINE_MAX_SACRIFICE):
             return {"ok": False, "reason": f"You must sacrifice between {gu_pet.REFINE_MIN_SACRIFICE} and {gu_pet.REFINE_MAX_SACRIFICE} {gu_pet.REFINE_REQUIRED_GU_QUALITY} Gu."}
         family, quality = equipment.parse_gu_name(item_name)
@@ -2073,14 +2086,18 @@ class GameManager:
         inventory = self.db.get_inventory(user_id)
         if inventory.get(item_name, 0) < quantity:
             return {"ok": False, "reason": f"You only own {inventory.get(item_name, 0)}x **{item_name}** (need {quantity})."}
-        catalysts = gu_pet.refine_catalyst_recipe(target_rank)
+        catalyst_rank = gu_pet.natively_qualified_rank(player["gu_refiner_rank"])
+        catalysts = gu_pet.refine_catalyst_recipe(catalyst_rank)
         missing = {mat: qty for mat, qty in catalysts.items() if inventory.get(mat, 0) < qty}
         if missing:
             missing_text = ", ".join(f"{qty}x {mat} (have {inventory.get(mat, 0)})" for mat, qty in missing.items())
             return {"ok": False, "reason": f"Missing catalysts: {missing_text}."}
 
         rng = rng or random.Random()
-        chance = gu_pet.refine_success_chance(player["gu_refiner_rank"], target_rank, quantity)
+        target_rank = gu_pet.roll_target_rank(player["gu_refiner_rank"], rng)
+        race_success_bonus = self.gu_pet_refine_race_bonus_pct(player, "gu_refiner_success_pct")
+        race_refund_pct = self.gu_pet_refine_race_bonus_pct(player, "gu_refiner_failure_refund_pct")
+        chance = gu_pet.refine_success_chance(player["gu_refiner_rank"], target_rank, quantity, race_success_bonus)
         success = rng.random() < chance
 
         self.db.remove_item(user_id, item_name, quantity)
@@ -2096,11 +2113,30 @@ class GameManager:
             outcome = "critical" if is_critical else "standard"
             flavor = "The ritual flares with unexpected power" if is_critical else "The ritual completes"
             message = (
-                f"✨ {flavor} — a blank **Rank {target_rank} ({gu_pet.rank_to_rarity(target_rank)})** Gu Pet stirs to life! "
+                f"✨ {flavor} — the ritual settles on a blank **Rank {target_rank} ({gu_pet.rank_to_rarity(target_rank)})** Gu Pet, which stirs to life! "
                 f"Feed it through `/gu_pet` (once/day) to help it grow (needs {days_required} days' worth of feeding — "
                 "feed more material per visit to cover several days at once)."
             )
-            return {"ok": True, "outcome": outcome, "message": message, "pet_id": pet_id, "chance": chance}
+            return {"ok": True, "outcome": outcome, "message": message, "pet_id": pet_id, "chance": chance, "target_rank": target_rank}
+
+        def _refund_materials(gu_qty: int, catalyst_qtys: dict) -> str:
+            """Hairy Man's own gu_refiner_failure_refund_pct passive -- 'Failed Gu refinements
+            refund 50% of the materials,' applied uniformly to whatever this failure actually
+            destroyed. Ceiling-rounded so even a single lost unit gives back something real
+            (plain round() would bankers'-round 1 * 0.5 down to 0, silently doing nothing)."""
+            if race_refund_pct <= 0:
+                return ""
+            parts = []
+            if gu_qty > 0:
+                refunded_gu = math.ceil(gu_qty * race_refund_pct)
+                self.db.add_item(user_id, item_name, refunded_gu)
+                parts.append(f"{refunded_gu}x {item_name}")
+            for mat, qty in catalyst_qtys.items():
+                refunded_qty = math.ceil(qty * race_refund_pct)
+                if refunded_qty > 0:
+                    self.db.add_item(user_id, mat, refunded_qty)
+                    parts.append(f"{refunded_qty}x {mat}")
+            return f" Your race's refining mastery salvages back {', '.join(parts)}." if parts else ""
 
         is_major = rng.random() < gu_pet.REFINE_MAJOR_FAILURE_SHARE_OF_FAILURE
         if is_major:
@@ -2109,19 +2145,23 @@ class GameManager:
                 gu_pet.APERTURE_BACKLASH_DURATION_SECONDS,
             )
             self.db.add_item(user_id, gu_pet.MUTATED_GU_RESIDUE_ITEM_NAME, 1)
+            refund_note = _refund_materials(quantity, catalysts)
             message = (
-                f"💥 The ritual backfires violently — {quantity}x **{item_name}** and every catalyst are destroyed, "
-                f"and your dantian suffers **Aperture Backlash** (reduced Qi regen for "
-                f"{gu_pet.APERTURE_BACKLASH_DURATION_SECONDS // 60} minutes). A twisted **{gu_pet.MUTATED_GU_RESIDUE_ITEM_NAME}** is all that's left."
+                f"💥 The ritual reaches for a Rank {target_rank} Gu Pet and backfires violently — {quantity}x **{item_name}** "
+                f"and every catalyst are destroyed, and your dantian suffers **Aperture Backlash** (reduced Qi regen for "
+                f"{gu_pet.APERTURE_BACKLASH_DURATION_SECONDS // 60} minutes). A twisted **{gu_pet.MUTATED_GU_RESIDUE_ITEM_NAME}** is all that's left.{refund_note}"
             )
-            return {"ok": True, "outcome": "major_failure", "message": message, "chance": chance}
+            return {"ok": True, "outcome": "major_failure", "message": message, "chance": chance, "target_rank": target_rank}
 
         self.db.add_item(user_id, item_name, quantity)
+        # The sacrificed Gu is already fully refunded for everyone -- Hairy Man's passive only
+        # has real catalysts left to salvage back here.
+        refund_note = _refund_materials(0, catalysts)
         message = (
-            f"💨 The ritual fizzles — the catalysts are consumed, but your {quantity}x **{item_name}** "
-            "are unharmed and refunded."
+            f"💨 The ritual reaches for a Rank {target_rank} Gu Pet and fizzles — the catalysts are consumed, "
+            f"but your {quantity}x **{item_name}** are unharmed and refunded.{refund_note}"
         )
-        return {"ok": True, "outcome": "minor_failure", "message": message, "chance": chance}
+        return {"ok": True, "outcome": "minor_failure", "message": message, "chance": chance, "target_rank": target_rank}
 
     def get_player_gu_pets(self, user_id: int) -> list:
         return [self._settle_gu_pet_satiety(pet) for pet in self.db.get_player_gu_pets(user_id)]

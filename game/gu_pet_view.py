@@ -35,7 +35,6 @@ class GuPetView(GameView):
         self.display_name = display_name
         self.active_tab = "refine"
         self.selected_sacrifice_item: str = None
-        self.selected_target_rank: int = None
         self.selected_feed_pet_id: int = None
         self.selected_feed_item: str = None
         self.selected_feed_quantity: int = 1
@@ -103,32 +102,13 @@ class GuPetView(GameView):
         item_select.callback = self._on_pick_sacrifice_item
         self.add_item(item_select)
 
-        # No hard Gu Refiner rank gate anymore -- every rank is always selectable, an
-        # under-ranked attempt just carries worse (never zero) odds instead of being refused
-        # outright (see gu_pet.refine_success_chance). Defaults to the highest rank the player
-        # is natively qualified for (gap >= 0) purely as a safe starting suggestion, not a cap.
+        # The Gu Pet's rank is no longer player-chosen -- the ritual rolls it randomly, weighted
+        # toward whatever rank the player's own Gu Refiner rank already natively qualifies for
+        # (see gu_pet.roll_target_rank / GameManager.refine_gu_pet). Catalyst costs are priced
+        # off that SAME natively-qualified rank, since it's known upfront unlike the roll.
         owned_sacrifice = dict(candidates).get(self.selected_sacrifice_item, 0)
-        preview_quantity = min(gu_pet.REFINE_MAX_SACRIFICE, max(gu_pet.REFINE_MIN_SACRIFICE, owned_sacrifice))
-        default_rank = gu_pet.MIN_RANK
-        for rank in range(gu_pet.MIN_RANK, gu_pet.MAX_RANK + 1):
-            if player["gu_refiner_rank"] >= gu_pet.gu_refiner_rank_required(rank):
-                default_rank = rank
-        if self.selected_target_rank is None:
-            self.selected_target_rank = default_rank
-
-        rank_options = [
-            discord.SelectOption(
-                label=f"Rank {rank} ({gu_pet.rank_to_rarity(rank)})", value=str(rank),
-                description=f"~{gu_pet.refine_success_chance(player['gu_refiner_rank'], rank, preview_quantity) * 100:.0f}% success chance"[:100],
-                default=(rank == self.selected_target_rank),
-            )
-            for rank in range(gu_pet.MIN_RANK, gu_pet.MAX_RANK + 1)
-        ]
-        rank_select = discord.ui.Select(placeholder="Target Gu Pet rank (any rank -- odds scale with your Gu Refiner rank)", options=rank_options, row=2)
-        rank_select.callback = self._on_pick_target_rank
-        self.add_item(rank_select)
-
-        catalysts = gu_pet.refine_catalyst_recipe(self.selected_target_rank)
+        catalyst_rank = gu_pet.natively_qualified_rank(player["gu_refiner_rank"])
+        catalysts = gu_pet.refine_catalyst_recipe(catalyst_rank)
         inventory = self.game.get_inventory(self.user_id)
         can_afford_catalysts = all(inventory.get(mat, 0) >= qty for mat, qty in catalysts.items())
         button = discord.ui.Button(
@@ -327,20 +307,11 @@ class GuPetView(GameView):
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
 
-    async def _on_pick_target_rank(self, interaction: discord.Interaction):
-        select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 2)
-        self.selected_target_rank = int(select.values[0])
-        await asyncio.to_thread(self._build_components)
-        embed = await asyncio.to_thread(self.build_embed)
-        await interaction.response.edit_message(embed=embed, view=self)
-
     async def _on_refine(self, interaction: discord.Interaction):
         def _do_refine():
             owned = self.game.gu_pet_refine_candidates(self.user_id)
             quantity = min(gu_pet.REFINE_MAX_SACRIFICE, dict(owned).get(self.selected_sacrifice_item, 0))
-            result = self.game.refine_gu_pet(
-                self.user_id, self.display_name, self.selected_sacrifice_item, quantity, self.selected_target_rank,
-            )
+            result = self.game.refine_gu_pet(self.user_id, self.display_name, self.selected_sacrifice_item, quantity)
             if result["ok"] and result["outcome"] in ("critical", "standard"):
                 # A fresh player has nowhere else to point their new pet -- auto-activate it
                 # only if nothing is already active, never silently swapping away a pet the
@@ -528,23 +499,29 @@ class GuPetView(GameView):
 
     def _fill_refine_embed(self, embed: discord.Embed):
         player = self.game.get_player_stats(self.user_id, self.display_name)
+        qualified_rank = gu_pet.natively_qualified_rank(player["gu_refiner_rank"])
         embed.description = (
             f"Sacrifice **1-3 {gu_pet.REFINE_REQUIRED_GU_QUALITY}-quality Gu** (pure energy mass — its own "
             "stats/identity never carry over) plus catalysts to hatch a blank Gu Pet, then feed it through the "
-            "**Feed** tab to grow it. Any rank is attemptable at any Gu Refiner rank — reaching above your own "
-            "level just costs success chance instead of being blocked outright.\n\n"
+            "**Feed** tab to grow it. You don't pick the pet's rank — the ritual rolls it randomly, weighted "
+            f"toward your own Gu Refiner rank (most likely **Rank {qualified_rank}**, but any Rank 1-7 is "
+            "possible).\n\n"
             f"Your Gu Refiner rank: **{professions.rank_name(player['gu_refiner_rank'])}**"
         )
-        if self.selected_target_rank is not None:
-            catalysts = gu_pet.refine_catalyst_recipe(self.selected_target_rank)
-            inventory = self.game.get_inventory(self.user_id)
-            catalyst_lines = "\n".join(f"**{mat}**: {inventory.get(mat, 0)}/{qty}" for mat, qty in catalysts.items())
-            embed.add_field(name=f"Catalysts (Rank {self.selected_target_rank})", value=catalyst_lines, inline=False)
-            candidates = self.game.gu_pet_refine_candidates(self.user_id)
-            owned_sacrifice = dict(candidates).get(self.selected_sacrifice_item, 0)
-            preview_quantity = min(gu_pet.REFINE_MAX_SACRIFICE, max(gu_pet.REFINE_MIN_SACRIFICE, owned_sacrifice))
-            chance = gu_pet.refine_success_chance(player["gu_refiner_rank"], self.selected_target_rank, preview_quantity)
-            embed.add_field(name="Success Chance", value=f"**~{chance * 100:.0f}%** (sacrificing {preview_quantity})", inline=True)
+        catalysts = gu_pet.refine_catalyst_recipe(qualified_rank)
+        inventory = self.game.get_inventory(self.user_id)
+        catalyst_lines = "\n".join(f"**{mat}**: {inventory.get(mat, 0)}/{qty}" for mat, qty in catalysts.items())
+        embed.add_field(name=f"Catalysts (priced for your Rank {qualified_rank} level)", value=catalyst_lines, inline=False)
+        candidates = self.game.gu_pet_refine_candidates(self.user_id)
+        owned_sacrifice = dict(candidates).get(self.selected_sacrifice_item, 0)
+        preview_quantity = min(gu_pet.REFINE_MAX_SACRIFICE, max(gu_pet.REFINE_MIN_SACRIFICE, owned_sacrifice))
+        race_success_bonus = self.game.gu_pet_refine_race_bonus_pct(player, "gu_refiner_success_pct")
+        estimated_chance = gu_pet.refine_success_chance(player["gu_refiner_rank"], qualified_rank, preview_quantity, race_success_bonus)
+        embed.add_field(
+            name="Estimated Success Chance",
+            value=f"**~{estimated_chance * 100:.0f}%** if the roll lands on your own Rank {qualified_rank} (sacrificing {preview_quantity}) — a higher roll costs more, a lower one costs less.",
+            inline=True,
+        )
         owned_pets = self.game.get_player_gu_pets(self.user_id)
         if owned_pets:
             lines = []
@@ -556,7 +533,7 @@ class GuPetView(GameView):
                     f"{name_part}Rank {pet['rank']} ({gu_pet.rank_to_rarity(pet['rank'])}) — {species_text}"
                 )
             embed.add_field(name=f"Owned Gu Pets ({len(owned_pets)})", value="\n".join(lines)[:1024], inline=False)
-        embed.set_footer(text="Higher Gu Refiner rank improves your success chance at every rank, and removes the penalty for reaching above your level.")
+        embed.set_footer(text="Higher Gu Refiner rank shifts the random roll toward higher pet ranks AND improves your success chance at whatever rank you land on.")
 
     def _fill_feed_embed(self, embed: discord.Embed):
         growing_pets = [p for p in self.game.get_player_gu_pets(self.user_id) if p["stage"] == gu_pet.STAGE_GROWTH]
