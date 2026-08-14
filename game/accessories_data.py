@@ -204,7 +204,7 @@ _reg("acc_stone_marrow_ring", "Stone-Marrow Ring", "Accessory", "Ring", "Ring", 
 _reg("acc_quiet_cicada_ring", "Quiet Cicada Ring", "Accessory", "Ring", "Ring", 2, "Rare",
      "Sound, Wisdom", "Reduces the cooldown of non-combat search commands by 5% and grants +5% clue quality.",
      "Only the strongest search-cooldown accessory applies.", "clue_chance",
-     {"search_recharge_reduction_pct": 0.05}, stat_bonuses={"loot_chance_bonus_pct": 0.05})
+     stat_bonuses={"search_recharge_reduction_pct": 0.05, "clue_chance_bonus_pct": 0.05})
 _reg("acc_ember_heart_signet", "Ember-Heart Signet", "Accessory", "Ring", "Ring", 2, "Rare",
      "Fire", "After spending at least 30% of maximum essence in one encounter, gain +12% damage for the next two attacks.",
      "Once per encounter.", "post_action_buff", {"trigger": "encounter_start", "atk_pct": 0.12, "duration_seconds": 60})
@@ -243,7 +243,7 @@ _reg("acc_ring_of_trials", "Ring of the Ten-Thousand-Trial Survivor", "Accessory
 # -- Earrings --------------------------------------------------------------------------------
 _reg("acc_wind_listening_earring", "Wind-Listening Earring", "Accessory", "Earring", "Earring", 1, "Common",
      "Wind, Information", "Gain +6% chance to detect ambushes, traps, or hidden rooms during searches.",
-     "Detection reveals danger but does not automatically avoid it.", "clue_chance", {}, stat_bonuses={"loot_chance_bonus_pct": 0.02})
+     "Detection reveals danger but does not automatically avoid it.", "clue_chance", {}, stat_bonuses={"clue_chance_bonus_pct": 0.02})
 _reg("acc_clear_bell_earring", "Clear-Bell Earring", "Accessory", "Earring", "Earring", 1, "Uncommon",
      "Sound, Soul", "Mental and dream-realm penalties expire 10% faster.",
      "Does not shorten permanent injuries or account-wide cooldowns.", "stat", stat_bonuses={"essence_regen_pct": 0.02})
@@ -280,13 +280,14 @@ _reg("acc_three_breath_protection_pendant", "Three-Breath Protection Pendant", "
      "Shield expires after the third enemy action.", "encounter_shield", {"reduction_pct": 0.08, "hits": 3})
 _reg("acc_cloud_step_talisman_necklace", "Cloud-Step Talisman Necklace", "Accessory", "Necklace", "Necklace", 3, "Epic",
      "Cloud, Movement", "Reduces travel time by 12%. The first movement check in a secret realm is automatically treated as one grade better.",
-     "Cannot turn a critical failure into a success.", "clue_chance", {"search_recharge_reduction_pct": 0.05})
+     "Cannot turn a critical failure into a success.", "clue_chance",
+     stat_bonuses={"search_recharge_reduction_pct": 0.05})
 _reg("acc_ancestors_sealed_locket", "Ancestor's Sealed Locket", "Accessory", "Necklace", "Necklace", 4, "Legendary",
      "Soul, Enslavement", "Stores the imprint of one defeated non-boss creature. Summon the imprint once per day for a temporary combat assist.",
      "Imprint power is capped at 20% of the player's combat rating.", "post_action_buff", {"trigger": "encounter_start", "str_pct": 0.10, "duration_seconds": 90})
 _reg("acc_golden_thread_karma_necklace", "Golden Thread Karma Necklace", "Accessory", "Necklace", "Necklace", 4, "Legendary",
      "Luck, Human", "Helping another player grants a Karma thread. At five threads, consume them to add a guaranteed Rare-or-better roll to a cooperative boss chest.",
-     "One thread per player per day; no self-trading loops.", "raid_party_bonus", {"loot_chance_bonus_pct": 0.06})
+     "One thread per player per day; no self-trading loops.", "stat", stat_bonuses={"loot_chance_bonus_pct": 0.06})
 _reg("acc_nine_deaths_black_pearl", "Nine-Deaths Black Pearl", "Accessory", "Necklace", "Necklace", 5, "Mythic",
      "Soul, Dark", "On defeat, preserve all cultivation progress and equipped-item durability.",
      "Once every seven days; does not prevent the defeat or preserve unbound loot.", "defeat_ward_daily", {"weekly": True})
@@ -319,7 +320,7 @@ _reg("acc_scarlet_tribulation_sash", "Scarlet Tribulation Sash", "Accessory", "B
      "breakthrough_boost_daily", {"chance_pct": 0.20})
 _reg("acc_brooch_of_shared_prosperity", "Brooch of Shared Prosperity", "Accessory", "Bracelet", "Brooch", 5, "Legendary",
      "Luck, Human", "When a party member obtains a Legendary-or-better drop, all other party members receive a small consolation cache.",
-     "One cache per player per day; caches cannot contain Legendary or Unique items.", "raid_party_bonus", {"stones": 50})
+     "One cache per player per day; caches cannot contain Legendary or Unique items.", "stat", stat_bonuses={"stone_reward_bonus_pct": 0.06})
 
 
 # ================================================================================================
@@ -370,14 +371,15 @@ _reg("art_seven_shadow_pursuit_sword", "Seven-Shadow Pursuit Sword", "Artifact",
      "Marks disappear if the target changes or the encounter ends.", "post_action_buff", {"trigger": "encounter_start", "atk_pct": 0.14, "duration_seconds": 60})
 _reg("art_cloud_riding_courier_sword", "Cloud-Riding Courier Sword", "Artifact", "Artifact", "Flying Sword", 3, "Rare",
      "Sword, Cloud, Information", "Reduces travel time and can deliver one item or message to another player remotely each day.",
-     "Cannot deliver bound, living, stolen, or quest items.", "clue_chance", {"search_recharge_reduction_pct": 0.05})
+     "Cannot deliver bound, living, stolen, or quest items.", "clue_chance",
+     stat_bonuses={"search_recharge_reduction_pct": 0.05})
 _reg("art_blood_returning_execution_sword", "Blood-Returning Execution Sword", "Artifact", "Artifact", "Flying Sword", 4, "Legendary",
      "Sword, Blood", "Defeating an enemy with the sword restores 10% missing HP and 8% missing essence.",
      "Triggers once per encounter; no benefit from trivial enemies.", "stat", stat_bonuses={"lifesteal_percent": 0.05})
 _reg("art_sky_splitting_formation_sword", "Sky-Splitting Formation Sword", "Artifact", "Artifact", "Flying Sword", 5, "Mythic",
      "Sword, Formation", "Can anchor a three-point sword formation. Each allied formation sword increases group damage and defense.",
      "Requires three distinct players or three compatible sword spirits; one formation per party.",
-     "raid_party_bonus", {"str_pct": 0.08, "def_pct": 0.08})
+     "post_action_buff", {"trigger": "encounter_start", "str_pct": 0.08, "def_pct": 0.08})
 _reg("art_dao_mark_severing_sword", "Dao-Mark Severing Sword", "Artifact", "Artifact", "Flying Sword", 6, "Mythic",
      "Sword, Rule", "Temporarily suppresses a portion of an enemy's strongest path bonus after three consecutive hits.",
      "Boss suppression is heavily reduced; costs immortal essence.", "post_action_buff", {"trigger": "encounter_start", "atk_pct": 0.10, "duration_seconds": 60})
@@ -389,7 +391,7 @@ _reg("art_sword_before_it_leaves", "Sword That Returns Before It Leaves", "Artif
 # -- Mirrors, lamp, lantern, bell ------------------------------------------------------------
 _reg("art_dust_revealing_bronze_mirror", "Dust-Revealing Bronze Mirror", "Artifact", "Artifact", "Mirror", 1, "Uncommon",
      "Light, Information", "Reveals whether a discovered room contains a trap, creature, treasure, or illusion.",
-     "Shows category only, not exact contents.", "clue_chance", {}, stat_bonuses={"loot_chance_bonus_pct": 0.02})
+     "Shows category only, not exact contents.", "clue_chance", {}, stat_bonuses={"clue_chance_bonus_pct": 0.02})
 _reg("art_soul_reflection_mirror", "Soul-Reflection Mirror", "Artifact", "Artifact", "Mirror", 3, "Epic",
      "Soul, Wisdom", "Once per day, reflect one fear, charm, or confusion effect back at its source.",
      "Does not reflect tribulation or area-wide effects.", "encounter_shield", {"reduction_pct": 0.12, "hits": 1})
@@ -402,7 +404,7 @@ _reg("art_corpse_flame_soul_lamp", "Corpse-Flame Soul Lamp", "Artifact", "Artifa
      "Daily capture cap; no souls from players or protected NPCs.", "stat", stat_bonuses={"stone_reward_bonus_pct": 0.03})
 _reg("art_everbright_inheritance_lantern", "Everbright Inheritance Lantern", "Artifact", "Artifact", "Lantern", 4, "Legendary",
      "Light, Information", "Within an inheritance, reveals one optional room and reduces the chance of choosing a dead end.",
-     "One reveal per inheritance; some hidden rooms resist detection.", "clue_chance", {}, stat_bonuses={"loot_chance_bonus_pct": 0.05})
+     "One reveal per inheritance; some hidden rooms resist detection.", "clue_chance", {}, stat_bonuses={"clue_chance_bonus_pct": 0.05})
 _reg("art_bell_of_the_last_warning", "Bell of the Last Warning", "Artifact", "Artifact", "Bell", 5, "Mythic",
      "Sound, Time", "Rings automatically before lethal damage, giving the player one emergency action before the damage resolves.",
      "Once per day; the emergency action cannot directly kill the attacker or use another death-prevention effect.",
@@ -424,7 +426,8 @@ _reg("art_rain_calling_azure_umbrella", "Rain-Calling Azure Umbrella", "Artifact
      "Once per day; affects allies and enemies equally.", "post_action_buff", {"trigger": "encounter_start", "atk_pct": 0.08, "duration_seconds": 90})
 _reg("art_cloud_sailing_leaf_boat", "Cloud-Sailing Leaf Boat", "Artifact", "Artifact", "Boat", 3, "Rare",
      "Wood, Cloud", "Party travel is 15% faster and random travel encounters are 10% less frequent.",
-     "Benefits up to four players; no effect inside sealed realms.", "clue_chance", {"search_recharge_reduction_pct": 0.08})
+     "Benefits up to four players; no effect inside sealed realms.", "clue_chance",
+     stat_bonuses={"search_recharge_reduction_pct": 0.08})
 _reg("art_void_crossing_bone_boat", "Void-Crossing Bone Boat", "Artifact", "Artifact", "Boat", 6, "Mythic",
      "Space, Bone", "Opens a short-lived route to a previously visited region or secret-realm entrance.",
      "Once every three days; high immortal essence cost; cannot bypass story locks.",
@@ -448,14 +451,15 @@ _reg("art_seal_of_the_silent_command", "Seal of the Silent Command", "Artifact",
      "Once per encounter; targets may resist based on soul strength.", "encounter_shield", {"reduction_pct": 0.10, "hits": 2})
 _reg("art_banner_of_shared_killing_intent", "Banner of Shared Killing Intent", "Artifact", "Artifact", "Banner", 5, "Mythic",
      "Human, Killing", "Party members gain escalating damage against the same boss after each full round without a member being defeated.",
-     "Bonus resets when a party member falls or changes target.", "raid_party_bonus", {"atk_pct": 0.10})
+     "Bonus resets when a party member falls or changes target.", "post_action_buff",
+     {"trigger": "encounter_start", "atk_pct": 0.10, "duration_seconds": 90})
 _reg("art_hourglass_of_borrowed_dawn", "Hourglass of Borrowed Dawn", "Artifact", "Artifact", "Hourglass", 6, "Mythic",
      "Time", "Once per week, immediately refresh one ordinary daily search, travel, or gathering charge.",
      "Cannot refresh death wards, drop duplication, breakthroughs, tribulations, or other weekly effects.",
-     "refresh_artifact_weekly", {})
+     "refresh_artifact_weekly", {"weekly": True})
 _reg("art_treasure_summoning_compass", "Treasure-Summoning Compass", "Artifact", "Artifact", "Compass", 4, "Legendary",
      "Information, Luck", "Choose materials, Gu, manuals, accessories, or artifacts before a search; matching discoveries are 15% more likely.",
-     "Does not change rarity; one category choice per day.", "clue_chance", {}, stat_bonuses={"loot_chance_bonus_pct": 0.06})
+     "Does not change rarity; one category choice per day.", "clue_chance", {}, stat_bonuses={"clue_chance_bonus_pct": 0.06})
 _reg("art_scale_of_equal_exchange", "Scale of Equal Exchange", "Artifact", "Artifact", "Scale", 6, "Unique",
      "Rule, Wealth", "Once per week, sacrifice several same-rank items to generate one random item of a selected category and equal total value.",
      "Cannot generate Unique items; sacrificed bound items produce a bound result.",
@@ -489,7 +493,7 @@ _reg("acc_ironhide_tusk_ring", "Ironhide Tusk Ring", "Accessory", "Ring", "Ring"
 _reg("acc_moonwell_earring", "Moonwell Earring", "Accessory", "Earring", "Earring", 1, "Uncommon",
      "Moon, Luck", "+6% chance to notice hidden search leads, plus a touch of moonlit luck.",
      "Detection reveals a lead but doesn't guarantee finding it.", "clue_chance", {},
-     stat_bonuses={"loot_chance_bonus_pct": 0.03, "luck_stat": 2})
+     stat_bonuses={"clue_chance_bonus_pct": 0.03, "luck_stat": 2})
 _reg("acc_packlord_fang_necklace", "Packlord Fang Necklace", "Accessory", "Necklace", "Necklace", 1, "Rare",
      "Blood, Strength", "+6 ATK while below 50% HP, channeling the pack's own hunting instinct.",
      "Does not stack with a second copy.", "stat", stat_bonuses={"low_hp_atk_bonus": 6, "str_stat": 2})
@@ -516,15 +520,18 @@ _reg("art_grave_lantern", "Grave Lantern", "Artifact", "Artifact", "Lantern", 1,
 # accessory_artifact_instances, not generic inventory items, so they can never be a plain
 # DropEntry the way a material or crafted-gear reward is.
 #
-# The brief describes this as a "party STR or SPD buff" — but "raid_party_bonus" (used by
-# five PRE-EXISTING items in this catalog: Golden Thread Karma Necklace, Brooch of Shared
-# Prosperity, Sky-Splitting Formation Sword, Banner of Shared Killing Intent) turns out to be
-# a dead effect_key: it's recognized/displayable and listed in MECHANIC_COST_GUIDE, but
-# nothing in manager.py or raid.py ever actually reads it — a pre-existing gap from this
-# system's original build, not something introduced here. Rather than add a SIXTH item onto
-# a demonstrably non-functional mechanic, this uses post_action_buff instead (already real,
-# already tested this session) — an honest scope-down from "whole party" to "just the
-# activator", which is what post_action_buff can actually deliver.
+# The brief describes this as a "party STR or SPD buff" — but "raid_party_bonus" (at the time
+# this comment was written, used by four PRE-EXISTING items: Golden Thread Karma Necklace,
+# Brooch of Shared Prosperity, Sky-Splitting Formation Sword, Banner of Shared Killing Intent)
+# turned out to be a dead effect_key: it was recognized/displayable and listed in
+# MECHANIC_COST_GUIDE, but nothing in manager.py or raid.py ever actually read it — a
+# pre-existing gap from this system's original build. Rather than add a FIFTH item onto a
+# demonstrably non-functional mechanic, this uses post_action_buff instead (already real,
+# already tested) — an honest scope-down from "whole party" to "just the activator", which is
+# what post_action_buff can actually deliver. All four of those pre-existing items were
+# themselves converted off raid_party_bonus for the same reason on 2026-08-13 (2 to "stat",
+# 2 to this same post_action_buff self-only pattern) — see each item's own registration below
+# and MECHANIC_COST_GUIDE's own note above; raid_party_bonus has no items using it anymore.
 _reg("art_thunderhorn_war_drum", "Thunderhorn War Drum", "Artifact", "Artifact", "Drum", 2, "Rare",
      "Lightning, Strength", "Beat the drum at the start of a fight to grant yourself +10% STR and +6% SPD for its duration.",
      "Long cooldown; the buff doesn't stack with a second Thunderhorn War Drum.",

@@ -249,6 +249,12 @@ SPECIAL_BONUS_POWER_WEIGHTS = {
     # Alchemy success bonus (see GameManager.craft_pill) — Crimson Furnace Province's own
     # accessories/artifact.
     "alchemy_success_pct": 60,
+    # clue_chance_bonus_pct was already real (roots/manuals/Dao paths/canon Gu all grant it —
+    # see GameManager.SPECIAL_BONUS_KEYS/run_search), just missing from this scoring table;
+    # search_recharge_reduction_pct is a live accessories_data.py mechanic (see
+    # GameManager._effective_search_recharge_seconds) added 2026-08-13. Both priced same tier
+    # as the other "moderate resource-adjacent utility %" keys just above.
+    "clue_chance_bonus_pct": 60, "search_recharge_reduction_pct": 60,
 }
 # Which flat player-stat column each percentage-based crafted_gear stat resolves against —
 # see GameManager.compute_equipment_bonuses, the only place these keys are actually applied

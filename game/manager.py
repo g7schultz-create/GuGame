@@ -1592,6 +1592,13 @@ class GameManager:
         # rounds mechanism itself already existed for that class ability; this key just makes
         # it Gu-grantable too (see hunt.py's _do_attack, team_battle.py's _resolve_round).
         "freeze_chance_pct",
+        # Accessories/artifacts with a "clue_chance" effect_key promising faster travel/search
+        # cooldowns (see accessories_data.py's own adaptation note: "No travel-time mechanic
+        # exists -- 'faster travel' effects instead shave a little off /search's charge
+        # recharge time") -- consumed in _effective_search_recharge_seconds, previously sat
+        # unread in effect_params under several of these items (a live dead-effect bug fixed
+        # 2026-08-13; see that method's own docstring).
+        "search_recharge_reduction_pct",
     )
 
     # A manual's essence_recovery_pct (see manual_view.EFFECT_LABELS) is the exact same
@@ -3764,20 +3771,36 @@ class GameManager:
             gained = self._restore_essence_pct(user_id, params.get("pct", 0.1), player)
             return True, f"**{affix.name}**: restored {gained:,.0f} primeval essence ({max_charges - charges_used - 1} charge(s) left today)."
 
+        if affix.effect_key == "search_reroll_daily":
+            # Adaptation: rerolling a specific past roll's exact outcome has no clean hook
+            # (search/discovery results aren't stored after the fact), so this grants one
+            # bonus /search charge instead — a "second chance" in the same spirit. Uses the
+            # SAME charges_used/charges_reset_ts multi-charge tracking as essence_restore_
+            # charges above (not the generic single-timestamp _accessory_cooldown_ready gate
+            # below) so a "charges": N item like Truth-Hearing Pearl ("Three uses per day")
+            # actually gets N uses/day instead of silently being capped at 1 -- a live bug
+            # fixed 2026-08-13.
+            now = int(time.time())
+            window = 7 * 86400 if weekly else 86400
+            charges_used = instance["charges_used"]
+            if instance["charges_reset_ts"] + window <= now:
+                charges_used = 0
+            max_charges = params.get("charges", 1)
+            if charges_used >= max_charges:
+                from .ui_utils import format_duration
+                remaining = instance["charges_reset_ts"] + window - now
+                return False, f"**{affix.name}** is out of charges — ready again in {format_duration(remaining)}."
+            self.db.set_accessory_instance_charges(instance_id, charges_used + 1, now if charges_used == 0 else instance["charges_reset_ts"])
+            settled = self._settle_search_charges(user_id)
+            new_charges = min(search_data.SEARCH_MAX_CHARGES, settled["search_charges"] + 1)
+            self.db.set_search_charges(user_id, new_charges, settled["search_charges_last_ts"])
+            left_note = f" ({max_charges - charges_used - 1} charge(s) left)" if max_charges > 1 else ""
+            return True, f"**{affix.name}**: granted a bonus search charge ({new_charges}/{search_data.SEARCH_MAX_CHARGES}){left_note}."
+
         remaining = self._accessory_cooldown_ready(instance, weekly)
         if remaining > 0:
             from .ui_utils import format_duration
             return False, f"**{affix.name}** is still on cooldown — ready in {format_duration(remaining)}."
-
-        if affix.effect_key == "search_reroll_daily":
-            # Adaptation: rerolling a specific past roll's exact outcome has no clean hook
-            # (search/discovery results aren't stored after the fact), so this grants one
-            # bonus /search charge instead — a "second chance" in the same spirit.
-            settled = self._settle_search_charges(user_id)
-            new_charges = min(search_data.SEARCH_MAX_CHARGES, settled["search_charges"] + 1)
-            self.db.set_search_charges(user_id, new_charges, settled["search_charges_last_ts"])
-            self.db.set_accessory_instance_activation(instance_id, int(time.time()))
-            return True, f"**{affix.name}**: granted a bonus search charge ({new_charges}/{search_data.SEARCH_MAX_CHARGES})."
 
         if affix.effect_key == "breakthrough_boost_daily":
             # Blood-Debt Ring's flavor ("sacrifice HP to increase the next CULTIVATION
@@ -3803,10 +3826,22 @@ class GameManager:
             return True, f"**{affix.name}** activated — your next breakthrough attempt is boosted."
 
         if affix.effect_key == "refresh_artifact_weekly":
+            # Adaptation: no UI exists to "pick which other daily effect to refresh" (a live
+            # dead-effect bug fixed 2026-08-13 -- this used to just print that instruction and
+            # burn its own weekly cooldown for nothing), so this uses the same "grants a bonus
+            # /search charge" simplification search_reroll_daily items already use instead.
+            settled = self._settle_search_charges(user_id)
+            new_charges = min(search_data.SEARCH_MAX_CHARGES, settled["search_charges"] + 1)
+            self.db.set_search_charges(user_id, new_charges, settled["search_charges_last_ts"])
             self.db.set_accessory_instance_activation(instance_id, int(time.time()))
-            return True, f"**{affix.name}** is ready — use it alongside /accessories to pick which other daily effect to refresh."
+            return True, f"**{affix.name}**: refreshes early, granting a bonus search charge ({new_charges}/{search_data.SEARCH_MAX_CHARGES})."
 
         if affix.effect_key == "unique_signature":
+            if affix.effect_params.get("handler") == "echo_sword":
+                # Automatic (see apply_encounter_start_bonuses' ECHO_SWORD_ATK_PCT branch),
+                # not a manual trigger -- a live dead-effect bug fixed 2026-08-13 used to have
+                # this print a flavor message and burn a daily cooldown for no real effect.
+                return False, f"**{affix.name}** doesn't have a manual activation — its echo strike triggers automatically each encounter."
             ok, message = self._activate_unique_signature(user_id, name, instance, affix)
             if ok:
                 self.db.set_accessory_instance_activation(instance_id, int(time.time()))
@@ -3834,12 +3869,36 @@ class GameManager:
             self.db.set_pending_breakthrough_boost(user_id, {"chance_pct": 1.0})
             self.db.set_accessory_instance_state(instance["instance_id"], {"failure_insight_stacks": 0})
             return True, f"**{affix.name}**: consumed all 10 stacks — your next breakthrough is guaranteed to succeed."
-        if handler == "echo_sword":
-            return True, f"**{affix.name}**: your first strike next encounter will echo automatically."
         if handler == "echo_earrings":
-            return True, f"**{affix.name}**: Echo tokens accumulate automatically as your other daily artifacts trigger."
+            # Adaptation: a full cross-item "Echo token" ledger (gain one whenever ANY other
+            # daily artifact triggers, spend three to refresh a different item) has no clean
+            # hook without threading state through activate_accessory_artifact/
+            # apply_encounter_start_bonuses/check_and_consume_defeat_ward/
+            # roll_bonus_discovery_reward all at once -- a live dead-effect bug fixed
+            # 2026-08-13 (this used to just print a flavor message with no real effect at
+            # all), fixed with the same "grants a bonus /search charge" simplification
+            # search_reroll_daily/refresh_artifact_weekly items already use.
+            settled = self._settle_search_charges(user_id)
+            new_charges = min(search_data.SEARCH_MAX_CHARGES, settled["search_charges"] + 1)
+            self.db.set_search_charges(user_id, new_charges, settled["search_charges_last_ts"])
+            return True, f"**{affix.name}**: an Echo token resonates, granting a bonus search charge ({new_charges}/{search_data.SEARCH_MAX_CHARGES})."
         if handler == "scale_of_exchange":
-            return True, f"**{affix.name}**: visit /accessories to choose items to sacrifice for the exchange."
+            # Adaptation: no multi-item sacrifice/category-picker UI exists (a live
+            # dead-effect bug fixed 2026-08-13 -- this used to just print that instruction
+            # with no real effect), so this drops the sacrifice input requirement the same
+            # way this file's own Poison-Drinking Gourd precedent already does (see
+            # accessories_data.py's own adaptation note) and directly manifests one random
+            # non-Unique accessory or artifact of this item's own rank instead.
+            rng = random.Random()
+            category = rng.choice(["Accessory", "Artifact"])
+            weights = accessories_data.ACCESSORY_RARITY_WEIGHTS if category == "Accessory" else accessories_data.ARTIFACT_RARITY_WEIGHTS
+            non_unique_weights = {r: w for r, w in weights.items() if r != "Unique"}
+            rarity = accessories_gen.weighted_choice(non_unique_weights, rng)
+            chosen = accessories_gen.select_item(category, affix.rank, rarity, [], rng)
+            if chosen is None:
+                return True, f"**{affix.name}** hums with power, but the exchange yields nothing this time."
+            grant = self.grant_accessory_artifact(user_id, name, chosen.item_id)
+            return True, f"**{affix.name}** hums with power and manifests **{grant['affix'].name}**!"
         return True, f"**{affix.name}** activated."
 
     def record_failed_breakthrough_insight(self, user_id: int):
@@ -3861,28 +3920,48 @@ class GameManager:
         self.db.set_pending_breakthrough_boost(user_id, None)
         return json.loads(raw)
 
+    # "Sword That Returns Before It Leaves" (see accessories_data.py's unique_signature
+    # echo_sword handler) -- its own flavor ("first sword attack each encounter resolves
+    # twice, once normal and once as a weaker echo") is an automatic per-encounter proc, not
+    # a manual activation, so it rides this same hook instead of activate_accessory_artifact's
+    # unique_signature dispatch (which now just tells the player it's automatic -- see there).
+    ECHO_SWORD_ATK_PCT = 0.15
+
     def apply_encounter_start_bonuses(self, user_id: int, name: str):
-        """Called once at the start of a /hunt, /raid, or /pvp fight — grants the short
-        combat buff for any equipped encounter_shield/post_action_buff item that isn't
-        still on cooldown (see the module docstring's "first N enemy actions" ->
-        time-boxed-buff adaptation note)."""
+        """Called once at the start of a /hunt, /raid, /pvp, /battlefield,
+        /inheritance_ground, or /search_black_heaven fight -- grants the short combat buff
+        for every equipped encounter_shield/post_action_buff item (see the module docstring's
+        "first N enemy actions" -> time-boxed-buff adaptation note), unconditionally, every
+        single encounter.
+
+        Live bug fixed 2026-08-13: this used to also gate on _accessory_cooldown_ready, the
+        SAME daily/weekly cooldown activate_accessory_artifact's manually-triggered daily
+        effects use. These items' own flavor text is explicit ("Once per encounter"), and
+        this function is called once per NEW encounter (hunt.py/raid.py/battlefield_view.py/
+        inheritance_ground_view.py/black_heaven_search_view.py each call it exactly once per
+        fight, never mid-round), so the daily gate was pure copy-paste leftover from the
+        manual-activation pattern -- it silently throttled roughly two dozen "once per
+        encounter" accessories/artifacts down to firing once per REAL-WORLD DAY total,
+        no matter how many separate fights (or separate battle bubbles within one
+        Inheritance Ground run) a player actually had that day."""
         for instance_id in self.db.get_equipped_accessory_ids(user_id).values():
             instance = self.db.get_accessory_instance(instance_id)
             affix = self._affix_for_instance(instance)
-            if affix is None or affix.effect_key not in ("encounter_shield", "post_action_buff"):
+            if affix is None:
                 continue
-            if self._accessory_cooldown_ready(instance) > 0:
+            is_echo_sword = affix.effect_key == "unique_signature" and affix.effect_params.get("handler") == "echo_sword"
+            if affix.effect_key not in ("encounter_shield", "post_action_buff") and not is_echo_sword:
                 continue
             params = affix.effect_params
             duration = params.get("duration_seconds", self.ENCOUNTER_BUFF_DURATION_SECONDS)
+            atk_pct = self.ECHO_SWORD_ATK_PCT if is_echo_sword else params.get("atk_pct", 0)
             self.db.add_buff(
                 user_id, affix.name, 0, duration,
                 str_bonus=params.get("str_pct", 0) * 100 if params.get("str_pct") else 0,
-                atk_bonus=params.get("atk_pct", 0) * 100 if params.get("atk_pct") else 0,
+                atk_bonus=atk_pct * 100 if atk_pct else 0,
                 def_bonus=(params.get("reduction_pct", 0) or params.get("def_pct", 0)) * 100,
                 spd_bonus=params.get("spd_pct", 0) * 100,
             )
-            self.db.set_accessory_instance_activation(instance_id, int(time.time()))
 
     def check_and_consume_defeat_ward(self, user_id: int) -> Optional[str]:
         """Called wherever a defeat's Qi-loss penalty would apply (see hunt.py) — returns
@@ -3897,6 +3976,16 @@ class GameManager:
             if self._accessory_cooldown_ready(instance, weekly) > 0:
                 continue
             self.db.set_accessory_instance_activation(instance_id, int(time.time()))
+            # Life-Retaining Vermilion Ring's own drawback ("lose 20% current essence") --
+            # previously never actually charged (a live bug fixed 2026-08-13, making the
+            # ring strictly better than advertised). Read AFTER set_accessory_instance_
+            # activation above so the ward itself always fires regardless of essence level.
+            essence_cost_pct = affix.effect_params.get("essence_cost_pct", 0)
+            if essence_cost_pct > 0:
+                player = self.db.get_player_row(user_id)
+                cost = round(player["primeval_essence"] * essence_cost_pct) if player else 0
+                if cost > 0:
+                    self.db.add_primeval_essence(user_id, -cost)
             return affix.name
         return None
 
@@ -3961,16 +4050,25 @@ class GameManager:
     # loadouts should be possible; same relative shape across ranks, just much shorter.
     MANUAL_CHANGE_COOLDOWN_BY_RANK = {1: 600, 2: 600, 3: 1200, 4: 2400, 5: 3600, 6: 5400, 7: 7200}
 
+    def _effective_search_recharge_seconds(self, user_id: int) -> int:
+        """search_recharge_reduction_pct (see accessories_data.py's clue_chance-effect items
+        and this class's own SPECIAL_BONUS_KEYS comment) shaves a little off how long each
+        /search charge takes to refill. Capped at 50% off so no combination of items can make
+        recharge instant."""
+        reduction = min(0.5, self.compute_equipment_bonuses(user_id).get("search_recharge_reduction_pct", 0))
+        return max(60, round(search_data.SEARCH_RECHARGE_SECONDS * (1 - reduction)))
+
     def _settle_search_charges(self, user_id: int) -> dict:
         status = dict(self.db.get_search_status(user_id))
         now = int(time.time())
         charges = status["search_charges"]
         last_ts = status["search_charges_last_ts"] or now
+        interval = self._effective_search_recharge_seconds(user_id)
         if charges < search_data.SEARCH_MAX_CHARGES:
-            gained = max(0, now - last_ts) // search_data.SEARCH_RECHARGE_SECONDS
+            gained = max(0, now - last_ts) // interval
             if gained > 0:
                 charges = min(search_data.SEARCH_MAX_CHARGES, charges + gained)
-                last_ts = last_ts + gained * search_data.SEARCH_RECHARGE_SECONDS
+                last_ts = last_ts + gained * interval
                 self.db.set_search_charges(user_id, charges, last_ts)
         status["search_charges"] = charges
         status["search_charges_last_ts"] = last_ts
@@ -3982,7 +4080,7 @@ class GameManager:
         now = int(time.time())
         seconds_to_next = 0
         if status["search_charges"] < search_data.SEARCH_MAX_CHARGES:
-            seconds_to_next = max(0, search_data.SEARCH_RECHARGE_SECONDS - (now - status["search_charges_last_ts"]))
+            seconds_to_next = max(0, self._effective_search_recharge_seconds(user_id) - (now - status["search_charges_last_ts"]))
         active_discovery = self.db.get_discovery(status["active_discovery_id"]) if status["active_discovery_id"] else None
         great_realm_index = realms.STAGES[player["realm_index"]].great_realm_index
         return {
