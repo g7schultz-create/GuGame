@@ -33,9 +33,9 @@ STUDY_HOURS_PER_STEP = [1, 4, 12, 24, 72, 168, 336]
 # Applied to gathering/harvest quantity (Miner/Gatherer/Farmer) at the matching rank index.
 YIELD_MULTIPLIER_PER_RANK = [1.0, 1.15, 1.3, 1.5, 1.75, 2.0, 2.5, 3.0]
 
-# Crafting success chance (Alchemist now; Blacksmith/Gu Refiner once they have recipes)
-# at the matching rank index — Dao Master crafts flawlessly, everyone else risks the
-# materials on a failed attempt.
+# Crafting success chance (Alchemist/Blacksmith/Gu Refiner all read this) at the matching
+# rank index — Dao Master crafts flawlessly, everyone else risks the materials on a failed
+# attempt.
 SUCCESS_CHANCE_PER_RANK = [0.50, 0.60, 0.68, 0.75, 0.82, 0.88, 0.94, 1.00]
 
 # player column storing each profession's rank index.

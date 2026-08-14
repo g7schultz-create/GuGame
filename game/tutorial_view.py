@@ -21,6 +21,7 @@ class TutorialView(GameView):
         ("dao_companion", "Dao Companion", "🤝"),
         ("dao_paths", "Dao Paths", "🌀"),
         ("avatar", "Nascent Soul Avatar", "👤"),
+        ("gu_pet", "Gu Pet", "🐛"),
         ("endgame_realms", "Endgame Realms", "☁️"),
         ("dungeons", "Dungeons & Trials", "🏛️"),
         ("pvp_wagers", "PvP & Wagers", "🏆"),
@@ -73,6 +74,7 @@ class TutorialView(GameView):
             "dao_companion": self._dao_companion_embed,
             "dao_paths": self._dao_paths_embed,
             "avatar": self._avatar_embed,
+            "gu_pet": self._gu_pet_embed,
             "endgame_realms": self._endgame_realms_embed,
             "dungeons": self._dungeons_embed,
             "pvp_wagers": self._pvp_wagers_embed,
@@ -396,6 +398,30 @@ class TutorialView(GameView):
             "search for loot; run the command again once it's back to claim what it found.\n"
             "• The avatar has its own gear tier system, entirely separate from your main "
             "equipment — `/sell` unloads any avatar gear you don't need for spirit stones."
+        )
+        return embed
+
+    def _gu_pet_embed(self) -> discord.Embed:
+        embed = self._base_embed("Gu Pet", "🐛")
+        embed.description = (
+            "A single-slot Gu-beast companion, grown through your own Gu Refiner profession "
+            "(study it with `/study` like any other profession).\n\n"
+            "• **Refine** — sacrifice **10-20 identical copies** of one owned Gu (pure energy "
+            "mass — its own stats never carry over) plus Soul Nourishing Pills and Soul "
+            "Crystals to hatch a blank Rank I-VII Gu Pet. Higher Gu Refiner rank unlocks "
+            "higher pet ranks and a better success chance.\n"
+            "• **Feed** — once a day, feed it Ore, Herb, Beast Material, Beast Core, or Pills "
+            "for **7-14 days**. The RATIO of everything you fed decides its permanent species "
+            "and Path once it's done growing — lean Ore/Herb/Pill for a Cultivation "
+            "specialist, Beast Material/Core for a Combat specialist.\n"
+            "• **Crystallize** — locks in its species and starts its Satiety upkeep. "
+            "**Status** lets you browse every pet you own and choose which one is active — "
+            "only your active pet's bonuses actually apply. **Mode** flips it between "
+            "**Combat** and **Cultivation** Mode (10-minute cooldown, or pay spirit stones to "
+            "switch early); a well-fed pet boosts its output, a starving one barely helps at "
+            "all — refeed it from the Status tab using its own rank's material tier.\n"
+            "• Rank IV+ (Epic+) pets get their own unique AI-generated portrait; lower ranks "
+            "share art with other pets of the same species/Path/rank."
         )
         return embed
 

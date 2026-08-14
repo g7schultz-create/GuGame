@@ -625,6 +625,108 @@ def validate_physique_specs() -> List[str]:
     return errors
 
 
+def validate_gu_pet_content() -> List[str]:
+    """Checks game/gu_pet.py's static content (see /gu_pet): GU_PET_RANK_SCALING/
+    GU_PET_RANK_REQUIRED/GU_PET_RANK_TO_RARITY all cover every rank 1-7 with sane,
+    monotonically non-decreasing values; GU_PET_RANK_REQUIRED indexes real professions.RANKS
+    entries; SATIETY_BANDS partitions [0, 100] with no gaps; every SPECIES entry has real
+    content and a recognized Path; and every stat_bonuses-shaped key this module can ever
+    actually produce (CATEGORY_STAT_KEYS, COMBAT_SPECIALTY_BASE_VALUES, every real
+    roll_specialty_bonus output) is a key some consumer actually reads -- either
+    GameManager.SPECIAL_BONUS_KEYS (compute_equipment_bonuses' generic pool, mirroring
+    validate_canon_gu's own known_stat_keys source) or one of the two _trait_bonus-style keys
+    (gear_budget_bonus_pct/manual_rarity_bonus_pct) consumed directly at craft_gear/
+    assemble_manual via GameManager._gu_pet_cultivation_bonus."""
+    import random as _random
+
+    from .. import gu_pet, professions
+    from ..manager import GameManager
+
+    errors: List[str] = []
+
+    for rank in range(gu_pet.MIN_RANK, gu_pet.MAX_RANK + 1):
+        if rank not in gu_pet.GU_PET_RANK_SCALING:
+            errors.append(f"[gu pet] rank {rank} missing from GU_PET_RANK_SCALING.")
+        if rank not in gu_pet.GU_PET_RANK_REQUIRED:
+            errors.append(f"[gu pet] rank {rank} missing from GU_PET_RANK_REQUIRED.")
+        if rank not in gu_pet.GU_PET_RANK_TO_RARITY:
+            errors.append(f"[gu pet] rank {rank} missing from GU_PET_RANK_TO_RARITY.")
+
+    prev_combat_mult, prev_required = -1, -1
+    for rank in sorted(gu_pet.GU_PET_RANK_SCALING):
+        scaling = gu_pet.GU_PET_RANK_SCALING[rank]
+        if scaling["combat_multiplier"] < prev_combat_mult:
+            errors.append(f"[gu pet] rank {rank}'s combat_multiplier ({scaling['combat_multiplier']}) is lower than a lower rank's -- should be monotonically non-decreasing.")
+        prev_combat_mult = scaling["combat_multiplier"]
+        for range_key in ("blacksmith_budget_bonus_range", "manual_unique_bonus_range"):
+            lo, hi = scaling[range_key]
+            if not (0 <= lo <= hi):
+                errors.append(f"[gu pet] rank {rank}'s {range_key} ({lo}, {hi}) isn't a valid ascending non-negative range.")
+        if scaling["satiety_material_tier"] != rank:
+            errors.append(f"[gu pet] rank {rank}'s satiety_material_tier ({scaling['satiety_material_tier']}) doesn't match its own rank -- upkeep feeding would ask for the wrong tier.")
+    for rank, required in sorted(gu_pet.GU_PET_RANK_REQUIRED.items()):
+        if required < prev_required:
+            errors.append(f"[gu pet] rank {rank}'s required Gu Refiner rank ({required}) is lower than a lower pet rank's requirement.")
+        prev_required = required
+        if not (0 <= required < len(professions.RANKS)):
+            errors.append(f"[gu pet] rank {rank}'s required Gu Refiner rank index {required} is out of professions.RANKS' own range.")
+
+    # SATIETY_BANDS must partition [0, 100] with no gaps, checked the same top-down-first-
+    # match way gu_pet.satiety_band itself resolves a value.
+    covered = [False] * 101
+    for low, high, multiplier, label in gu_pet.SATIETY_BANDS:
+        if not (0 <= low <= high <= 100):
+            errors.append(f"[gu pet] SATIETY_BANDS entry '{label}' ({low}-{high}) isn't a valid range within [0, 100].")
+            continue
+        for v in range(low, high + 1):
+            covered[v] = True
+    uncovered = [v for v in range(101) if not covered[v]]
+    if uncovered:
+        shown = uncovered[:10]
+        errors.append(f"[gu pet] SATIETY_BANDS leaves satiety value(s) uncovered: {shown}{'...' if len(uncovered) > len(shown) else ''}.")
+
+    known_special_keys = set(GameManager.SPECIAL_BONUS_KEYS)
+    trait_only_keys = {"gear_budget_bonus_pct", "manual_rarity_bonus_pct"}
+    known_keys = known_special_keys | trait_only_keys | {"hp_pct"}
+
+    for category, (primary, secondary) in gu_pet.CATEGORY_STAT_KEYS.items():
+        for key in (primary, secondary):
+            if key and key not in known_keys:
+                errors.append(f"[gu pet] CATEGORY_STAT_KEYS['{category}']: unknown key '{key}' -- won't be read by compute_equipment_bonuses.")
+
+    for species_key, values in gu_pet.COMBAT_SPECIALTY_BASE_VALUES.items():
+        if species_key not in gu_pet.SPECIES:
+            errors.append(f"[gu pet] COMBAT_SPECIALTY_BASE_VALUES references unknown species '{species_key}'.")
+        for key, value in values.items():
+            if key not in known_keys:
+                errors.append(f"[gu pet] COMBAT_SPECIALTY_BASE_VALUES['{species_key}']: unknown key '{key}'.")
+            if value <= 0:
+                errors.append(f"[gu pet] COMBAT_SPECIALTY_BASE_VALUES['{species_key}']['{key}']={value} should be positive.")
+
+    for species_key, species in gu_pet.SPECIES.items():
+        if not species.name or not species.role_text or not species.emoji:
+            errors.append(f"[gu pet] SPECIES['{species_key}']: missing name/role_text/emoji.")
+        if species.path not in (gu_pet.PATH_COMBAT, gu_pet.PATH_CULTIVATION):
+            errors.append(f"[gu pet] SPECIES['{species_key}']: path '{species.path}' isn't a recognized Path.")
+        if species.path == gu_pet.PATH_CULTIVATION and species_key != gu_pet.SPECIES_UNBOUND and not species.preferred_categories:
+            errors.append(f"[gu pet] SPECIES['{species_key}']: Cultivation-Path species with no preferred_categories -- crystallize()'s nearest-match can never pick it correctly.")
+
+    # Every real roll_specialty_bonus output key, across every rank it can appear at (a fixed
+    # seed keeps this deterministic -- the RNG only ever affects WHERE within a range the
+    # value lands, never WHICH keys get produced). Skips a rank already flagged missing from
+    # GU_PET_RANK_SCALING above -- rank_scaling(rank) would KeyError on it otherwise, and a
+    # validator crashing partway through would hide every OTHER real issue behind it.
+    for species_key in gu_pet.SPECIES:
+        for rank in range(gu_pet.MIN_RANK, gu_pet.MAX_RANK + 1):
+            if rank not in gu_pet.GU_PET_RANK_SCALING:
+                continue
+            for key in gu_pet.roll_specialty_bonus(species_key, rank, rng=_random.Random(0)):
+                if key not in known_keys:
+                    errors.append(f"[gu pet] roll_specialty_bonus('{species_key}', {rank}) produces unknown key '{key}'.")
+
+    return errors
+
+
 def validate_all_content() -> List[str]:
     errors: List[str] = []
     errors.extend(validate_monsters())
@@ -637,6 +739,7 @@ def validate_all_content() -> List[str]:
     errors.extend(validate_accessories())
     errors.extend(validate_root_specs())
     errors.extend(validate_physique_specs())
+    errors.extend(validate_gu_pet_content())
     return errors
 
 
