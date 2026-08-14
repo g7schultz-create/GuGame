@@ -70,15 +70,25 @@ class GameManager:
             return False, "That item doesn't exist."
         if item.use is None:
             return False, f"**{item_name}** can't be used yet — it's a crafting material for a future system."
-        # Primeval Essence Crystals restore a % of max essence (see items._use_primeval_essence_
-        # crystal) but restore_essence_percent clamps at the cap, so using one while already
-        # full has zero effect yet still consumed the crystal -- refusing it here instead means
-        # Use All (use_item_multiple loops this and breaks on the first False) stops the moment
-        # essence tops out, rather than burning through the whole stack for nothing.
-        if item_name == "Primeval Essence Crystal":
-            player = self.db.get_or_create_player(user_id, name)
-            if player["primeval_essence"] >= self.db.get_effective_max_essence(user_id):
-                return False, "Your primeval essence is already full — no crystals were used."
+        # Qi Ascension Pill (see items._use_qi_ascension_pill): db.use_qi_ascension_pill already
+        # refuses a realm-locked or cap-hit use, but manager.use_item removes the item from
+        # inventory BEFORE calling item.use() (below), so without this pre-check a refused pill
+        # was still silently consumed for nothing. Checked here, before removal, so a doomed
+        # use never costs the player the pill at all.
+        if item_name.startswith("Qi Ascension Pill (T"):
+            tier = item.rank
+            status = self.db.get_qi_ascension_pill_status(user_id, tier)
+            if not status["can_use"]:
+                if status["reason"] == "realm_locked":
+                    required_realm_name = realms.GREAT_REALMS[tier - 1]["name"]
+                    return False, (
+                        f"Your dantian isn't ready — a Tier {tier} Qi Ascension Pill requires "
+                        f"**{required_realm_name}** realm. It wasn't consumed — break through further first."
+                    )
+                return False, (
+                    f"Your dantian resists — you've already used **{status['max_uses']}** Tier {tier} Qi "
+                    f"Ascension Pills, the lifetime limit for this tier. It wasn't consumed."
+                )
         # Food Dao Path: a scaled chance the Pill isn't actually consumed by this use. Rolled
         # before removal so a "saved" pill never even leaves the inventory (item.use's effect
         # still fires normally either way) -- but ownership still has to be checked either way,
@@ -2250,26 +2260,60 @@ class GameManager:
     def get_world_region_status(self, user_id: int, name: str) -> dict:
         player = self.db.get_or_create_player(user_id, name)
         great_realm_index = realms.STAGES[player["realm_index"]].great_realm_index
+        destination = player["world_region_travel_destination"]
+        travel_remaining = 0
+        if destination:
+            elapsed = int(time.time()) - player["world_region_travel_started_ts"]
+            travel_remaining = max(0, world_regions.WORLD_REGION_TRAVEL_SECONDS - elapsed)
         return {
             "player": player,
-            "eligible": world_regions.is_eligible(great_realm_index),
+            "requires_travel": world_regions.requires_travel(great_realm_index),
             "current": player["world_region"],
+            "traveling_to": destination,
+            "travel_remaining_seconds": travel_remaining,
             "remaining_seconds": self._check_cooldown(player, "last_world_region_change_ts", world_regions.REGION_CHANGE_COOLDOWN_SECONDS),
         }
 
     def set_world_region(self, user_id: int, name: str, region_key: str) -> dict:
         status = self.get_world_region_status(user_id, name)
-        if not status["eligible"]:
-            return {"ok": False, "reason": "ineligible"}
         if region_key not in world_regions.WORLD_REGIONS:
             return {"ok": False, "reason": "unknown_region"}
+        if status["traveling_to"]:
+            return {"ok": False, "reason": "already_traveling", "travel_remaining_seconds": status["travel_remaining_seconds"]}
+        if region_key == status["current"]:
+            return {"ok": False, "reason": "already_there"}
         # Fixed Immortal Travel Gu (see world_boss.py): "instantly teleport to unlocked
-        # regions" -- the literal real thing to bypass here is REGION_CHANGE_COOLDOWN_SECONDS.
+        # regions" -- bypasses REGION_CHANGE_COOLDOWN_SECONDS below Nascent Soul, and the real
+        # travel delay at Spirit Severing+.
         gu_name = self.db.get_equipped(user_id).get("gu_ability")
-        if status["current"] and status["remaining_seconds"] > 0 and gu_name != "Fixed Immortal Travel Gu":
-            return {"ok": False, "reason": "cooldown", "remaining_seconds": status["remaining_seconds"]}
-        self.db.set_world_region(user_id, region_key)
-        return {"ok": True, "region": world_regions.WORLD_REGIONS[region_key]}
+        if gu_name == "Fixed Immortal Travel Gu":
+            self.db.set_world_region(user_id, region_key)
+            return {"ok": True, "region": world_regions.WORLD_REGIONS[region_key], "instant": True}
+        if not status["requires_travel"]:
+            if status["current"] and status["remaining_seconds"] > 0:
+                return {"ok": False, "reason": "cooldown", "remaining_seconds": status["remaining_seconds"]}
+            self.db.set_world_region(user_id, region_key)
+            return {"ok": True, "region": world_regions.WORLD_REGIONS[region_key], "instant": True}
+        self.db.start_world_region_travel(user_id, region_key)
+        return {
+            "ok": True, "region": world_regions.WORLD_REGIONS[region_key], "instant": False,
+            "travel_seconds": world_regions.WORLD_REGION_TRAVEL_SECONDS,
+        }
+
+    def check_and_complete_world_region_travel(self) -> list:
+        """Periodic sweep (see GameCog.world_region_travel_tick) -- auto-completes any
+        Spirit-Severing+ region journey whose WORLD_REGION_TRAVEL_SECONDS has actually
+        elapsed. Returns a list of {"user_id", "region"} for each completion, so the caller
+        can DM each player (mirrors check_and_complete_white_heaven_travel's own shape)."""
+        completed = []
+        now = int(time.time())
+        for player in self.db.get_players_with_pending_world_region_travel():
+            if now - player["world_region_travel_started_ts"] < world_regions.WORLD_REGION_TRAVEL_SECONDS:
+                continue
+            destination_key = player["world_region_travel_destination"]
+            self.db.complete_world_region_travel(player["user_id"], destination_key)
+            completed.append({"user_id": player["user_id"], "region": world_regions.WORLD_REGIONS[destination_key]})
+        return completed
 
     def _region_bonus_dict(self, player) -> dict:
         return world_regions.REGION_BONUSES.get(player["world_region"], {})

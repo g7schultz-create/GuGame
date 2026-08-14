@@ -1,26 +1,37 @@
 """
-/region -- a mortal-realm character's chosen geographic world location, letting them lean
-into one of five playstyles (inheritance-hunting, tougher fights, richer materials, richer
-trade goods, or richer manuals). Deliberately separate from search_data.REGIONS, which is
-an unrelated per-realm DANGER TIER used by /search (see search_data.py's own module
-docstring) -- a player's world_region and their /search region are two different axes.
+/region -- a character's chosen geographic world location, letting them lean into one of five
+playstyles (inheritance-hunting, tougher fights, richer materials, richer trade goods, or
+richer manuals). Deliberately separate from search_data.REGIONS, which is an unrelated
+per-realm DANGER TIER used by /search (see search_data.py's own module docstring) -- a
+player's world_region and their /search region are two different axes.
 
-Eligibility: only characters at Nascent Soul (realms.GREAT_REALMS index 3) or below can pick
-one of these five mortal regions -- "later there will be immortal areas" above that, not yet
-built. A character above the cap simply can't set/hold a world_region (see
-GameManager.get_world_region_status's "eligible" flag); existing higher-realm characters are
-unaffected since the column defaults to NULL.
+Every realm can hold a world region. The two great_realm_index brackets differ only in HOW a
+switch happens (see GameManager.set_world_region/get_world_region_status,
+region_view.py's "traveling" state):
+- Nascent Soul (realms.GREAT_REALMS index 3) and below: an instant switch, gated only by
+  REGION_CHANGE_COOLDOWN_SECONDS between changes -- unchanged from this system's original shape.
+- Spirit Severing and above: a real WORLD_REGION_TRAVEL_SECONDS (1h) wall-clock journey each
+  time, mirroring white_heaven.py's own real travel delay -- no separate cooldown on top, the
+  journey itself is the friction. Fixed Immortal Travel Gu (see world_boss.py) bypasses both
+  the low-realm cooldown AND the high-realm travel delay, matching its own "instantly teleport
+  to unlocked regions" flavor text.
 """
 
 from dataclasses import dataclass
 
-MAX_GREAT_REALM_INDEX_FOR_MORTAL_REGIONS = 3  # Nascent Soul and below (realms.GREAT_REALMS)
+MAX_GREAT_REALM_INDEX_FOR_INSTANT_REGION_CHANGE = 3  # Nascent Soul and below (realms.GREAT_REALMS)
 
-# How often a character may switch world regions -- long enough that "region-hop for a free
-# roll on every action type" isn't a viable strategy, short enough that a genuine playstyle
-# change doesn't feel like a punishment. TESTING: shortened like every other cooldown this
-# session (/mine, /gather, /explore) -- revert to something like 6 * 3600 once testing is done.
+# How often a Nascent-Soul-and-below character may switch world regions -- long enough that
+# "region-hop for a free roll on every action type" isn't a viable strategy, short enough that
+# a genuine playstyle change doesn't feel like a punishment. TESTING: shortened like every
+# other cooldown this session (/mine, /gather, /explore) -- revert to something like 6 * 3600
+# once testing is done.
 REGION_CHANGE_COOLDOWN_SECONDS = 15 * 60
+
+# Real wall-clock travel delay for Spirit Severing+ region switches -- see this module's own
+# docstring. TESTING: shorten like every other real-travel-delay constant in this codebase's
+# own history if verifying end-to-end; revert to 3600 for real play.
+WORLD_REGION_TRAVEL_SECONDS = 3600
 
 
 @dataclass
@@ -93,8 +104,10 @@ WORLD_REGIONS = {
 WORLD_REGION_ORDER = ["southern_border", "northern_plains", "eastern_sea", "western_desert", "central_continent"]
 
 
-def is_eligible(great_realm_index: int) -> bool:
-    return great_realm_index <= MAX_GREAT_REALM_INDEX_FOR_MORTAL_REGIONS
+def requires_travel(great_realm_index: int) -> bool:
+    """True for Spirit Severing and above -- see this module's own docstring for the two
+    brackets' different switch mechanics."""
+    return great_realm_index > MAX_GREAT_REALM_INDEX_FOR_INSTANT_REGION_CHANGE
 
 
 # -- Tunable bonus constants, one bundle per region -- GameManager's region_* helpers read

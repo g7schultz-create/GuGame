@@ -13,7 +13,7 @@ class RegionView(GameView):
         self.game = game
         self.display_name = display_name
         status = self.game.get_world_region_status(user_id, display_name)
-        self.selected_region = status["current"] or world_regions.WORLD_REGION_ORDER[0]
+        self.selected_region = status["traveling_to"] or status["current"] or world_regions.WORLD_REGION_ORDER[0]
         self.last_message: str = None
         self._build_components()
 
@@ -29,6 +29,7 @@ class RegionView(GameView):
     def _build_components(self):
         self.clear_items()
         status = self._status()
+        traveling = status["traveling_to"] is not None
 
         region_select = discord.ui.Select(
             placeholder=f"Region: {world_regions.WORLD_REGIONS[self.selected_region].name}",
@@ -39,18 +40,27 @@ class RegionView(GameView):
                 )
                 for key, region in world_regions.WORLD_REGIONS.items()
             ],
-            disabled=not status["eligible"],
+            disabled=traveling,
             row=0,
         )
         region_select.callback = self._on_pick_region
         self.add_item(region_select)
 
-        already_here = status["current"] == self.selected_region
-        on_cooldown = status["remaining_seconds"] > 0
+        already_here = status["current"] == self.selected_region and not traveling
+        on_cooldown = not status["requires_travel"] and status["remaining_seconds"] > 0
+        if traveling:
+            label = "Traveling..."
+        elif already_here:
+            label = "Already Here"
+        elif on_cooldown:
+            label = "On Cooldown"
+        elif status["requires_travel"]:
+            label = "Begin Journey (1h)"
+        else:
+            label = "Travel Here"
         travel_button = discord.ui.Button(
-            label="Already Here" if already_here else ("On Cooldown" if on_cooldown else "Travel Here"),
-            emoji="🧭", style=discord.ButtonStyle.primary, row=1,
-            disabled=not status["eligible"] or already_here or on_cooldown,
+            label=label, emoji="🧳" if traveling else "🧭", style=discord.ButtonStyle.primary, row=1,
+            disabled=traveling or already_here or on_cooldown,
         )
         travel_button.callback = self._on_travel
         self.add_item(travel_button)
@@ -67,12 +77,19 @@ class RegionView(GameView):
         if not result["ok"]:
             if result["reason"] == "cooldown":
                 self.last_message = f"🧭 You just changed regions — travel again in {format_duration(result['remaining_seconds'])}."
-            elif result["reason"] == "ineligible":
-                self.last_message = "🚫 Only Nascent Soul and below can settle in a mortal region — the immortal areas above it aren't open yet."
+            elif result["reason"] == "already_traveling":
+                self.last_message = f"🧳 You're already traveling — {format_duration(result['travel_remaining_seconds'])} remaining."
+            elif result["reason"] == "already_there":
+                self.last_message = "🚫 You're already settled there."
             else:
                 self.last_message = "❌ Couldn't travel there."
-        else:
+        elif result["instant"]:
             self.last_message = f"{result['region'].emoji} You settle into **{result['region'].name}**."
+        else:
+            self.last_message = (
+                f"🧳 You set out for {result['region'].emoji} **{result['region'].name}** — the journey will "
+                f"take {format_duration(result['travel_seconds'])}."
+            )
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -81,14 +98,23 @@ class RegionView(GameView):
         status = self._status()
         embed = discord.Embed(title="🗺️ World Region", color=discord.Color.dark_teal())
         current = world_regions.WORLD_REGIONS.get(status["current"]) if status["current"] else None
-        embed.description = (
-            f"Current region: {f'{current.emoji} **{current.name}**' if current else '*None chosen yet*'}\n"
-            + ("" if status["eligible"] else "\n🚫 Only Nascent Soul and below can hold a mortal world region — the immortal areas above it aren't open yet.")
-        )
-        picked = world_regions.WORLD_REGIONS[self.selected_region]
-        embed.add_field(name=f"{picked.emoji} {picked.name}", value=picked.description, inline=False)
-        if status["current"] and status["remaining_seconds"] > 0:
-            embed.add_field(name="Travel Cooldown", value=f"⏳ {format_duration(status['remaining_seconds'])} until you can move again.", inline=False)
+        embed.description = f"Current region: {f'{current.emoji} **{current.name}**' if current else '*None chosen yet*'}"
+        if status["requires_travel"]:
+            embed.description += "\n🧭 At your realm, crossing between regions takes a real **1 hour** journey."
+
+        if status["traveling_to"]:
+            destination = world_regions.WORLD_REGIONS[status["traveling_to"]]
+            embed.add_field(
+                name="🧳 Traveling",
+                value=f"En route to {destination.emoji} **{destination.name}** — {format_duration(status['travel_remaining_seconds'])} remaining.",
+                inline=False,
+            )
+        else:
+            picked = world_regions.WORLD_REGIONS[self.selected_region]
+            embed.add_field(name=f"{picked.emoji} {picked.name}", value=picked.description, inline=False)
+            if status["current"] and not status["requires_travel"] and status["remaining_seconds"] > 0:
+                embed.add_field(name="Travel Cooldown", value=f"⏳ {format_duration(status['remaining_seconds'])} until you can move again.", inline=False)
+
         if self.last_message:
             embed.add_field(name="Result", value=self.last_message, inline=False)
         embed.set_footer(text="Pick a region, then Travel Here. Your region shapes your /mine, /gather, /explore, /hunt, and /raid.")

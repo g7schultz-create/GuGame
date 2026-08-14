@@ -278,6 +278,10 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         self.betrayal_epoch = 0
         self.share_grants: list = []
         self.betrayal_result: dict = None
+        # Set only when EVERY member chose Share (0 backstabbers, see _resolve_betrayal) --
+        # the Core Gu doesn't just go unclaimed in that case, the whole team rolls 1-100 and
+        # the highest roll wins it, per explicit request.
+        self.share_dice_result: dict = None
         # Rolled the instant the team reaches "betrayal" (see _on_victory) and shown in that
         # phase's own embed -- the WHOLE team gets to see exactly what's at stake before
         # anyone chooses Share or Backstab. Whoever wins the duel is granted this SAME name,
@@ -787,6 +791,20 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         if backstabbers:
             self._start_backstab_duel(backstabbers, sharers)
             return
+
+        # Nobody backstabbed -- the Core Gu doesn't just go unclaimed: every sharer (the whole
+        # team, since everyone defaulted/chose share) rolls 1-100, highest roll wins it (ties
+        # broken randomly, same discipline as _finish_backstab_duel's own mutual-KO tiebreak).
+        # Reuses core_gu_preview (already rolled/shown at the top of the betrayal stage) so the
+        # reveal and the real prize always match, never re-rolled here.
+        rolls = [(uid, name, random.randint(1, 100)) for uid, name in sharers]
+        best_roll = max(roll for _, _, roll in rolls)
+        winner_id, winner_name, _ = random.choice([r for r in rolls if r[2] == best_roll])
+        gu_name = self.game.grant_inheritance_ground_bonus_gu(winner_id, self.core_gu_preview)
+        self.share_dice_result = {
+            "rolls": [(name, roll) for _, name, roll in rolls],
+            "winner_name": winner_name, "winner_roll": best_roll, "gu_name": gu_name,
+        }
 
         self.game.finish_inheritance_ground_run([uid for uid, _ in self.team], self.leader_id)
         self.phase = "resolved"
@@ -1519,6 +1537,21 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         if self.share_grants:
             share_lines = [f"🤝 **{name}** shares equally: {reward}" for name, reward in self.share_grants]
             embed.add_field(name="Shared Loot", value="\n".join(share_lines)[:1024], inline=False)
+        if self.share_dice_result:
+            roll_lines = [
+                f"🎲 **{name}**: {roll}" + (" 🏆" if name == self.share_dice_result["winner_name"] and roll == self.share_dice_result["winner_roll"] else "")
+                for name, roll in self.share_dice_result["rolls"]
+            ]
+            embed.add_field(
+                name="Core Gu Roll-Off",
+                value=(
+                    "Nobody backstabbed, so the whole team rolled for the Core Gu instead:\n"
+                    + "\n".join(roll_lines)[:900]
+                    + f"\n🏆 **{self.share_dice_result['winner_name']}** wins with a **{self.share_dice_result['winner_roll']}** "
+                    f"and claims the {self.share_dice_result['gu_name']}!"
+                )[:1024],
+                inline=False,
+            )
         if self.betrayal_result:
             if self.betrayal_result["winner_was_backstabber"]:
                 outcome_line = f"🗡️ **{self.betrayal_result['winner_name']}** overcomes the defenders and claims the {self.betrayal_result['gu_name']}!"

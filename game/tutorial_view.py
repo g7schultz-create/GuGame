@@ -18,6 +18,12 @@ class TutorialView(GameView):
         ("farming", "Farming", "🌾"),
         ("manuals", "Manuals & Discoveries", "📚"),
         ("world_regions", "World Regions", "🗺️"),
+        ("dao_companion", "Dao Companion", "🤝"),
+        ("dao_paths", "Dao Paths", "🌀"),
+        ("avatar", "Nascent Soul Avatar", "👤"),
+        ("endgame_realms", "Endgame Realms", "☁️"),
+        ("dungeons", "Dungeons & Trials", "🏛️"),
+        ("pvp_wagers", "PvP & Wagers", "🏆"),
     ]
 
     def __init__(self, user_id: int, display_name: str):
@@ -64,6 +70,12 @@ class TutorialView(GameView):
             "farming": self._farming_embed,
             "manuals": self._manuals_embed,
             "world_regions": self._world_regions_embed,
+            "dao_companion": self._dao_companion_embed,
+            "dao_paths": self._dao_paths_embed,
+            "avatar": self._avatar_embed,
+            "endgame_realms": self._endgame_realms_embed,
+            "dungeons": self._dungeons_embed,
+            "pvp_wagers": self._pvp_wagers_embed,
         }[self.active_tab]()
 
     def _base_embed(self, title: str, emoji: str) -> discord.Embed:
@@ -155,6 +167,9 @@ class TutorialView(GameView):
             "stones instead, right from the same command.\n"
             "• `/gu` — a quick read-only list of every Gu you own, its quality, and what its effect "
             "actually does, without opening `/equipment`.\n"
+            "• `/killer_move` — assemble your equipped core Gu plus 10 more owned Gu into one "
+            "procedurally-generated Killer Move: a powerful extra move usable in `/hunt` and `/raid`, "
+            "additive alongside your normal Gu Ability, not a replacement for it.\n"
             "• `/blacksmith` — forge a Sword, Helm, or Armor piece (Tier 1-7) from ore, beast material, "
             "and a beast core of the same tier, all from `/mine` and hunting/raiding.\n"
             "• `/weapons` — lists every weapon, head, and body piece you've forged or found, with its "
@@ -276,7 +291,10 @@ class TutorialView(GameView):
             "dismantled for Manual Ink and Insight Dust, spent on studying/refining/assembling more.\n"
             "• A manual's cultivation bonus stacks on top of everything else that speeds up `/cultivate` "
             "— it scales up fast at first, then tapers off past a soft cap so no single manual can "
-            "dominate your whole build."
+            "dominate your whole build.\n"
+            "• `/battlefield` — trigger a battlefield directly on its own **6-hour** cooldown, instead "
+            "of waiting to stumble into one through `/search` or a world region — same escalating-wave "
+            "fight either way."
         )
         return embed
 
@@ -295,10 +313,12 @@ class TutorialView(GameView):
         western = bonuses["western_desert"]
         central = bonuses["central_continent"]
 
+        travel_hours = world_regions.WORLD_REGION_TRAVEL_SECONDS // 3600
         embed.description = (
-            "`/region` picks where your character stands in the world — open to Nascent Soul and "
-            f"below (immortal areas above that are coming later). Changing regions has a "
-            f"{cooldown_text} cooldown, so pick with intent. Your region quietly shapes "
+            "`/region` picks where your character stands in the world — open to every realm. "
+            f"Nascent Soul and below switch instantly (a {cooldown_text} cooldown between changes); "
+            f"Spirit Severing and above instead take a real **{travel_hours}-hour journey** each "
+            "time you switch, so pick with intent either way. Your region quietly shapes "
             "`/mine`, `/gather`, `/explore`, `/hunt`, and `/raid`, and can turn up brand new "
             "discoveries you open through `/discovery`.\n\n"
             f"🗺️ **Southern Border** — every `/mine`, `/gather`, `/explore`, `/hunt`, and `/raid` has a "
@@ -327,5 +347,104 @@ class TutorialView(GameView):
             "waves you clear before falling or pulling out.\n"
             "💤 **Region Dream Realm** — a single stat check against your Speed, Attack, Defense, or "
             "Luck. Clear the threshold for a real reward; fall short for a small consolation prize."
+        )
+        return embed
+
+    def _dao_companion_embed(self) -> discord.Embed:
+        embed = self._base_embed("Dao Companion", "🤝")
+        embed.description = (
+            "A mutual peer bond between two players — unlike a sect's master/disciple hierarchy, "
+            "both partners benefit equally.\n\n"
+            "• `/offer_companion` — propose a bond with another player; they have to accept. You "
+            "can only have one companion at a time — end it any time with `/break_companion`.\n"
+            "• `/companion` — see your current companion, how long you've been bonded, and the "
+            "stat bonus that's giving you right now.\n"
+            "• Bonded partners each gain a slice of the OTHER's raw stats — starts at **5%**, grows "
+            "**+1% per week** bonded, capped at **25%** (about 20 weeks to max out).\n"
+            "• `/dc` (i dc) — once a day, trigger a qi burst for BOTH you and your companion at "
+            "once — free progress for two people from one command.\n"
+            "• `/essence_exchange` — propose sharing **33%** of your primeval essence with your "
+            "companion (and them with you in return); they have **3 hours** to accept. Once per "
+            "pair, per day."
+        )
+        return embed
+
+    def _dao_paths_embed(self) -> discord.Embed:
+        embed = self._base_embed("Dao Paths", "🌀")
+        embed.description = (
+            "Spirit Severing and above unlock a 14-path skill tree, layered on top of everything "
+            "else you've built.\n\n"
+            "• `/dao_path` — see your Dao Marks and allocate them across the 14 paths. Each path's "
+            "bonus scales linearly from nothing up to its full effect at **2,000 marks invested** "
+            "— spreading thin is weaker than committing, so allocate with intent.\n"
+            "• Dao Marks come in from combat/exploration activity as you play, plus a one-time "
+            "bonus every time you break through to a new realm stage.\n"
+            "• `/transmute` — spend a charge to convert an item into a random item of the same "
+            "tier (Transformation Dao Path only). You get **1 charge/day** baseline, +1 more per "
+            "**500 marks** invested in Transformation, up to **5/day**."
+        )
+        return embed
+
+    def _avatar_embed(self) -> discord.Embed:
+        embed = self._base_embed("Nascent Soul Avatar", "👤")
+        embed.description = (
+            "Nascent Soul and above can raise a second, independent body alongside your own.\n\n"
+            "• `/avatar` — view your avatar's phase, level, and equipped gear; feed it Soul "
+            "Nourishing Pills and Soul Crystals to level it up through its own progression, "
+            "separate from your main cultivation.\n"
+            "• `/split_body` — send your avatar out on its own for a real **3-hour** trip to "
+            "search for loot; run the command again once it's back to claim what it found.\n"
+            "• The avatar has its own gear tier system, entirely separate from your main "
+            "equipment — `/sell` unloads any avatar gear you don't need for spirit stones."
+        )
+        return embed
+
+    def _endgame_realms_embed(self) -> discord.Embed:
+        embed = self._base_embed("Endgame Realms", "☁️")
+        embed.description = (
+            "Two optional destinations for **Dao Seeking** and above, each reached through a real "
+            "journey rather than an instant switch.\n\n"
+            "☁️ **White Heaven** — `/white_heaven` (i wh) travels there and back, a real "
+            "**1-hour** journey each way. While present, `/hunt`, `/raid`, `/explore`, and "
+            "`/search_forgotten_blessed_land` all swap to White Heaven's own much tougher, much "
+            "richer fixed content instead of your normal realm-based pools.\n"
+            "☠️ **Black Heaven** — `/black_heaven` (i bh) travels there and back, a real "
+            "**2-hour** journey each way — deadlier and more remote than White Heaven. `/hunt` "
+            "and `/raid` behave normally there; instead run `/search_black_heaven` to pop a "
+            "20-bubble board (invite up to 3 others already in Black Heaven, or go solo) for a "
+            "shot at rare Gu, essence, and Rank 8 materials — some bubbles hide very dangerous "
+            "guardians instead.\n"
+            "• Neither region shares a cooldown or travel state with the other, or with `/region`."
+        )
+        return embed
+
+    def _dungeons_embed(self) -> discord.Embed:
+        embed = self._base_embed("Dungeons & Trials", "🏛️")
+        embed.description = (
+            "Two bubble-board minigames — pop tiles for loot, some hide danger.\n\n"
+            "🏛️ **Inheritance Ground** — `/inheritance_ground` invites up to 3 others (or leave "
+            "everyone blank to run solo) into a bubble board with real team battles along the "
+            "way. Clear the Final Trial and every member privately chooses **Share Loot Equally** "
+            "or **Backstab for the Core Gu**. Anyone backstabbing means a real fight — every "
+            "backstabber alone against the sharers together. If EVERYONE shares instead, the "
+            "Core Gu doesn't go to waste: the whole team rolls 1-100 and the highest roll claims "
+            "it. Leader-only **4-hour** cooldown; invited teammates can go again right away.\n"
+            "⛏️ **Forgotten Blessed Land** — `/search_forgotten_blessed_land` (i sfbl/sf) opens a "
+            "25-tile grid; dig up to **7** tiles per board for spirit stones, materials, and rare "
+            "bonus pills. Requires **Core Formation** or above, **1-hour** cooldown between boards."
+        )
+        return embed
+
+    def _pvp_wagers_embed(self) -> discord.Embed:
+        embed = self._base_embed("PvP & Wagers", "🏆")
+        embed.description = (
+            "• `/tournament` — sign up during an open signup window; once it fills or times out, "
+            "every entrant is dropped into a frozen-snapshot battle royale. Top 3 get the best "
+            "rewards, everyone else still gets spirit stones scaled to how far they made it.\n"
+            "• `/gamble` — challenge another player to a winner-take-all dice duel: both sides put "
+            "up spirit stones, roll 1-100, high roll takes the whole pot. Uses the same "
+            "confirm-and-accept window as `/trade`.\n"
+            "• `/pvp` (see the **Combat** tab) is the free, practice version — no stakes, full HP "
+            "restored the moment it ends. `/tournament` and `/gamble` are where the real stakes are."
         )
         return embed

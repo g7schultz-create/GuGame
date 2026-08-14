@@ -127,6 +127,7 @@ class GameCog(commands.Cog):
         self.essence_exchange_timeout_tick.start()
         self.white_heaven_tick.start()
         self.black_heaven_tick.start()
+        self.world_region_travel_tick.start()
 
     async def cog_unload(self):
         self.world_boss_tick.cancel()
@@ -137,6 +138,7 @@ class GameCog(commands.Cog):
         self.essence_exchange_timeout_tick.cancel()
         self.white_heaven_tick.cancel()
         self.black_heaven_tick.cancel()
+        self.world_region_travel_tick.cancel()
 
     # World Boss respawn scheduler (see world_boss.py's own module docstring) -- checks every
     # 5 minutes whether the current boss expired and/or a fresh one is due; GameManager.
@@ -467,6 +469,32 @@ class GameCog(commands.Cog):
             if completed["arrived"] else
             "🏠 You've made it back home from Black Heaven."
         )
+        try:
+            user = self.bot.get_user(completed["user_id"]) or await self.bot.fetch_user(completed["user_id"])
+            await user.send(message)
+        except discord.HTTPException:
+            pass
+
+    # /region travel for Spirit Severing+ (see game/world_regions.py) -- same 5-minute
+    # cadence/shape as white_heaven_tick/black_heaven_tick above. A plain literal here (not
+    # world_regions.WORLD_REGION_TRAVEL_SECONDS) for consistency with those two, even though
+    # this particular pair (module world_regions, command method region) doesn't actually
+    # collide -- see the cog.py name-shadowing trap notes above.
+    WORLD_REGION_TRAVEL_TICK_INTERVAL_SECONDS = 300
+
+    @tasks.loop(seconds=WORLD_REGION_TRAVEL_TICK_INTERVAL_SECONDS)
+    async def world_region_travel_tick(self):
+        for completed in await asyncio.to_thread(self.game.check_and_complete_world_region_travel):
+            await self._dm_world_region_travel_complete(completed)
+
+    @world_region_travel_tick.before_loop
+    async def _before_world_region_travel_tick(self):
+        await self.bot.wait_until_ready()
+
+    async def _dm_world_region_travel_complete(self, completed: dict):
+        """Best-effort, same shape as _dm_white_heaven_travel_complete above."""
+        region = completed["region"]
+        message = f"{region.emoji} You've arrived in **{region.name}** — run `/region` any time to move on."
         try:
             user = self.bot.get_user(completed["user_id"]) or await self.bot.fetch_user(completed["user_id"])
             await user.send(message)
@@ -1554,7 +1582,7 @@ class GameCog(commands.Cog):
         if notice:
             await interaction.followup.send(notice, ephemeral=True)
 
-    @app_commands.command(name="region", description="Choose where your character is in the world (Nascent Soul and below only)")
+    @app_commands.command(name="region", description="Choose where your character is in the world (Spirit Severing+ takes 1h to travel between regions)")
     @app_commands.guilds(GUILD)
     async def region(self, interaction: discord.Interaction):
         player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)

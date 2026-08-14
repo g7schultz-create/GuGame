@@ -31,7 +31,7 @@ def _use_healing_herb(db: GameDatabase, user_id: int) -> str:
 
 
 def _use_essence_gathering_pill(db: GameDatabase, user_id: int) -> str:
-    restored, essence, max_essence = db.restore_essence_percent(user_id, ESSENCE_GATHERING_PILL_PERCENT)
+    restored, essence, max_essence = db.restore_essence_percent(user_id, ESSENCE_GATHERING_PILL_PERCENT, allow_overflow=True)
     return f"Your primeval essence is replenished by **{restored}** ({essence}/{max_essence})."
 
 
@@ -50,7 +50,7 @@ def _use_aperture_opening_pellet(db: GameDatabase, user_id: int) -> str:
 
 
 def _use_dew_spirit_pellet(db: GameDatabase, user_id: int) -> str:
-    added, essence, max_essence = db.add_primeval_essence(user_id, DEW_SPIRIT_ESSENCE_AMOUNT)
+    added, essence, max_essence = db.add_primeval_essence(user_id, DEW_SPIRIT_ESSENCE_AMOUNT, allow_overflow=True)
     return f"Condensed spirit dew forms fresh primeval essence: **+{added}** ({essence}/{max_essence})."
 
 
@@ -70,7 +70,7 @@ PRIMEVAL_ESSENCE_CRYSTAL_PERCENT = 0.01
 
 
 def _use_primeval_essence_crystal(db: GameDatabase, user_id: int) -> str:
-    restored, essence, max_essence = db.restore_essence_percent(user_id, PRIMEVAL_ESSENCE_CRYSTAL_PERCENT)
+    restored, essence, max_essence = db.restore_essence_percent(user_id, PRIMEVAL_ESSENCE_CRYSTAL_PERCENT, allow_overflow=True)
     return f"The crystal dissolves into primeval essence: **+{restored}** ({essence}/{max_essence})."
 
 
@@ -282,7 +282,7 @@ def _use_qi_ascension_pill(tier: int):
 def _use_essence_restoration_pill(tier: int):
     def use(db: GameDatabase, user_id: int) -> str:
         percent = ESSENCE_RESTORATION_PILL_PERCENT_PER_TIER * tier
-        restored, essence, max_essence = db.restore_essence_percent(user_id, percent)
+        restored, essence, max_essence = db.restore_essence_percent(user_id, percent, allow_overflow=True)
         return f"Your primeval essence is replenished by **{restored}** ({essence}/{max_essence})."
     return use
 

@@ -236,11 +236,17 @@ class GameDatabase:
         # last_battlefield_ts/BATTLEFIELD_COOLDOWN_SECONDS.
         "last_inheritance_ground_ts": "INTEGER DEFAULT 0",
 
-        # World region (see world_regions.py / /region) -- a mortal-realm (Nascent Soul and
-        # below) character's chosen geographic zone, separate from search_data.REGIONS'
-        # per-realm danger tiers. NULL until a player runs /region for the first time.
+        # World region (see world_regions.py / /region) -- a character's chosen geographic
+        # zone, separate from search_data.REGIONS' per-realm danger tiers. NULL until a player
+        # runs /region for the first time. Nascent Soul and below switch instantly (stamping
+        # last_world_region_change_ts); Spirit Severing and above instead go through the two
+        # travel columns below -- world_region itself only updates once that journey completes,
+        # same "destination column separate from the settled column" shape as white_heaven's
+        # own status/travel_started_ts pair.
         "world_region": "TEXT DEFAULT NULL",
         "last_world_region_change_ts": "INTEGER DEFAULT 0",
+        "world_region_travel_destination": "TEXT DEFAULT NULL",
+        "world_region_travel_started_ts": "INTEGER DEFAULT 0",
 
         # White Heaven (see white_heaven.py / /white_heaven) -- a Dao Seeking+ endgame region
         # with a real 1h wall-clock travel delay each way, unlike world_region's instant switch.
@@ -1802,7 +1808,12 @@ class GameDatabase:
         con.close()
         return healed, new_hp, row["max_hp"]
 
-    def restore_essence_percent(self, user_id: int, percent: float):
+    def restore_essence_percent(self, user_id: int, percent: float, allow_overflow: bool = False):
+        """allow_overflow=True (essence pills/crystals -- see items.py's essence-restoring
+        use() callbacks) lets primeval_essence exceed effective_max rather than clamping and
+        discarding the excess, so a pill used near a full essence bar is never partly wasted.
+        Every other caller (equipment-bonus top-ups, essence exchange, etc.) leaves this False,
+        unchanged."""
         con = self.connect()
         cur = con.cursor()
         cur.execute(
@@ -1811,7 +1822,12 @@ class GameDatabase:
         )
         row = cur.fetchone()
         effective_max = round(row["max_primeval_essence"] * self._essence_capacity_multiplier(cur, user_id, row))
-        new_essence = min(effective_max, row["primeval_essence"] + round(effective_max * percent))
+        uncapped = row["primeval_essence"] + round(effective_max * percent)
+        # The max() guards a player who's already over cap (a prior overflow-allowed pill use)
+        # from getting silently clamped back down by an unrelated capped call -- the cap only
+        # ever limits how much THIS call can raise essence by, never retroactively shrinks a
+        # balance that was already higher coming in.
+        new_essence = uncapped if allow_overflow else min(max(effective_max, row["primeval_essence"]), uncapped)
         restored = new_essence - row["primeval_essence"]
         cur.execute("UPDATE players SET primeval_essence = ? WHERE user_id = ?", (new_essence, user_id))
         con.commit()
@@ -1830,7 +1846,9 @@ class GameDatabase:
         con.close()
         return new_qi
 
-    def add_primeval_essence(self, user_id: int, amount: int):
+    def add_primeval_essence(self, user_id: int, amount: int, allow_overflow: bool = False):
+        """allow_overflow -- see restore_essence_percent's own docstring; same deal, just for
+        a flat amount (Dew Spirit Pellet) instead of a percent."""
         con = self.connect()
         cur = con.cursor()
         cur.execute(
@@ -1839,7 +1857,10 @@ class GameDatabase:
         )
         row = cur.fetchone()
         effective_max = round(row["max_primeval_essence"] * self._essence_capacity_multiplier(cur, user_id, row))
-        new_essence = min(effective_max, row["primeval_essence"] + amount)
+        uncapped = row["primeval_essence"] + amount
+        # See restore_essence_percent's own comment -- the cap only limits how much THIS call
+        # can raise essence by, it never retroactively shrinks an already-higher balance.
+        new_essence = uncapped if allow_overflow else min(max(effective_max, row["primeval_essence"]), uncapped)
         added = new_essence - row["primeval_essence"]
         cur.execute("UPDATE players SET primeval_essence = ? WHERE user_id = ?", (new_essence, user_id))
         con.commit()
@@ -1872,11 +1893,13 @@ class GameDatabase:
     QI_ASCENSION_PCT_PER_TIER = 0.03
     QI_ASCENSION_TIER_COLUMN = {t: f"qi_ascension_uses_t{t}" for t in range(1, 8)}
 
-    def use_qi_ascension_pill(self, user_id: int, tier: int) -> dict:
-        """Returns {"used", "reason", "new_multiplier", "uses", "max_uses", "player_rank"} --
-        "used" is False (nothing changed) either because the player's realm rank hasn't
-        reached this tier yet ("reason": "realm_locked") or this tier's own lifetime cap is
-        already hit ("reason": "cap_reached")."""
+    def get_qi_ascension_pill_status(self, user_id: int, tier: int) -> dict:
+        """Read-only realm/cap check for a Tier `tier` Qi Ascension Pill -- mutates nothing,
+        so callers (see GameManager.use_item's pre-removal guard) can find out a use would be
+        refused BEFORE the pill is removed from inventory, instead of consuming it for
+        nothing. Returns {"can_use", "reason", "uses", "max_uses", "player_rank",
+        "qi_multiplier"} -- "reason" is None when can_use is True, else "realm_locked" (realm
+        rank hasn't reached this tier yet) or "cap_reached" (this tier's lifetime cap is hit)."""
         from . import realms as _realms
 
         column = self.QI_ASCENSION_TIER_COLUMN[tier]
@@ -1884,23 +1907,42 @@ class GameDatabase:
         cur = con.cursor()
         cur.execute(f"SELECT realm_index, qi_multiplier, {column} FROM players WHERE user_id = ?", (user_id,))
         row = cur.fetchone()
+        con.close()
         player_rank = _realms.STAGES[row["realm_index"]].great_realm_index + 1
         uses = row[column]
 
+        reason = None
         if player_rank < tier:
-            con.close()
-            return {"used": False, "reason": "realm_locked", "new_multiplier": row["qi_multiplier"], "uses": uses, "max_uses": self.QI_ASCENSION_MAX_USES_PER_TIER, "player_rank": player_rank}
+            reason = "realm_locked"
+        elif uses >= self.QI_ASCENSION_MAX_USES_PER_TIER:
+            reason = "cap_reached"
+        return {
+            "can_use": reason is None, "reason": reason, "uses": uses,
+            "max_uses": self.QI_ASCENSION_MAX_USES_PER_TIER, "player_rank": player_rank,
+            "qi_multiplier": row["qi_multiplier"],
+        }
 
-        if uses >= self.QI_ASCENSION_MAX_USES_PER_TIER:
-            con.close()
-            return {"used": False, "reason": "cap_reached", "new_multiplier": row["qi_multiplier"], "uses": uses, "max_uses": self.QI_ASCENSION_MAX_USES_PER_TIER, "player_rank": player_rank}
+    def use_qi_ascension_pill(self, user_id: int, tier: int) -> dict:
+        """Returns {"used", "reason", "new_multiplier", "uses", "max_uses", "player_rank"} --
+        "used" is False (nothing changed) either because the player's realm rank hasn't
+        reached this tier yet ("reason": "realm_locked") or this tier's own lifetime cap is
+        already hit ("reason": "cap_reached"). See get_qi_ascension_pill_status above for a
+        non-mutating version of this same check."""
+        status = self.get_qi_ascension_pill_status(user_id, tier)
+        if not status["can_use"]:
+            return {
+                "used": False, "reason": status["reason"], "new_multiplier": status["qi_multiplier"],
+                "uses": status["uses"], "max_uses": status["max_uses"], "player_rank": status["player_rank"],
+            }
 
-        new_multiplier = row["qi_multiplier"] * (1 + self.QI_ASCENSION_PCT_PER_TIER * tier)
-        uses += 1
-        cur.execute(f"UPDATE players SET qi_multiplier = ?, {column} = ? WHERE user_id = ?", (new_multiplier, uses, user_id))
+        column = self.QI_ASCENSION_TIER_COLUMN[tier]
+        new_multiplier = status["qi_multiplier"] * (1 + self.QI_ASCENSION_PCT_PER_TIER * tier)
+        uses = status["uses"] + 1
+        con = self.connect()
+        con.execute(f"UPDATE players SET qi_multiplier = ?, {column} = ? WHERE user_id = ?", (new_multiplier, uses, user_id))
         con.commit()
         con.close()
-        return {"used": True, "reason": None, "new_multiplier": new_multiplier, "uses": uses, "max_uses": self.QI_ASCENSION_MAX_USES_PER_TIER, "player_rank": player_rank}
+        return {"used": True, "reason": None, "new_multiplier": new_multiplier, "uses": uses, "max_uses": status["max_uses"], "player_rank": status["player_rank"]}
 
     def maybe_gain_aptitude(self, user_id: int, chance: float, amount: int = 1):
         con = self.connect()
@@ -4126,8 +4168,9 @@ class GameDatabase:
         con.close()
 
     def set_world_region(self, user_id: int, region_key: str):
-        """/region (see world_regions.py) — sets the player's chosen world region and stamps
-        the change cooldown in one write."""
+        """/region (see world_regions.py) — Nascent-Soul-and-below instant switch (also used
+        by Fixed Immortal Travel Gu's high-realm bypass): sets the player's chosen world
+        region and stamps the change cooldown in one write."""
         con = self.connect()
         con.execute(
             "UPDATE players SET world_region = ?, last_world_region_change_ts = ? WHERE user_id = ?",
@@ -4135,6 +4178,43 @@ class GameDatabase:
         )
         con.commit()
         con.close()
+
+    def start_world_region_travel(self, user_id: int, destination_key: str):
+        """/region (see world_regions.py) — Spirit Severing+ real travel path: stamps the
+        destination and start time; world_region itself doesn't change until
+        complete_world_region_travel fires (see GameManager.check_and_complete_world_region_
+        travel), mirroring white_heaven's own start_white_heaven_travel."""
+        con = self.connect()
+        con.execute(
+            "UPDATE players SET world_region_travel_destination = ?, world_region_travel_started_ts = ? WHERE user_id = ?",
+            (destination_key, int(time.time()), user_id),
+        )
+        con.commit()
+        con.close()
+
+    def complete_world_region_travel(self, user_id: int, destination_key: str):
+        """Clearing world_region_travel_destination is itself a sufficient completion guard —
+        once cleared, the row no longer matches get_players_with_pending_world_region_travel's
+        own WHERE clause, so a sweep can never double-complete the same trip (same reasoning
+        as complete_white_heaven_travel's own docstring)."""
+        con = self.connect()
+        con.execute(
+            "UPDATE players SET world_region = ?, world_region_travel_destination = NULL, "
+            "world_region_travel_started_ts = 0, last_world_region_change_ts = ? WHERE user_id = ?",
+            (destination_key, int(time.time()), user_id),
+        )
+        con.commit()
+        con.close()
+
+    def get_players_with_pending_world_region_travel(self) -> list:
+        """Periodic sweep source (see GameManager.check_and_complete_world_region_travel),
+        matching get_players_with_pending_white_heaven_travel's own shape."""
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute("SELECT * FROM players WHERE world_region_travel_destination IS NOT NULL")
+        rows = [dict(row) for row in cur.fetchall()]
+        con.close()
+        return rows
 
     def complete_study(self, user_id: int, rank_column: str):
         """Clears the studying state and bumps rank_column by 1. rank_column must be one of
