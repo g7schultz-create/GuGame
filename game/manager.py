@@ -2160,6 +2160,33 @@ class GameManager:
         candidates.sort(key=lambda c: -c[3])
         return candidates
 
+    def crystallize_gu_pet(self, user_id: int, name: str, pet_id: int) -> dict:
+        """Locks in a permanent species + Path from the RATIO of everything fed during
+        growth (see gu_pet.crystallize) once the growth window is actually complete --
+        growth stops forever the moment this succeeds (feed_gu_pet already refuses once
+        stage != 'growth'). Mode defaults to match the newly-locked Path (a Combat-Path pet
+        starts in Combat Mode, Cultivation-Path in Cultivation Mode) -- the player can still
+        toggle it later (see toggle_gu_pet_mode, a later phase)."""
+        self.db.get_or_create_player(user_id, name)
+        pet = self.db.get_gu_pet(pet_id)
+        if pet is None or pet["owner_id"] != user_id:
+            return {"ok": False, "reason": "You don't own that Gu Pet."}
+        if pet["stage"] != gu_pet.STAGE_GROWTH:
+            return {"ok": False, "reason": "This Gu Pet has already crystallized."}
+        if pet["growth_days_fed"] < pet["growth_days_required"]:
+            remaining = pet["growth_days_required"] - pet["growth_days_fed"]
+            return {"ok": False, "reason": f"This Gu Pet still needs {remaining} more day(s) of feeding before it can crystallize."}
+
+        species_key, path = gu_pet.crystallize(pet["fed_totals"])
+        mode = gu_pet.MODE_COMBAT if path == gu_pet.PATH_COMBAT else gu_pet.MODE_CULTIVATION
+        self.db.update_gu_pet(
+            pet_id, stage=gu_pet.STAGE_MATURE, species=species_key, path=path, mode=mode,
+            satiety=gu_pet.SATIETY_MAX, last_satiety_update_ts=int(time.time()),
+        )
+        species = gu_pet.SPECIES[species_key]
+        message = f"✨ {species.emoji} Your Gu Pet crystallizes into a **{species.name}** ({path})! {species.role_text}"
+        return {"ok": True, "message": message, "species": species_key, "path": path}
+
     # -- Killer Move: assemble a core Gu + 10 component Gu into a procedurally-generated
     # active ability (see game/killer_move_gen.py / game/gu_types.py / /killer_move) --
     # additive alongside the gu_ability equipment slot above, not a replacement of it. -------

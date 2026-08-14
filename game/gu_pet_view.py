@@ -160,6 +160,14 @@ class GuPetView(GameView):
         button.callback = self._on_feed
         self.add_item(button)
 
+        selected_pet = next((p for p in growing_pets if p["pet_id"] == self.selected_feed_pet_id), None)
+        ready = selected_pet is not None and selected_pet["growth_days_fed"] >= selected_pet["growth_days_required"]
+        crystallize_button = discord.ui.Button(
+            label="Crystallize", emoji="💎", style=discord.ButtonStyle.primary, row=3, disabled=not ready,
+        )
+        crystallize_button.callback = self._on_crystallize
+        self.add_item(crystallize_button)
+
     # -- action handlers ------------------------------------------------------------------
 
     async def _on_pick_sacrifice_item(self, interaction: discord.Interaction):
@@ -230,6 +238,16 @@ class GuPetView(GameView):
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
 
+    async def _on_crystallize(self, interaction: discord.Interaction):
+        result = await asyncio.to_thread(
+            self.game.crystallize_gu_pet, self.user_id, self.display_name, self.selected_feed_pet_id,
+        )
+        self.last_result = result.get("reason") or result.get("message")
+        self.selected_feed_pet_id = None  # this pet just left the "growing" list entirely
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
     # -- embed building ---------------------------------------------------------------
 
     def build_embed(self) -> discord.Embed:
@@ -291,3 +309,9 @@ class GuPetView(GameView):
         if pet["fed_totals"]:
             totals_text = ", ".join(f"{cat.replace('_', ' ').title()}: {qty}" for cat, qty in pet["fed_totals"].items())
             embed.add_field(name="Fed So Far", value=totals_text, inline=False)
+        if pet["growth_days_fed"] >= pet["growth_days_required"]:
+            embed.add_field(
+                name="💎 Ready to Crystallize!",
+                value="This Gu Pet has been fed enough — click **Crystallize** to lock in its permanent species and Path.",
+                inline=False,
+            )

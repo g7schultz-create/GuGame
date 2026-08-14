@@ -27,6 +27,7 @@ RARITY_ORDER exactly (the only existing rarity ladder with no leftover tier once
 """
 
 import random
+from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
 from . import accessories_data, gathering, items
@@ -234,6 +235,131 @@ MODE_COMBAT = "combat"
 MODE_CULTIVATION = "cultivation"
 STAGE_GROWTH = "growth"
 STAGE_MATURE = "mature"
+
+
+# -- Crystallization: species + Path (design doc sections 8-9) --------------------------
+
+@dataclass
+class GuPetSpecies:
+    key: str
+    name: str
+    emoji: str
+    tagline: str
+    role_text: str
+    path: str  # PATH_COMBAT | PATH_CULTIVATION
+    # Cultivation-side species only -- {category: weight}, used by crystallize()'s nearest-
+    # match against the pet's own fed_totals ratio. Combat-side species are instead picked by
+    # a simple lean-threshold on the 2-category beast_material/beast_core split (see
+    # COMBAT_ARCHETYPE_LEAN_THRESHOLD) since 3 archetypes over only 2 axes doesn't need (or
+    # cleanly support) the same nearest-match math.
+    preferred_categories: Dict[str, float] = field(default_factory=dict)
+
+
+SPECIES_GRAND_FORGE_BEETLE = "grand_forge_beetle"
+SPECIES_INK_SPITTER_CICADA = "ink_spitter_cicada"
+SPECIES_BALANCE_FURNACE_TOAD = "balance_furnace_toad"
+SPECIES_UNBOUND = "unbound_gu_pet"
+SPECIES_VAMPIRIC_BEETLE = "vampiric_beetle"
+SPECIES_FLAME_SPIT_MANTIS = "flame_spit_mantis"
+SPECIES_CRAG_SHELL_TURTLE = "crag_shell_turtle"
+
+# Design doc section 9's own 3 Cultivation-side species, plus an explicit fallback
+# (SPECIES_UNBOUND) so crystallize() always resolves to something even when fed_totals'
+# ore/herb/pill split doesn't lean toward any of the 3 -- see crystallize()'s own docstring.
+SPECIES: Dict[str, GuPetSpecies] = {
+    SPECIES_GRAND_FORGE_BEETLE: GuPetSpecies(
+        key=SPECIES_GRAND_FORGE_BEETLE, name="Grand Forge Beetle", emoji="🪲",
+        tagline="A tireless artisan-beast that hums with forge-heat.",
+        role_text="Blacksmithing specialist — improves the stat budget on gear you forge.",
+        path=PATH_CULTIVATION, preferred_categories={"ore": 0.55, "herb": 0.10, "pill": 0.35},
+    ),
+    SPECIES_INK_SPITTER_CICADA: GuPetSpecies(
+        key=SPECIES_INK_SPITTER_CICADA, name="Ink-Spitter Cicada", emoji="🦗",
+        tagline="Sings in a script only manual-scribes can read.",
+        role_text="Manual crafting specialist — improves your odds of a Unique-rarity manual assembly.",
+        path=PATH_CULTIVATION, preferred_categories={"ore": 0.10, "herb": 0.55, "pill": 0.35},
+    ),
+    SPECIES_BALANCE_FURNACE_TOAD: GuPetSpecies(
+        key=SPECIES_BALANCE_FURNACE_TOAD, name="Balance-Furnace Toad", emoji="🐸",
+        tagline="Never favors one craft over another.",
+        role_text="Hybrid refinement specialist — a smaller boost to BOTH blacksmithing and manual crafting.",
+        path=PATH_CULTIVATION, preferred_categories={"ore": 0.33, "herb": 0.33, "pill": 0.34},
+    ),
+    SPECIES_UNBOUND: GuPetSpecies(
+        key=SPECIES_UNBOUND, name="Unbound Gu Pet", emoji="🐛",
+        tagline="Never quite committed to one craft.",
+        role_text="No specialty — a small, general cultivation-speed boost instead.",
+        path=PATH_CULTIVATION, preferred_categories={},
+    ),
+    SPECIES_VAMPIRIC_BEETLE: GuPetSpecies(
+        key=SPECIES_VAMPIRIC_BEETLE, name="Vampiric Beetle", emoji="🪲",
+        tagline="Thrives on the wounds it carves.",
+        role_text="Rend Claw applies a stacking Bleed; passively boosts Crit Chance and Crit Damage.",
+        path=PATH_COMBAT,
+    ),
+    SPECIES_FLAME_SPIT_MANTIS: GuPetSpecies(
+        key=SPECIES_FLAME_SPIT_MANTIS, name="Flame-Spit Mantis", emoji="🦋",
+        tagline="Strikes once, precisely, through any guard.",
+        role_text="Qi Burst pierces boss defense; passively boosts Armor Penetration.",
+        path=PATH_COMBAT,
+    ),
+    SPECIES_CRAG_SHELL_TURTLE: GuPetSpecies(
+        key=SPECIES_CRAG_SHELL_TURTLE, name="Crag-Shell Turtle", emoji="🐢",
+        tagline="An unmoving wall between its bonded cultivator and death.",
+        role_text="Automatically shields you when your HP drops low.",
+        path=PATH_COMBAT,
+    ),
+}
+
+# What fraction of the 2-category Combat split (beast_material vs beast_core) has to lean
+# one way before crystallize() commits to that category's own archetype -- anything less
+# lopsided lands on the balanced middle archetype (Crag-Shell Turtle) instead. 3 archetypes
+# over 2 axes doesn't support (or need) the same nearest-match distance calc the 3-axis
+# Cultivation side uses -- two clear leans plus one balanced middle covers the whole space.
+COMBAT_ARCHETYPE_LEAN_THRESHOLD = 0.6
+
+
+def crystallize(fed_totals: Dict[str, int]) -> Tuple[str, str]:
+    """(species_key, path) a Gu Pet locks into once its growth phase completes, purely from
+    the RATIO of fed_totals (see this module's own docstring -- the sacrificed Gu at
+    acquisition never factors in at all). Always returns something real, even for a
+    never-fed pet (shouldn't happen given feed_gu_pet's own gate, but this stays total
+    rather than raising)."""
+    total = sum(fed_totals.get(cat, 0) for cat in FEED_CATEGORIES)
+    if total == 0:
+        return SPECIES_UNBOUND, PATH_CULTIVATION
+
+    combat_share = sum(fed_totals.get(cat, 0) for cat in COMBAT_PATH_CATEGORIES) / total
+    # Design doc section 8.1: Beast Material/Core >=50% -> Combat; Ore/Herb/Pill >=50% ->
+    # Cultivation/Artisan. The two buckets always sum to 100%, so an exact 50/50 split has to
+    # pick a side -- this defaults to Cultivation/Artisan, the single source of truth for
+    # that tie-break.
+    path = PATH_COMBAT if combat_share > 0.5 else PATH_CULTIVATION
+
+    if path == PATH_COMBAT:
+        beast_material = fed_totals.get("beast_material", 0)
+        beast_core = fed_totals.get("beast_core", 0)
+        material_total = beast_material + beast_core
+        material_share = beast_material / material_total if material_total else 0.5
+        if material_share >= COMBAT_ARCHETYPE_LEAN_THRESHOLD:
+            species = SPECIES_VAMPIRIC_BEETLE
+        elif material_share <= 1 - COMBAT_ARCHETYPE_LEAN_THRESHOLD:
+            species = SPECIES_FLAME_SPIT_MANTIS
+        else:
+            species = SPECIES_CRAG_SHELL_TURTLE
+        return species, path
+
+    cult_total = sum(fed_totals.get(cat, 0) for cat in CULTIVATION_PATH_CATEGORIES)
+    if cult_total == 0:
+        return SPECIES_UNBOUND, path
+    fed_ratio = {cat: fed_totals.get(cat, 0) / cult_total for cat in CULTIVATION_PATH_CATEGORIES}
+    best_species, best_distance = None, None
+    for species_key in (SPECIES_GRAND_FORGE_BEETLE, SPECIES_INK_SPITTER_CICADA, SPECIES_BALANCE_FURNACE_TOAD):
+        preferred = SPECIES[species_key].preferred_categories
+        distance = sum(abs(fed_ratio[cat] - preferred.get(cat, 0)) for cat in CULTIVATION_PATH_CATEGORIES)
+        if best_distance is None or distance < best_distance:
+            best_species, best_distance = species_key, distance
+    return best_species, path
 
 
 # -- Satiety (design doc sections 11-12) -------------------------------------------------
