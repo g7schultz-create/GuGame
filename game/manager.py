@@ -1260,15 +1260,23 @@ class GameManager:
         the region's Tier 8/Rank 8 ceiling via treasure_hunt.grant_tile_reward's white_heaven
         flag (see TreasureHuntView) -- the realm/cooldown gate above is unaffected, since
         reaching White Heaven at all already implies clearing the (much lower) Core Formation
-        gate here."""
+        gate here.
+
+        The cooldown gate itself is routed through _check_cooldown (not a standalone elapsed-
+        time calc) so it applies the same cooldown_reduction_pct discount /cd's own
+        treasure_hunt_remaining already reports -- previously this used a separate raw
+        calculation with no discount applied at all, so a player with ANY cooldown_reduction_
+        pct source (a manual effect, Time Dao Path, ...) could see /cd say "Ready!" while this
+        command still refused them with the full, undiscounted wait -- a live bug fixed
+        2026-08-14."""
         player = self.db.get_or_create_player(user_id, name)
         if realms.STAGES[player["realm_index"]].great_realm_index < self.TREASURE_HUNT_REALM_GATE:
             return False, "The Forgotten Blessed Land only reveals itself to Core Formation cultivators and above.", None, False
+        remaining = self._check_cooldown(player, "treasure_hunt_last_ts", self.TREASURE_HUNT_COOLDOWN_SECONDS)
+        if remaining > 0:
+            from .ui_utils import format_duration
+            return False, f"The Blessed Land hasn't revealed a new site yet — {format_duration(remaining)} left.", None, False
         now = int(time.time())
-        elapsed = now - player["treasure_hunt_last_ts"]
-        if elapsed < self.TREASURE_HUNT_COOLDOWN_SECONDS:
-            remaining = self.TREASURE_HUNT_COOLDOWN_SECONDS - elapsed
-            return False, f"The Blessed Land hasn't revealed a new site yet — {remaining} seconds left.", None, False
         self.db.set_treasure_hunt_last_ts(user_id, now)
         board = treasure_hunt.roll_board()
         in_white_heaven = player["white_heaven_status"] == "present"
@@ -3963,6 +3971,28 @@ class GameManager:
                 spd_bonus=params.get("spd_pct", 0) * 100,
             )
 
+    def check_and_consume_flee_ward(self, user_id: int) -> Optional[str]:
+        """Nine-Deaths Black Pearl only (see accessories_data.py's flee_on_defeat_weekly
+        effect) -- checked BEFORE check_and_consume_defeat_ward wherever a killing blow would
+        apply (see hunt.py/battlefield_view.py). Unlike defeat_ward_daily (still records a
+        defeat, just negates the Qi loss), this resolves the whole encounter as a successful
+        flee/withdraw instead -- no defeat, no Qi loss, same "bank what you'd earned so far"
+        outcome a manual Flee/Withdraw already produces. Returns the ward's name if it fired,
+        else None. Scoped to solo-player encounters (hunt/battlefield) only -- in a team
+        battle or the backstab duel, a knocked-out participant already stops taking further
+        damage while the fight continues for the rest of the team, which is the closest real
+        equivalent "escape" already available there."""
+        for instance_id in self.db.get_equipped_accessory_ids(user_id).values():
+            instance = self.db.get_accessory_instance(instance_id)
+            affix = self._affix_for_instance(instance)
+            if affix is None or affix.effect_key != "flee_on_defeat_weekly":
+                continue
+            if self._accessory_cooldown_ready(instance, weekly=True) > 0:
+                continue
+            self.db.set_accessory_instance_activation(instance_id, int(time.time()))
+            return affix.name
+        return None
+
     def check_and_consume_defeat_ward(self, user_id: int) -> Optional[str]:
         """Called wherever a defeat's Qi-loss penalty would apply (see hunt.py) — returns
         the ward's name if one fired (caller should skip the penalty and survive at 1 HP
@@ -5239,7 +5269,8 @@ class GameManager:
             return {"ok": False, "reason": "You don't have any disciples yet — an Elder+ can take some on with `/accept_disciple`."}
         remaining = self._check_cooldown(master, "last_teach_ts", sects.TEACH_COOLDOWN_SECONDS)
         if remaining > 0:
-            return {"ok": False, "reason": f"You're still settling from your last lesson — try again in {remaining}s."}
+            from .ui_utils import format_duration
+            return {"ok": False, "reason": f"You're still settling from your last lesson — try again in {format_duration(remaining)}."}
 
         master_status = self.get_qi_status(master_id, master_name)
         taught, beyond_instruction = [], []
@@ -5451,7 +5482,8 @@ class GameManager:
             return {"ok": False, "reason": "You don't have a Dao Companion yet — use `/offer_companion` to bond with someone."}
         remaining = self._check_cooldown(player, "last_dc_burst_ts", dao_companion.DAO_COMPANION_BURST_COOLDOWN_SECONDS)
         if remaining > 0:
-            return {"ok": False, "reason": f"You're still settling from your last burst — try again in {remaining}s.", "remaining_seconds": remaining}
+            from .ui_utils import format_duration
+            return {"ok": False, "reason": f"You're still settling from your last burst — try again in {format_duration(remaining)}.", "remaining_seconds": remaining}
 
         partner_id = self._dao_companion_partner_id(companion, user_id)
         partner_row = self.db.get_player_row(partner_id)
@@ -5493,7 +5525,8 @@ class GameManager:
             return {"ok": False, "reason": "You don't have a Dao Companion yet — use `/offer_companion` to bond with someone."}
         remaining = max(0, self.ESSENCE_EXCHANGE_COOLDOWN_SECONDS - (int(time.time()) - companion["last_essence_exchange_ts"]))
         if remaining > 0:
-            return {"ok": False, "reason": f"You and your companion already exchanged essence recently — try again in {remaining}s.", "remaining_seconds": remaining}
+            from .ui_utils import format_duration
+            return {"ok": False, "reason": f"You and your companion already exchanged essence recently — try again in {format_duration(remaining)}.", "remaining_seconds": remaining}
         if self.db.get_pending_essence_exchange_for_companion(companion["id"]):
             return {"ok": False, "reason": "There's already a pending Essence Exchange request with your companion."}
         partner_id = self._dao_companion_partner_id(companion, user_id)

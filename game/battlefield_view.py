@@ -299,25 +299,31 @@ class BattlefieldView(GameView):
                 heal_text = f" It recovers {result.heal} HP."
             self._log_line(f"🩸 {self.monster.name} uses {self.monster.ability.name} for {result.damage} damage{crit}.{heal_text}")
         if self.player_hp <= 0:
-            self.status = "defeat"
-            self.player_hp = self.game.db.set_hp(self.user_id, 1)
-            ward_name = self.game.check_and_consume_defeat_ward(self.user_id)
-            escape_gu_name = None if ward_name else self.game.check_and_consume_worldly_escape(self.user_id)
-            if ward_name:
-                self.qi_lost_on_death = 0.0
-                self._log_line(f"✨ **{ward_name}** activates — you're struck down but the Qi loss is warded away!")
-            elif escape_gu_name:
-                self.qi_lost_on_death = 0.0
-                self._log_line(f"✨ **{escape_gu_name}** activates — you're struck down but the Qi loss is escaped entirely!")
+            flee_ward_name = self.game.check_and_consume_flee_ward(self.user_id)
+            if flee_ward_name:
+                self.status = "fled"
+                self.player_hp = self.game.db.set_hp(self.user_id, 1)
+                self._log_line(f"✨ **{flee_ward_name}** flares — instead of falling, you withdraw from the battlefield entirely, no Qi lost!")
             else:
-                # Consolidated single read of the generic pool (root/physique/Gu/avatar
-                # soul/avatar gear all fold in there now — see
-                # GameManager.compute_equipment_bonuses) instead of separate manual reads
-                # per source, which would double-count once this key also lives in
-                # SPECIAL_BONUS_KEYS.
-                reduction = bonuses.get("death_qi_loss_reduction_pct", 0)
-                self.qi_lost_on_death, _ = self.game.db.apply_death_penalty(self.user_id, reduction_pct=reduction)
-                self._log_line(f"💀 You are struck down, losing {self.qi_lost_on_death:,.2f} qi.")
+                self.status = "defeat"
+                self.player_hp = self.game.db.set_hp(self.user_id, 1)
+                ward_name = self.game.check_and_consume_defeat_ward(self.user_id)
+                escape_gu_name = None if ward_name else self.game.check_and_consume_worldly_escape(self.user_id)
+                if ward_name:
+                    self.qi_lost_on_death = 0.0
+                    self._log_line(f"✨ **{ward_name}** activates — you're struck down but the Qi loss is warded away!")
+                elif escape_gu_name:
+                    self.qi_lost_on_death = 0.0
+                    self._log_line(f"✨ **{escape_gu_name}** activates — you're struck down but the Qi loss is escaped entirely!")
+                else:
+                    # Consolidated single read of the generic pool (root/physique/Gu/avatar
+                    # soul/avatar gear all fold in there now — see
+                    # GameManager.compute_equipment_bonuses) instead of separate manual reads
+                    # per source, which would double-count once this key also lives in
+                    # SPECIAL_BONUS_KEYS.
+                    reduction = bonuses.get("death_qi_loss_reduction_pct", 0)
+                    self.qi_lost_on_death, _ = self.game.db.apply_death_penalty(self.user_id, reduction_pct=reduction)
+                    self._log_line(f"💀 You are struck down, losing {self.qi_lost_on_death:,.2f} qi.")
             self._end_run()
 
     def _do_attack(self, str_multiplier: float = 1.0, label: str = "Attack", guaranteed_hit: bool = False, freeze_chance: float = 0.0):

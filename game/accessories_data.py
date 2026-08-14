@@ -289,8 +289,8 @@ _reg("acc_golden_thread_karma_necklace", "Golden Thread Karma Necklace", "Access
      "Luck, Human", "Helping another player grants a Karma thread. At five threads, consume them to add a guaranteed Rare-or-better roll to a cooperative boss chest.",
      "One thread per player per day; no self-trading loops.", "stat", stat_bonuses={"loot_chance_bonus_pct": 0.06})
 _reg("acc_nine_deaths_black_pearl", "Nine-Deaths Black Pearl", "Accessory", "Necklace", "Necklace", 5, "Mythic",
-     "Soul, Dark", "On defeat, preserve all cultivation progress and equipped-item durability.",
-     "Once every seven days; does not prevent the defeat or preserve unbound loot.", "defeat_ward_daily", {"weekly": True})
+     "Soul, Dark", "On what would be a killing blow, the pearl flares and you flee the fight entirely instead of falling -- no Qi lost, no defeat recorded.",
+     "Once every seven days; you still bank only what you'd earned before fleeing, same as a normal escape.", "flee_on_defeat_weekly", {"weekly": True})
 _reg("acc_aperture_stabilizing_chain", "Aperture-Stabilizing Chain", "Accessory", "Necklace", "Necklace", 6, "Mythic",
      "Rule, Qi", "Reduces deviation chance during high-risk cultivation by 20% and converts the first severe deviation each week into a moderate one.",
      "Cannot affect tribulation outcomes or scripted story failures.", "stat", stat_bonuses={"cultivation_speed_pct": 0.03})

@@ -451,6 +451,13 @@ class HuntView(GameView):
                     if self.monster_hp <= 0:
                         self._handle_victory()
         if self.player_hp <= 0:
+            flee_ward_name = self.game.check_and_consume_flee_ward(self.user_id)
+            if flee_ward_name:
+                self.status = "fled"
+                self._clear_active_hunt()
+                self.player_hp = self.game.db.set_hp(self.user_id, 1)
+                self._log_line(f"✨ **{flee_ward_name}** flares — instead of falling, you vanish from the fight entirely, no Qi lost!")
+                return
             self.status = "defeat"
             self._clear_active_hunt()
             self.player_hp = self.game.db.set_hp(self.user_id, 1)
