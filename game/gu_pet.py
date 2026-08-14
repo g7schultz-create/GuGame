@@ -199,11 +199,14 @@ def feed_category_and_tier(item_name: str) -> Optional[Tuple[str, int]]:
 # existing equivalent). All 4 non-Pill categories reuse keys already read generically via
 # GameManager.compute_equipment_bonuses' pool; Pill leans toward the pet's OWN Cultivation-
 # mode identity (cultivation_speed_pct) rather than a combat stat, matching the doc's own
-# "Pills -> Refinement path" framing.
+# "Pills -> Refinement path" framing. Ore uses hp_pct (a +X% max-HP bonus, the same
+# percentage-flavored key blacksmith percentage gear already rolls), NOT the flat integer
+# "hp" key foundation stats use elsewhere -- every category here grows by tiny fractional
+# deltas per feed (see BASE_YIELD_PER_TIER), which only makes sense as a percentage.
 CATEGORY_STAT_KEYS: Dict[str, Tuple[str, Optional[str]]] = {
     "beast_material": ("physical_damage_pct", "dodge_chance_pct"),
     "beast_core": ("technique_damage_pct", "crit_damage_pct"),
-    "ore": ("hp", "deviation_resistance_pct"),
+    "ore": ("hp_pct", "deviation_resistance_pct"),
     "herb": ("insight_gain_pct", "cooldown_reduction_pct"),
     "pill": ("cultivation_speed_pct", "essence_regen_pct"),
 }
@@ -388,3 +391,16 @@ def satiety_band(satiety: float) -> Tuple[float, str]:
         if low <= satiety <= high:
             return multiplier, label
     return 0.0, "Starving"
+
+
+# -- Combat/Cultivation Mode toggle (design doc section 13) ------------------------------
+
+# Its own dedicated players.last_gu_pet_mode_switch_ts column, not GameManager._check_
+# cooldown -- that helper is for player-ACTION cooldowns (one /hunt, one /gamble, ...), not a
+# per-pet state toggle with no action-log entry of its own. MODE_SWITCH_FEE_SPIRIT_STONES is
+# genuinely new to this codebase -- no existing "pay to skip a cooldown" mechanic to reuse,
+# so this is deliberately simple: a flat fee, no formula, priced well under AVATAR_SOUL_
+# REROLL_COST (200) since skipping a 10-minute wait is a minor convenience, not a reroll of
+# something valuable.
+MODE_SWITCH_COOLDOWN_SECONDS = 10 * 60
+MODE_SWITCH_FEE_SPIRIT_STONES = 50

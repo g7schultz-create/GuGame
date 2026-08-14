@@ -3915,6 +3915,12 @@ class GameDatabase:
         con.commit()
         con.close()
 
+    def set_last_gu_pet_mode_switch_ts(self, user_id: int, ts: int):
+        con = self.connect()
+        con.execute("UPDATE players SET last_gu_pet_mode_switch_ts = ? WHERE user_id = ?", (ts, user_id))
+        con.commit()
+        con.close()
+
     # -- Gu Pet image cache (see game/gu_pet_images.py) --------------------------------------
     # Shared-art cache only -- Epic+ (unique-image) pets store their own path directly on
     # their gu_pets row instead, see should_generate_unique_image.

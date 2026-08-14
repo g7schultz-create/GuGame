@@ -1,15 +1,19 @@
 """
 GuPetView -- the /gu_pet menu. Refine tab (Phase 2): sacrifice 10-20 identical copies of one
-owned Gu plus Soul Nourishing Pill/Soul Crystal catalysts into a blank Gu Pet. Feed/Status/
-Mode tabs are declared now (so the tab bar's shape stays stable across phases) but are filled
-in by their own later phases -- see game/gu_pet.py's own module docstring for the full
+owned Gu plus Soul Nourishing Pill/Soul Crystal catalysts into a blank Gu Pet. Feed tab
+(Phase 3): daily feeding during growth. Status tab (Phase 5): browse every owned pet's
+species/satiety/stat_bonuses and pick which one is active (players.active_gu_pet_id -- only
+the active pet's bonuses actually apply, see GameManager.compute_equipment_bonuses, a later
+phase). Mode tab (Phase 5): flips the ACTIVE pet between Combat/Cultivation Mode (see
+GameManager.toggle_gu_pet_mode) -- see game/gu_pet.py's own module docstring for the full
 lifecycle.
 """
 
 import asyncio
+import time
 import discord
 
-from . import gu_pet, professions
+from . import equipment, gu_pet, professions
 from .base_view import GameView
 
 
@@ -26,6 +30,7 @@ class GuPetView(GameView):
         self.selected_target_rank: int = None
         self.selected_feed_pet_id: int = None
         self.selected_feed_item: str = None
+        self.selected_status_pet_id: int = None
         self.last_result: str = None
         self._build_components()
 
@@ -51,6 +56,10 @@ class GuPetView(GameView):
             self._build_refine_components()
         elif self.active_tab == "feed":
             self._build_feed_components()
+        elif self.active_tab == "status":
+            self._build_status_components()
+        elif self.active_tab == "mode":
+            self._build_mode_components()
 
     def _make_tab_callback(self, key: str):
         async def callback(interaction: discord.Interaction):
@@ -168,6 +177,68 @@ class GuPetView(GameView):
         crystallize_button.callback = self._on_crystallize
         self.add_item(crystallize_button)
 
+    def _build_status_components(self):
+        pets = self.game.get_player_gu_pets(self.user_id)
+        player = self.game.get_player_stats(self.user_id, self.display_name)
+        if self.selected_status_pet_id is None or not any(p["pet_id"] == self.selected_status_pet_id for p in pets):
+            self.selected_status_pet_id = player["active_gu_pet_id"] if any(p["pet_id"] == player["active_gu_pet_id"] for p in pets) else (pets[0]["pet_id"] if pets else None)
+
+        pet_options = [
+            discord.SelectOption(label=self._pet_label(p)[:100], value=str(p["pet_id"]), default=(p["pet_id"] == self.selected_status_pet_id))
+            for p in pets
+        ]
+        pet_select = discord.ui.Select(
+            placeholder="Choose a Gu Pet to view",
+            options=pet_options[:25] or [discord.SelectOption(label="No Gu Pets owned yet", value="none")],
+            disabled=not pet_options, row=1,
+        )
+        pet_select.callback = self._on_pick_status_pet
+        self.add_item(pet_select)
+
+        is_active = self.selected_status_pet_id is not None and self.selected_status_pet_id == player["active_gu_pet_id"]
+        button = discord.ui.Button(
+            label="Currently Active" if is_active else "Set Active", emoji="⭐",
+            style=discord.ButtonStyle.secondary if is_active else discord.ButtonStyle.success,
+            row=3, disabled=is_active or self.selected_status_pet_id is None,
+        )
+        button.callback = self._on_set_active_pet
+        self.add_item(button)
+
+    def _build_mode_components(self):
+        player = self.game.get_player_stats(self.user_id, self.display_name)
+        pet = self.game.get_gu_pet(player["active_gu_pet_id"]) if player["active_gu_pet_id"] else None
+        can_toggle = pet is not None and pet["stage"] == gu_pet.STAGE_MATURE
+
+        now_remaining = 0
+        if can_toggle:
+            last_switch = player["last_gu_pet_mode_switch_ts"] or 0
+            now_remaining = gu_pet.MODE_SWITCH_COOLDOWN_SECONDS - (int(time.time()) - last_switch)
+
+        switch_label = "Switch Mode"
+        if can_toggle:
+            other_mode = "Cultivation" if pet["mode"] == gu_pet.MODE_COMBAT else "Combat"
+            switch_label = f"Switch to {other_mode} Mode"
+        switch_button = discord.ui.Button(
+            label=switch_label, emoji="🔄", style=discord.ButtonStyle.primary, row=1,
+            disabled=not can_toggle or now_remaining > 0,
+        )
+        switch_button.callback = self._on_toggle_mode
+        self.add_item(switch_button)
+
+        pay_button = discord.ui.Button(
+            label=f"Pay {gu_pet.MODE_SWITCH_FEE_SPIRIT_STONES:,} Stones to Switch Now", emoji="💰",
+            style=discord.ButtonStyle.secondary, row=1,
+            disabled=not can_toggle or now_remaining <= 0,
+        )
+        pay_button.callback = self._on_pay_toggle_mode
+        self.add_item(pay_button)
+
+    def _pet_label(self, p: dict) -> str:
+        if p["stage"] == gu_pet.STAGE_GROWTH:
+            return f"Rank {p['rank']} Gu Pet #{p['pet_id']} — growing (day {p['growth_days_fed']}/{p['growth_days_required']})"
+        species = gu_pet.SPECIES[p["species"]]
+        return f"{species.emoji} Rank {p['rank']} {species.name} #{p['pet_id']} — {p['mode'].title()} Mode"
+
     # -- action handlers ------------------------------------------------------------------
 
     async def _on_pick_sacrifice_item(self, interaction: discord.Interaction):
@@ -248,6 +319,41 @@ class GuPetView(GameView):
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
 
+    async def _on_pick_status_pet(self, interaction: discord.Interaction):
+        select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 1)
+        value = select.values[0]
+        if value != "none":
+            self.selected_status_pet_id = int(value)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _on_set_active_pet(self, interaction: discord.Interaction):
+        await asyncio.to_thread(self.game.set_active_gu_pet, self.user_id, self.selected_status_pet_id)
+        self.last_result = "⭐ This Gu Pet is now your active companion — only its bonuses apply."
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _on_toggle_mode(self, interaction: discord.Interaction):
+        await self._do_toggle_mode(interaction, pay_fee=False)
+
+    async def _on_pay_toggle_mode(self, interaction: discord.Interaction):
+        await self._do_toggle_mode(interaction, pay_fee=True)
+
+    async def _do_toggle_mode(self, interaction: discord.Interaction, pay_fee: bool):
+        def _do():
+            player = self.game.get_player_stats(self.user_id, self.display_name)
+            if not player["active_gu_pet_id"]:
+                return {"ok": False, "reason": "You have no active Gu Pet — set one from the Status tab first."}
+            return self.game.toggle_gu_pet_mode(self.user_id, self.display_name, player["active_gu_pet_id"], pay_fee=pay_fee)
+
+        result = await asyncio.to_thread(_do)
+        self.last_result = result.get("reason") or result.get("message")
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
     # -- embed building ---------------------------------------------------------------
 
     def build_embed(self) -> discord.Embed:
@@ -256,9 +362,10 @@ class GuPetView(GameView):
             self._fill_refine_embed(embed)
         elif self.active_tab == "feed":
             self._fill_feed_embed(embed)
-        else:
-            label = next(lbl for key, lbl, _ in self.TABS if key == self.active_tab)
-            embed.description = f"The **{label}** tab arrives in a later update — for now, use the **Refine**/**Feed** tabs to acquire and grow a Gu Pet."
+        elif self.active_tab == "status":
+            self._fill_status_embed(embed)
+        elif self.active_tab == "mode":
+            self._fill_mode_embed(embed)
         if self.last_result:
             embed.add_field(name="Result", value=self.last_result[:1024], inline=False)
         return embed
@@ -315,3 +422,59 @@ class GuPetView(GameView):
                 value="This Gu Pet has been fed enough — click **Crystallize** to lock in its permanent species and Path.",
                 inline=False,
             )
+
+    def _fill_status_embed(self, embed: discord.Embed):
+        pets = self.game.get_player_gu_pets(self.user_id)
+        player = self.game.get_player_stats(self.user_id, self.display_name)
+        embed.description = "Only your **active** Gu Pet's bonuses actually apply — the rest sit dormant. Pick which one below."
+        if not pets:
+            embed.add_field(name="No Gu Pets Owned", value="Refine one first from the **Refine** tab.", inline=False)
+            return
+        pet = next((p for p in pets if p["pet_id"] == self.selected_status_pet_id), pets[0])
+        is_active = pet["pet_id"] == player["active_gu_pet_id"]
+        header = f"{'⭐ ' if is_active else ''}Rank {pet['rank']} ({gu_pet.rank_to_rarity(pet['rank'])}) Gu Pet #{pet['pet_id']}"
+        if pet["stage"] == gu_pet.STAGE_GROWTH:
+            embed.add_field(
+                name=header,
+                value=f"Still growing — day **{pet['growth_days_fed']}/{pet['growth_days_required']}**. Feed it from the **Feed** tab.",
+                inline=False,
+            )
+            return
+        species = gu_pet.SPECIES[pet["species"]]
+        multiplier, band_label = gu_pet.satiety_band(pet["satiety"])
+        embed.add_field(
+            name=header,
+            value=f"{species.emoji} **{species.name}** ({pet['path']}) — **{pet['mode'].title()} Mode**\n{species.role_text}",
+            inline=False,
+        )
+        embed.add_field(name="Satiety", value=f"**{pet['satiety']:.0f}/100** — {band_label} ({multiplier*100:.0f}% output)", inline=True)
+        if pet["stat_bonuses"]:
+            embed.add_field(name="Stat Bonuses", value=equipment.describe_stat_bonuses(pet["stat_bonuses"])[:1024], inline=False)
+        embed.set_footer(text="Feed a mature pet's own rank-tier material to refill Satiety (see the Feed tab's upkeep section).")
+
+    def _fill_mode_embed(self, embed: discord.Embed):
+        player = self.game.get_player_stats(self.user_id, self.display_name)
+        pet = self.game.get_gu_pet(player["active_gu_pet_id"]) if player["active_gu_pet_id"] else None
+        embed.description = (
+            "Combat Mode drains Satiety per dispatch (/hunt, /raid, /battlefield, /inheritance_ground, "
+            "/search_black_heaven) and grants your pet's combat bonuses; Cultivation Mode drains Satiety "
+            "slowly over real time and grants its cultivation/crafting bonuses instead."
+        )
+        if pet is None:
+            embed.add_field(name="No Active Gu Pet", value="Set one active from the **Status** tab first.", inline=False)
+            return
+        if pet["stage"] != gu_pet.STAGE_MATURE:
+            embed.add_field(name="Still Growing", value="Your active Gu Pet hasn't crystallized yet — it has no Mode to switch.", inline=False)
+            return
+        species = gu_pet.SPECIES[pet["species"]]
+        multiplier, band_label = gu_pet.satiety_band(pet["satiety"])
+        embed.add_field(
+            name=f"{species.emoji} {species.name} — **{pet['mode'].title()} Mode**",
+            value=f"Satiety **{pet['satiety']:.0f}/100** ({band_label}, {multiplier*100:.0f}% output)",
+            inline=False,
+        )
+        last_switch = player["last_gu_pet_mode_switch_ts"] or 0
+        remaining = gu_pet.MODE_SWITCH_COOLDOWN_SECONDS - (int(time.time()) - last_switch)
+        if remaining > 0:
+            from .ui_utils import format_duration
+            embed.set_footer(text=f"Mode can be switched freely again in {format_duration(remaining)}, or pay {gu_pet.MODE_SWITCH_FEE_SPIRIT_STONES:,} spirit stones now.")

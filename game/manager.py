@@ -2077,7 +2077,10 @@ class GameManager:
         return {"ok": True, "outcome": "minor_failure", "message": message, "chance": chance}
 
     def get_player_gu_pets(self, user_id: int) -> list:
-        return self.db.get_player_gu_pets(user_id)
+        return [self._settle_gu_pet_satiety(pet) for pet in self.db.get_player_gu_pets(user_id)]
+
+    def get_gu_pet(self, pet_id: int) -> Optional[dict]:
+        return self._settle_gu_pet_satiety(self.db.get_gu_pet(pet_id))
 
     def set_active_gu_pet(self, user_id: int, pet_id: Optional[int]):
         self.db.set_active_gu_pet(user_id, pet_id)
@@ -2186,6 +2189,87 @@ class GameManager:
         species = gu_pet.SPECIES[species_key]
         message = f"✨ {species.emoji} Your Gu Pet crystallizes into a **{species.name}** ({path})! {species.role_text}"
         return {"ok": True, "message": message, "species": species_key, "path": path}
+
+    def _settle_gu_pet_satiety(self, pet: Optional[dict]) -> Optional[dict]:
+        """Lazy time-based settlement, mirroring GameDatabase.settle_qi's own idiom (no
+        background tick loop -- every read just settles up to "now" first). Cultivation Mode
+        drains satiety by real elapsed hours; Combat Mode's own drain is flat-per-dispatch
+        instead (see apply_encounter_start_bonuses), so a Combat-Mode pet's elapsed real time
+        advances the anchor timestamp here WITHOUT draining anything -- otherwise switching a
+        long-idle Combat-Mode pet into Cultivation Mode would retroactively charge it for
+        every hour it sat in Combat Mode. No-op for a still-growing pet (satiety only matters
+        once stage='mature') or a pet that was already settled this same second."""
+        if pet is None or pet["stage"] != gu_pet.STAGE_MATURE:
+            return pet
+        now = int(time.time())
+        last = pet["last_satiety_update_ts"] or now
+        if now <= last:
+            return pet
+        if pet["mode"] == gu_pet.MODE_CULTIVATION:
+            elapsed_hours = (now - last) / 3600.0
+            new_satiety = max(0.0, pet["satiety"] - elapsed_hours * gu_pet.SATIETY_DRAIN_PER_CULTIVATION_HOUR)
+        else:
+            new_satiety = pet["satiety"]
+        self.db.update_gu_pet(pet["pet_id"], satiety=new_satiety, last_satiety_update_ts=now)
+        pet = dict(pet)
+        pet["satiety"] = new_satiety
+        pet["last_satiety_update_ts"] = now
+        return pet
+
+    def toggle_gu_pet_mode(self, user_id: int, name: str, pet_id: int, pay_fee: bool = False) -> dict:
+        """Flips a mature Gu Pet between Combat and Cultivation Mode. Gated by a flat 10-
+        minute cooldown (gu_pet.MODE_SWITCH_COOLDOWN_SECONDS) shared across ALL of a player's
+        pets (players.last_gu_pet_mode_switch_ts, not a per-pet column -- mirrors how the
+        pet's own active slot is a single players.active_gu_pet_id pointer), unless pay_fee
+        bypasses it for a flat gu_pet.MODE_SWITCH_FEE_SPIRIT_STONES cost. Returns {"ok":
+        False, "reason": ..., "on_cooldown": True, "remaining": ...} while on cooldown and
+        pay_fee wasn't set (the view's own Mode tab offers a "pay to switch now" button in
+        that case), or {"ok": True, "message": ..., "mode": ...} once it actually switches."""
+        player = self.db.get_or_create_player(user_id, name)
+        pet = self.db.get_gu_pet(pet_id)
+        if pet is None or pet["owner_id"] != user_id:
+            return {"ok": False, "reason": "You don't own that Gu Pet."}
+        if pet["stage"] != gu_pet.STAGE_MATURE:
+            return {"ok": False, "reason": "This Gu Pet hasn't crystallized yet — it has no Mode to switch."}
+
+        now = int(time.time())
+        last_switch = player["last_gu_pet_mode_switch_ts"] or 0
+        remaining = gu_pet.MODE_SWITCH_COOLDOWN_SECONDS - (now - last_switch)
+        if remaining > 0:
+            if not pay_fee:
+                from .ui_utils import format_duration
+                return {
+                    "ok": False,
+                    "reason": f"Mode can be switched again in {format_duration(remaining)}, or pay **{gu_pet.MODE_SWITCH_FEE_SPIRIT_STONES:,}** spirit stones to switch now.",
+                    "on_cooldown": True, "remaining": remaining,
+                }
+            if not self.db.spend_spirit_stones(user_id, gu_pet.MODE_SWITCH_FEE_SPIRIT_STONES):
+                return {"ok": False, "reason": f"Switching early costs **{gu_pet.MODE_SWITCH_FEE_SPIRIT_STONES:,}** spirit stones (you have {player['spirit_stones']:,})."}
+
+        pet = self._settle_gu_pet_satiety(pet)
+        new_mode = gu_pet.MODE_CULTIVATION if pet["mode"] == gu_pet.MODE_COMBAT else gu_pet.MODE_COMBAT
+        self.db.update_gu_pet(pet_id, mode=new_mode)
+        self.db.set_last_gu_pet_mode_switch_ts(user_id, now)
+        label = "Combat" if new_mode == gu_pet.MODE_COMBAT else "Cultivation"
+        emoji = "⚔️" if new_mode == gu_pet.MODE_COMBAT else "📿"
+        return {"ok": True, "message": f"{emoji} Your Gu Pet switches to **{label} Mode**.", "mode": new_mode}
+
+    def _drain_active_gu_pet_combat_dispatch(self, user_id: int, player: Optional[dict] = None):
+        """Combat Mode's own flat per-dispatch satiety drain (see apply_encounter_start_
+        bonuses, the single "once per new encounter" hook this is threaded into). Settles the
+        pet first (see _settle_gu_pet_satiety) so the time anchor stays fresh even for a pet
+        that's dispatched often but never has its Status tab opened."""
+        player = player or self.db.get_player_row(user_id)
+        if not player or not player["active_gu_pet_id"]:
+            return
+        pet = self.db.get_gu_pet(player["active_gu_pet_id"])
+        if pet is None or pet["owner_id"] != user_id:
+            return
+        pet = self._settle_gu_pet_satiety(pet)
+        if pet["stage"] != gu_pet.STAGE_MATURE or pet["mode"] != gu_pet.MODE_COMBAT:
+            return
+        new_satiety = max(0.0, pet["satiety"] - gu_pet.SATIETY_DRAIN_PER_COMBAT_DISPATCH)
+        self.db.update_gu_pet(pet["pet_id"], satiety=new_satiety)
 
     # -- Killer Move: assemble a core Gu + 10 component Gu into a procedurally-generated
     # active ability (see game/killer_move_gen.py / game/gu_types.py / /killer_move) --
@@ -4179,6 +4263,9 @@ class GameManager:
                 def_bonus=(params.get("reduction_pct", 0) or params.get("def_pct", 0)) * 100,
                 spd_bonus=params.get("spd_pct", 0) * 100,
             )
+        # Combat-Mode Gu Pet upkeep -- see _drain_active_gu_pet_combat_dispatch's own
+        # docstring for why this rides the same "once per new encounter" hook.
+        self._drain_active_gu_pet_combat_dispatch(user_id)
 
     def check_and_consume_flee_ward(self, user_id: int) -> Optional[str]:
         """Nine-Deaths Black Pearl only (see accessories_data.py's flee_on_defeat_weekly
