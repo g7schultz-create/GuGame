@@ -19,6 +19,7 @@ from .trading import TradeRequestView
 from .equipment_view import EquipmentView
 from .avatar_view import AvatarView
 from .gu_pet_view import GuPetView
+from .dao_companion_view import DaoCompanionView
 from .split_body_view import SplitBodyView
 from .hunt import AbandonHuntView, HuntView
 from .pvp_view import PvPView
@@ -2875,63 +2876,17 @@ class GameCog(commands.Cog):
         await interaction.response.send_message(embed=embed, view=view)
         view.message = await interaction.original_response()
 
-    @app_commands.command(name="break_companion", description="End your current Dao Companion bond")
-    @app_commands.guilds(GUILD)
-    async def break_companion(self, interaction: discord.Interaction):
-        ok, message = await asyncio.to_thread(self.game.dao_companion_break, interaction.user.id, interaction.user.display_name)
-        await interaction.response.send_message(message, ephemeral=not ok)
-
-    @app_commands.command(name="companion", description="See your Dao Companion, how long you've been bonded, and the stat bonus you're getting from them")
+    @app_commands.command(name="companion", description="Manage your Dao Companion -- status, once-a-day qi burst, and breaking the bond")
     @app_commands.guilds(GUILD)
     async def companion(self, interaction: discord.Interaction):
         player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        status = await asyncio.to_thread(self.game.get_dao_companion_status, interaction.user.id, interaction.user.display_name)
-        if status is None:
-            await interaction.response.send_message(
-                "You don't have a Dao Companion right now — use `/offer_companion` to bond with someone.",
-                ephemeral=True,
-            )
-            return
-        embed = discord.Embed(title="💞 Your Dao Companion", color=discord.Color.gold())
-        embed.add_field(name="Companion", value=status["partner_name"], inline=True)
-        embed.add_field(name="Bonded For", value=format_duration(int(time.time()) - status["formed_ts"]), inline=True)
-        embed.add_field(name="Times Used", value=str(status["times_used"]), inline=True)
-        embed.add_field(name="Total Qi Granted", value=f"{status['total_qi_granted']:,.1f}", inline=True)
-        bonus_lines = [
-            f"{equipment.FOUNDATION_STAT_LABELS.get(stat, stat)}: +{value:,.1f}"
-            for stat, value in status["stat_bonuses"].items() if value
-        ]
-        embed.add_field(
-            name=f"Stat Bonus ({status['stat_share_pct'] * 100:.1f}% of their raw stats)",
-            value="\n".join(bonus_lines) if bonus_lines else "Nothing yet.",
-            inline=False,
-        )
-        embed.set_footer(text="Use `i dc` (or /dc) once a day for a qi burst — you both get one, sized off your own qi rate.")
-        await interaction.response.send_message(embed=embed)
-
-    @app_commands.command(name="dc", description="Once a day: trigger a qi burst for you AND your Dao Companion")
-    @app_commands.guilds(GUILD)
-    async def dc(self, interaction: discord.Interaction):
-        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
-        if not player["character_confirmed"]:
-            await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
-            return
-        result = await asyncio.to_thread(self.game.dao_companion_burst, interaction.user.id, interaction.user.display_name)
-        if not result["ok"]:
-            await interaction.response.send_message(result["reason"], ephemeral=True)
-            return
-        embed = discord.Embed(
-            title="💞 Dao Companion Burst!",
-            description=(
-                f"You gain **{result['qi_to_caller']:,.1f}** Qi, and **{result['partner_name']}** "
-                f"gains **{result['qi_to_partner']:,.1f}** Qi from your bond!"
-            ),
-            color=discord.Color.gold(),
-        )
-        await interaction.response.send_message(embed=embed)
+        view = DaoCompanionView(interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view)
+        view.message = await interaction.original_response()
 
     @app_commands.command(name="essence_exchange", description="Propose exchanging primeval essence with your Dao Companion (they must accept within 3h)")
     @app_commands.guilds(GUILD)

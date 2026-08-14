@@ -3287,8 +3287,8 @@ class GameManager:
             "treasure_hunt_eligible": realms.STAGES[player["realm_index"]].great_realm_index >= self.TREASURE_HUNT_REALM_GATE,
             "treasure_hunt_remaining": self._check_cooldown(player, "treasure_hunt_last_ts", self.TREASURE_HUNT_COOLDOWN_SECONDS),
             # Only meaningful with an active Dao Companion -- /cd only shows these lines when
-            # has_dao_companion is true (see dao_companion_burst / /dc and
-            # essence_exchange_propose / /essence_exchange). The Essence Exchange cooldown
+            # has_dao_companion is true (see dao_companion_burst / /companion's Daily Burst
+            # button, and essence_exchange_propose / /essence_exchange). The Essence Exchange cooldown
             # lives on the dao_companions row itself (last_essence_exchange_ts, PER PAIR, not
             # per player -- see project_essence_exchange), so it can't go through
             # _check_cooldown (which reads a column off the player row); computed the same
@@ -5845,10 +5845,12 @@ class GameManager:
 
         return {"ok": True, "taught": taught, "on_cooldown": on_cooldown, "beyond_instruction": beyond_instruction}
 
-    # -- Dao Companion (see game/dao_companion.py / /offer_companion, /companion, /dc,
-    # /break_companion) -- a mutual, symmetric peer bond, unlike the mentor/disciple
-    # hierarchy above: both partners gain a slice of the OTHER's raw stats (grows with bond
-    # duration), and either can trigger a once-daily qi burst that pays out to both sides. ---
+    # -- Dao Companion (see game/dao_companion.py / /offer_companion, /companion -- the
+    # latter's own Daily Burst/Break Bond buttons absorbed the old standalone /dc and
+    # /break_companion commands, retired 2026-08-14 to free guild slash-command slots) -- a
+    # mutual, symmetric peer bond, unlike the mentor/disciple hierarchy above: both partners
+    # gain a slice of the OTHER's raw stats (grows with bond duration), and either can
+    # trigger a once-daily qi burst that pays out to both sides. ---------------------------
 
     def _validate_dao_companion_offer(self, offerer: dict, target: dict) -> Optional[str]:
         """Checked both before a request is sent (fail fast) and again right before it's
@@ -5859,7 +5861,7 @@ class GameManager:
         if not target["character_confirmed"]:
             return f"{target['name']} hasn't started their cultivation journey yet."
         if self.db.get_dao_companion(offerer["user_id"]):
-            return "You already have a Dao Companion — use `/break_companion` first if you want to bond with someone else."
+            return "You already have a Dao Companion — use `/companion`'s Break Bond button first if you want to bond with someone else."
         if self.db.get_dao_companion(target["user_id"]):
             return f"{target['name']} already has a Dao Companion."
         return None

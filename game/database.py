@@ -322,10 +322,11 @@ class GameDatabase:
         "personal_master_since_ts": "INTEGER DEFAULT NULL",
         "personal_times_taught": "INTEGER DEFAULT 0",
 
-        # Dao Companion (see game/dao_companion.py / /offer_companion, /dc) -- "i dc"'s once-
-        # per-day cooldown. Lives on the PLAYER, not the dao_companions relationship row, since
-        # each partner can independently trigger their own daily burst (both sides still
-        # receive qi either way -- see GameManager.dao_companion_burst).
+        # Dao Companion (see game/dao_companion.py / /offer_companion, /companion's Daily Burst
+        # button) -- the once-per-day burst cooldown. Lives on the PLAYER, not the
+        # dao_companions relationship row, since each partner can independently trigger their
+        # own daily burst (both sides still receive qi either way -- see GameManager.
+        # dao_companion_burst). Column name predates the /dc command's 2026-08-14 retirement.
         "last_dc_burst_ts": "INTEGER DEFAULT 0",
 
         # Nascent Soul Avatar (see game/avatar.py) -- NULL/1 until the player reaches Nascent
@@ -3626,7 +3627,8 @@ class GameDatabase:
         return {"winner_id": winner_id, "initiator_roll": initiator_roll, "target_roll": target_roll}
 
     # -- Dao Companion (see game/dao_companion.py / GameManager's dao_companion_* methods /
-    # /offer_companion, /companion, /dc, /break_companion) ---------------------------------
+    # /offer_companion, /companion -- the latter's Daily Burst/Break Bond buttons absorbed the
+    # old standalone /dc and /break_companion commands, retired 2026-08-14) -----------------
 
     def create_dao_companion(self, partner_a_id: int, partner_b_id: int, formed_ts: int) -> int:
         con = self.connect()

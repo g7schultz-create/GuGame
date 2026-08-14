@@ -1,8 +1,11 @@
 import asyncio
+import time
 
 import discord
 
+from . import equipment
 from .base_view import GameView
+from .ui_utils import format_duration
 
 
 class DaoCompanionRequestView(GameView):
@@ -147,3 +150,95 @@ class EssenceExchangeRequestView(GameView):
                 await self.message.edit(embed=embed, view=self)
             except discord.HTTPException:
                 pass
+
+
+class DaoCompanionView(GameView):
+    """The /companion hub. Consolidates what used to be 3 separate top-level slash commands
+    (/companion, /dc, /break_companion) into one, freeing 2 guild slash-command slots after
+    Discord's 100-command-per-guild cap crash-looped the live bot on deploy (2026-08-14
+    incident: adding /gu_pet as command #101 exceeded the cap outright). Same "one hub command
+    with buttons" shape /gu_pet, /avatar, and every other multi-action feature in this codebase
+    already uses. /dc and /break_companion are retired entirely (including their own
+    "i dc"/"i break_companion" text aliases) in favor of buttons here, mirroring the earlier
+    /teach merge's own "old commands fully removed" precedent -- /offer_companion stays a
+    separate command since it's the entry point BEFORE any bond exists, not something this view
+    (which only ever has something to show once a bond is already active) can meaningfully
+    host."""
+
+    def __init__(self, user_id: int, game, display_name: str):
+        super().__init__(timeout=180)
+        self.user_id = user_id
+        self.game = game
+        self.display_name = display_name
+        self.last_result: str = None
+        self._build_components()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("Run `/companion` yourself to manage your own Dao Companion.", ephemeral=True)
+            return False
+        return True
+
+    def _build_components(self):
+        self.clear_items()
+        status = self.game.get_dao_companion_status(self.user_id, self.display_name)
+        has_companion = status is not None
+
+        burst_button = discord.ui.Button(
+            label="Daily Burst", emoji="💥", style=discord.ButtonStyle.success, row=0, disabled=not has_companion,
+        )
+        burst_button.callback = self._on_burst
+        self.add_item(burst_button)
+
+        break_button = discord.ui.Button(
+            label="Break Bond", emoji="💔", style=discord.ButtonStyle.danger, row=0, disabled=not has_companion,
+        )
+        break_button.callback = self._on_break
+        self.add_item(break_button)
+
+    def build_embed(self) -> discord.Embed:
+        status = self.game.get_dao_companion_status(self.user_id, self.display_name)
+        embed = discord.Embed(title="💞 Your Dao Companion", color=discord.Color.gold())
+        if status is None:
+            embed.description = "You don't have a Dao Companion right now — use `/offer_companion` to bond with someone."
+            if self.last_result:
+                embed.add_field(name="Result", value=self.last_result[:1024], inline=False)
+            return embed
+
+        embed.add_field(name="Companion", value=status["partner_name"], inline=True)
+        embed.add_field(name="Bonded For", value=format_duration(int(time.time()) - status["formed_ts"]), inline=True)
+        embed.add_field(name="Times Used", value=str(status["times_used"]), inline=True)
+        embed.add_field(name="Total Qi Granted", value=f"{status['total_qi_granted']:,.1f}", inline=True)
+        bonus_lines = [
+            f"{equipment.FOUNDATION_STAT_LABELS.get(stat, stat)}: +{value:,.1f}"
+            for stat, value in status["stat_bonuses"].items() if value
+        ]
+        embed.add_field(
+            name=f"Stat Bonus ({status['stat_share_pct'] * 100:.1f}% of their raw stats)",
+            value="\n".join(bonus_lines) if bonus_lines else "Nothing yet.",
+            inline=False,
+        )
+        embed.set_footer(text="Daily Burst: once a day, a qi burst for you both, sized off your own qi rate.")
+        if self.last_result:
+            embed.add_field(name="Result", value=self.last_result[:1024], inline=False)
+        return embed
+
+    async def _on_burst(self, interaction: discord.Interaction):
+        result = await asyncio.to_thread(self.game.dao_companion_burst, self.user_id, self.display_name)
+        if result["ok"]:
+            self.last_result = (
+                f"💥 You gain **{result['qi_to_caller']:,.1f}** Qi, and **{result['partner_name']}** "
+                f"gains **{result['qi_to_partner']:,.1f}** Qi from your bond!"
+            )
+        else:
+            self.last_result = result["reason"]
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _on_break(self, interaction: discord.Interaction):
+        ok, message = await asyncio.to_thread(self.game.dao_companion_break, self.user_id, self.display_name)
+        self.last_result = message
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
