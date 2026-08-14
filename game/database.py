@@ -272,6 +272,17 @@ class GameDatabase:
         # 4h leader-only cooldown), including its own AbandonBlackHeavenSearchView from day one.
         "active_black_heaven_started_ts": "INTEGER DEFAULT 0",
         "last_black_heaven_search_ts": "INTEGER DEFAULT 0",
+        # A leader could previously fire off an unlimited number of BlackHeavenSearchLobbyView
+        # invites back to back (nothing gated re-inviting BEFORE a prior invite ever resolved,
+        # only has_active_black_heaven_search/the leader's own cooldown -- both of which only
+        # become true once a lobby actually RESOLVES into a real run) and accept them one at a
+        # time later, each one starting its own independent run and its own free rewards. This
+        # is the fix: set the moment ANY lobby is sent, cleared the moment it resolves (accept/
+        # decline/cancel/timeout) either way -- a second /search_black_heaven invite attempt
+        # while this is set gets refused outright. Same stale-self-heal shape as active_black_
+        # heaven_started_ts above, just a shorter window (mirrors the lobby's OWN 300s Discord
+        # view timeout with headroom, not the 2h "mid-run" window a started search gets).
+        "black_heaven_search_invite_pending_ts": "INTEGER DEFAULT 0",
 
         # Sect membership (see sects.py / /sect) -- a player belongs to at most one sect at a
         # time, so this lives directly on the player row rather than a separate membership
@@ -4612,6 +4623,12 @@ class GameDatabase:
         con = self.connect()
         placeholders = ",".join("?" for _ in user_ids)
         con.execute(f"UPDATE players SET last_black_heaven_search_ts = ? WHERE user_id IN ({placeholders})", [ts, *user_ids])
+        con.commit()
+        con.close()
+
+    def set_black_heaven_search_invite_pending(self, leader_id: int, ts: int):
+        con = self.connect()
+        con.execute("UPDATE players SET black_heaven_search_invite_pending_ts = ? WHERE user_id = ?", (ts, leader_id))
         con.commit()
         con.close()
 

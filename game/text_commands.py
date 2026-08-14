@@ -89,7 +89,7 @@ _NO_ARG_COMMANDS = [
     "alchemy", "blacksmith", "pvp", "leaderboard", "rest", "meditate", "study",
     "search", "search_status", "discovery", "manual", "weapons", "accessories", "sell", "region",
     "battlefield", "raidboss", "raidboss_attack", "raidboss_spawn", "balance", "preset_list",
-    "sect", "sect_list", "sect_leave", "sect_cancel_application", "avatar", "split_body", "tournament",
+    "sect", "sect_list", "avatar", "split_body", "tournament",
     "master", "sect_master", "dao_path", "transmute", "killer_move", "use_support_move", "verify",
     "companion", "search_forgotten_blessed_land", "teach", "essence_exchange", "white_heaven",
     "black_heaven", "gu_pet",
@@ -113,11 +113,8 @@ ALIASES = {
     "weapons": ["we"], "accessories": ["ac"], "sell": ["sl"], "region": ["rg"], "battlefield": ["bf"],
     "raidboss": ["rb", "wb"], "raidboss_attack": ["rba"], "raidboss_spawn": ["rbs"], "balance": ["bal"],
     "preset_save": ["ps"], "preset_load": ["pl"], "preset_list": ["plist"], "preset_delete": ["pd"],
-    "sect": ["sc"], "sect_list": ["scl"], "sect_create": ["scr"], "sect_join": ["scj"],
-    "sect_cancel_application": ["sca"], "sect_leave": ["sclv"], "sect_transfer": ["sctr"],
-    "sect_kick": ["sck"], "sect_promote": ["scp"], "sect_demote": ["scdm"], "sect_donate": ["scdo"],
+    "sect": ["sc"], "sect_list": ["scl"], "sect_join": ["scj"],
     "avatar": ["av"], "split_body": ["sb"], "tournament": ["tn"],
-    "sect_withdraw": ["scw"], "sect_motto": ["scm"], "sect_banner": ["scb"], "sect_rename": ["scrn"],
     "master": ["mst"], "sect_master": ["scmst"], "dao_path": ["dp"], "transmute": ["tm"],
     "killer_move": ["km"], "use_support_move": ["usm"], "verify": ["v"],
     "search_forgotten_blessed_land": ["sfbl", "sf"],
@@ -258,17 +255,11 @@ def register_text_commands(bot: commands.Bot, cog):
         help=f"{cog.preset_delete.description} Usage: i preset_delete <name>",
     ))
 
-    async def text_sect_create(ctx: commands.Context, *, name: str = None):
-        if not name:
-            await ctx.send("Usage: `i sect_create <name>`")
-            return
-        await cog.sect_create.callback(cog, ShimInteraction(ctx), name)
-
-    bot.add_command(commands.Command(
-        text_sect_create, name="sect_create", aliases=ALIASES["sect_create"],
-        help=f"{cog.sect_create.description} Usage: i sect_create <name>",
-    ))
-
+    # text_sect_create/text_sect_rename/text_sect_motto/text_sect_banner/text_sect_donate/
+    # text_sect_withdraw/text_sect_transfer/text_sect_kick/text_sect_promote/text_sect_demote
+    # were removed alongside their slash commands (see cog.py's own removal note) -- every
+    # one of those actions is now only reachable via /sect's own buttons/modals. sect_join has
+    # no button equivalent, so its text command stays.
     async def text_sect_join(ctx: commands.Context, *, name: str = None):
         if not name:
             await ctx.send("Usage: `i sect_join <name>`")
@@ -278,78 +269,6 @@ def register_text_commands(bot: commands.Bot, cog):
     bot.add_command(commands.Command(
         text_sect_join, name="sect_join", aliases=ALIASES["sect_join"],
         help=f"{cog.sect_join.description} Usage: i sect_join <name>",
-    ))
-
-    async def text_sect_rename(ctx: commands.Context, *, name: str = None):
-        if not name:
-            await ctx.send("Usage: `i sect_rename <name>`")
-            return
-        await cog.sect_rename.callback(cog, ShimInteraction(ctx), name)
-
-    bot.add_command(commands.Command(
-        text_sect_rename, name="sect_rename", aliases=ALIASES["sect_rename"],
-        help=f"{cog.sect_rename.description} Usage: i sect_rename <name>",
-    ))
-
-    async def text_sect_motto(ctx: commands.Context, *, motto: str = ""):
-        await cog.sect_motto.callback(cog, ShimInteraction(ctx), motto)
-
-    bot.add_command(commands.Command(
-        text_sect_motto, name="sect_motto", aliases=ALIASES["sect_motto"],
-        help=f"{cog.sect_motto.description} Usage: i sect_motto [text] (blank clears it)",
-    ))
-
-    async def text_sect_banner(ctx: commands.Context, *, banner: str = None):
-        if not banner:
-            await ctx.send("Usage: `i sect_banner <emoji>`")
-            return
-        await cog.sect_banner.callback(cog, ShimInteraction(ctx), banner)
-
-    bot.add_command(commands.Command(
-        text_sect_banner, name="sect_banner", aliases=ALIASES["sect_banner"],
-        help=f"{cog.sect_banner.description} Usage: i sect_banner <emoji>",
-    ))
-
-    async def text_sect_donate(ctx: commands.Context, amount: int):
-        await cog.sect_donate.callback(cog, ShimInteraction(ctx), amount)
-
-    bot.add_command(commands.Command(
-        text_sect_donate, name="sect_donate", aliases=ALIASES["sect_donate"], help=cog.sect_donate.description,
-    ))
-
-    async def text_sect_withdraw(ctx: commands.Context, amount: int):
-        await cog.sect_withdraw.callback(cog, ShimInteraction(ctx), amount)
-
-    bot.add_command(commands.Command(
-        text_sect_withdraw, name="sect_withdraw", aliases=ALIASES["sect_withdraw"], help=cog.sect_withdraw.description,
-    ))
-
-    async def text_sect_transfer(ctx: commands.Context, member: discord.Member):
-        await cog.sect_transfer.callback(cog, ShimInteraction(ctx), member)
-
-    bot.add_command(commands.Command(
-        text_sect_transfer, name="sect_transfer", aliases=ALIASES["sect_transfer"], help=cog.sect_transfer.description,
-    ))
-
-    async def text_sect_kick(ctx: commands.Context, member: discord.Member):
-        await cog.sect_kick.callback(cog, ShimInteraction(ctx), member)
-
-    bot.add_command(commands.Command(
-        text_sect_kick, name="sect_kick", aliases=ALIASES["sect_kick"], help=cog.sect_kick.description,
-    ))
-
-    async def text_sect_promote(ctx: commands.Context, member: discord.Member):
-        await cog.sect_promote.callback(cog, ShimInteraction(ctx), member)
-
-    bot.add_command(commands.Command(
-        text_sect_promote, name="sect_promote", aliases=ALIASES["sect_promote"], help=cog.sect_promote.description,
-    ))
-
-    async def text_sect_demote(ctx: commands.Context, member: discord.Member):
-        await cog.sect_demote.callback(cog, ShimInteraction(ctx), member)
-
-    bot.add_command(commands.Command(
-        text_sect_demote, name="sect_demote", aliases=ALIASES["sect_demote"], help=cog.sect_demote.description,
     ))
 
     async def text_trade(ctx: commands.Context, target: discord.Member):

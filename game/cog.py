@@ -1453,6 +1453,12 @@ class GameCog(commands.Cog):
                     ephemeral=True,
                 )
                 return
+            if self.game.has_pending_black_heaven_search_invite(leader_player):
+                await interaction.response.send_message(
+                    "🌑 You already have a Search Black Heaven invite pending — cancel it or wait for it to resolve before starting another.",
+                    ephemeral=True,
+                )
+                return
 
             team = [(leader.id, leader.display_name)]
             # Constructed directly, NOT via asyncio.to_thread -- see BlackHeavenSearchLobbyView's
@@ -1502,6 +1508,12 @@ class GameCog(commands.Cog):
                 ephemeral=True,
             )
             return
+        if self.game.has_pending_black_heaven_search_invite(leader_player):
+            await interaction.response.send_message(
+                "🌑 You already have a Search Black Heaven invite pending — cancel it or wait for it to resolve before sending another.",
+                ephemeral=True,
+            )
+            return
 
         # Third-person here (about each invitee), unlike BlackHeavenSearchLobbyView's own
         # accept-time re-check of this exact same eligibility, which is "you"-phrased. This
@@ -1521,6 +1533,7 @@ class GameCog(commands.Cog):
         # Constructed directly, NOT via asyncio.to_thread -- see BlackHeavenSearchLobbyView's
         # own construction note for why this is a hard rule for every View/Modal here.
         view = BlackHeavenSearchLobbyView(self.game, leader, invitees)
+        await asyncio.to_thread(self.game.set_black_heaven_search_invite_pending, leader.id)
         embed = await asyncio.to_thread(view.build_embed)
         mentions = " ".join(m.mention for m in invitees)
         await interaction.response.send_message(
@@ -2552,7 +2565,7 @@ class GameCog(commands.Cog):
     async def sect_list(self, interaction: discord.Interaction):
         all_sects = await asyncio.to_thread(self.game.sect_list)
         if not all_sects:
-            await interaction.response.send_message("No sects exist yet — be the first with `/sect_create`!", ephemeral=True)
+            await interaction.response.send_message("No sects exist yet — be the first with the Found a Sect button in `/sect`!", ephemeral=True)
             return
         lines = [
             f"{sect['banner']} **{sect['name']}** — {sect['member_count']}/{sects.MAX_MEMBERS} members, "
@@ -2562,17 +2575,14 @@ class GameCog(commands.Cog):
         embed = discord.Embed(title="🏯 Sects", description="\n".join(lines)[:4096], color=discord.Color.dark_teal())
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="sect_create", description="Found a new sect and become its Sect Leader")
-    @app_commands.guilds(GUILD)
-    @app_commands.describe(name="Your sect's name")
-    async def sect_create(self, interaction: discord.Interaction, name: str):
-        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
-        if not player["character_confirmed"]:
-            await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
-            return
-        ok, message = await asyncio.to_thread(self.game.sect_create, interaction.user.id, interaction.user.display_name, name)
-        await interaction.response.send_message(message, ephemeral=not ok)
-
+    # sect_create/sect_cancel_application/sect_leave/sect_transfer/sect_kick/sect_promote/
+    # sect_demote/sect_donate/sect_withdraw/sect_motto/sect_banner/sect_rename were removed
+    # (2026-08-14) -- every one of them was a redundant second entry point for something
+    # SectView's own buttons/modals already do (Found a Sect, Cancel Application, Leave Sect,
+    # the Promote/Demote/Kick/Transfer manage screen, Donate/Withdraw, and the combined Edit
+    # Sect modal for name+motto+banner — see sect_view.py), kept just to free up headroom
+    # under Discord's 100-command-per-guild cap. sect_join has NO button equivalent (no
+    # browse-and-apply picker exists in SectView yet) so it stays as the one real entry point.
     @app_commands.command(name="sect_join", description="Apply to join a sect (needs approval from a Vice Leader or Sect Leader)")
     @app_commands.guilds(GUILD)
     @app_commands.describe(name="The sect's name")
@@ -2583,89 +2593,6 @@ class GameCog(commands.Cog):
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
         ok, message = await asyncio.to_thread(self.game.sect_join, interaction.user.id, interaction.user.display_name, name)
-        await interaction.response.send_message(message, ephemeral=not ok)
-
-    @app_commands.command(name="sect_cancel_application", description="Cancel your pending sect application")
-    @app_commands.guilds(GUILD)
-    async def sect_cancel_application(self, interaction: discord.Interaction):
-        ok, message = await asyncio.to_thread(self.game.sect_cancel_application, interaction.user.id, interaction.user.display_name)
-        await interaction.response.send_message(message, ephemeral=not ok)
-
-    @app_commands.command(name="sect_leave", description="Leave your current sect")
-    @app_commands.guilds(GUILD)
-    async def sect_leave(self, interaction: discord.Interaction):
-        ok, message = await asyncio.to_thread(self.game.sect_leave, interaction.user.id, interaction.user.display_name)
-        await interaction.response.send_message(message, ephemeral=not ok)
-
-    @app_commands.command(name="sect_transfer", description="[Sect Leader] Hand leadership to another member")
-    @app_commands.guilds(GUILD)
-    @app_commands.describe(member="The member to make Sect Leader")
-    async def sect_transfer(self, interaction: discord.Interaction, member: discord.Member):
-        ok, message = await asyncio.to_thread(
-            self.game.sect_transfer_leadership, interaction.user.id, interaction.user.display_name, member.id, member.display_name,
-        )
-        await interaction.response.send_message(message, ephemeral=not ok)
-
-    @app_commands.command(name="sect_kick", description="[Sect Leader] Expel a member from the sect")
-    @app_commands.guilds(GUILD)
-    @app_commands.describe(member="The member to expel")
-    async def sect_kick(self, interaction: discord.Interaction, member: discord.Member):
-        ok, message = await asyncio.to_thread(
-            self.game.sect_kick, interaction.user.id, interaction.user.display_name, member.id, member.display_name,
-        )
-        await interaction.response.send_message(message, ephemeral=not ok)
-
-    @app_commands.command(name="sect_promote", description="Promote a sect member one rank")
-    @app_commands.guilds(GUILD)
-    @app_commands.describe(member="The member to promote")
-    async def sect_promote(self, interaction: discord.Interaction, member: discord.Member):
-        ok, message = await asyncio.to_thread(
-            self.game.sect_promote, interaction.user.id, interaction.user.display_name, member.id, member.display_name,
-        )
-        await interaction.response.send_message(message, ephemeral=not ok)
-
-    @app_commands.command(name="sect_demote", description="[Sect Leader] Demote a sect member one rank")
-    @app_commands.guilds(GUILD)
-    @app_commands.describe(member="The member to demote")
-    async def sect_demote(self, interaction: discord.Interaction, member: discord.Member):
-        ok, message = await asyncio.to_thread(
-            self.game.sect_demote, interaction.user.id, interaction.user.display_name, member.id, member.display_name,
-        )
-        await interaction.response.send_message(message, ephemeral=not ok)
-
-    @app_commands.command(name="sect_donate", description="Donate spirit stones to your sect's treasury")
-    @app_commands.guilds(GUILD)
-    @app_commands.describe(amount="How many spirit stones to donate")
-    async def sect_donate(self, interaction: discord.Interaction, amount: int):
-        ok, message = await asyncio.to_thread(self.game.sect_donate, interaction.user.id, interaction.user.display_name, amount)
-        await interaction.response.send_message(message, ephemeral=not ok)
-
-    @app_commands.command(name="sect_withdraw", description="[Sect Leader/Vice Leader] Withdraw spirit stones from the treasury")
-    @app_commands.guilds(GUILD)
-    @app_commands.describe(amount="How many spirit stones to withdraw")
-    async def sect_withdraw(self, interaction: discord.Interaction, amount: int):
-        ok, message = await asyncio.to_thread(self.game.sect_withdraw, interaction.user.id, interaction.user.display_name, amount)
-        await interaction.response.send_message(message, ephemeral=not ok)
-
-    @app_commands.command(name="sect_motto", description="[Sect Leader] Set your sect's motto")
-    @app_commands.guilds(GUILD)
-    @app_commands.describe(motto="The new motto (leave blank to clear it)")
-    async def sect_motto(self, interaction: discord.Interaction, motto: str = ""):
-        ok, message = await asyncio.to_thread(self.game.sect_set_motto, interaction.user.id, interaction.user.display_name, motto)
-        await interaction.response.send_message(message, ephemeral=not ok)
-
-    @app_commands.command(name="sect_banner", description="[Sect Leader] Set your sect's banner emoji")
-    @app_commands.guilds(GUILD)
-    @app_commands.describe(banner="A single emoji to represent your sect")
-    async def sect_banner(self, interaction: discord.Interaction, banner: str):
-        ok, message = await asyncio.to_thread(self.game.sect_set_banner, interaction.user.id, interaction.user.display_name, banner)
-        await interaction.response.send_message(message, ephemeral=not ok)
-
-    @app_commands.command(name="sect_rename", description="[Sect Leader] Rename your sect")
-    @app_commands.guilds(GUILD)
-    @app_commands.describe(name="The sect's new name")
-    async def sect_rename(self, interaction: discord.Interaction, name: str):
-        ok, message = await asyncio.to_thread(self.game.sect_rename, interaction.user.id, interaction.user.display_name, name)
         await interaction.response.send_message(message, ephemeral=not ok)
 
     # -- Mentor/disciple (Phase 2 — see sects.py's own module docstring for what's simplified

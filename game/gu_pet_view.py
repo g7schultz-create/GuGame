@@ -11,8 +11,10 @@ lifecycle.
 AI portrait reveal (Phase 8, see game/gu_pet_images.py): a successful Crystallize fires a
 fire-and-forget asyncio.create_task that generates (or reuses a cached) portrait a few
 seconds later and edits the already-sent message in place -- see _resolve_gu_pet_portrait.
-Persistent portrait display on the Status tab (a full gallery/codex browser) is a deliberate
-scope cut, same as the source spec's own "lower priority" framing.
+A full gallery/codex browser is still a deliberate scope cut, same as the source spec's own
+"lower priority" framing -- but the Status tab's "View Portrait" button (_on_view_portrait)
+lets a player pull an already-crystallized pet's portrait back up on demand at any time,
+reusing the same cache/generate pipeline, so the one-time reveal isn't the only chance to see it.
 """
 
 import asyncio
@@ -242,6 +244,13 @@ class GuPetView(GameView):
         self.add_item(button)
 
         selected_pet = next((p for p in pets if p["pet_id"] == self.selected_status_pet_id), None)
+        portrait_button = discord.ui.Button(
+            label="View Portrait", emoji="🖼️", style=discord.ButtonStyle.secondary,
+            row=3, disabled=selected_pet is None or selected_pet["stage"] != gu_pet.STAGE_MATURE,
+        )
+        portrait_button.callback = self._on_view_portrait
+        self.add_item(portrait_button)
+
         if selected_pet is not None and selected_pet["stage"] == gu_pet.STAGE_MATURE and selected_pet["satiety"] < gu_pet.SATIETY_MAX:
             required_tier = gu_pet.rank_scaling(selected_pet["rank"])["satiety_material_tier"]
             feedable = [c for c in self.game.gu_pet_feedable_inventory(self.user_id) if c[3] == required_tier]
@@ -437,6 +446,29 @@ class GuPetView(GameView):
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _on_view_portrait(self, interaction: discord.Interaction):
+        """Reuses the exact same cache-check/generate pipeline as _resolve_gu_pet_portrait's
+        own post-Crystallize reveal (see GameManager.get_or_create_gu_pet_image) -- this is
+        just a way to pull that same portrait back up on demand later, since neither the
+        Status tab nor anywhere else persistently displays it otherwise. Deferred ephemeral
+        since generation can take a few real seconds on a cache miss, and this button can be
+        clicked repeatedly without wanting to spam the channel each time."""
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        image_path = await self.game.get_or_create_gu_pet_image(self.selected_status_pet_id)
+        if image_path is None:
+            await interaction.followup.send(
+                "🖼️ No portrait available for this Gu Pet yet — AI portraits need `OPENAI_API_KEY` "
+                "configured, and only generate once a pet has actually crystallized.",
+                ephemeral=True,
+            )
+            return
+        pet = await asyncio.to_thread(self.game.get_gu_pet, self.selected_status_pet_id)
+        pet_name = (pet["name"] if pet and pet.get("name") else None) or "Your Gu Pet"
+        file = discord.File(image_path, filename="gu_pet_portrait.png")
+        embed = discord.Embed(title=f"🖼️ {pet_name}", color=discord.Color.dark_purple())
+        embed.set_image(url="attachment://gu_pet_portrait.png")
+        await interaction.followup.send(embed=embed, file=file, ephemeral=True)
 
     async def _on_pick_status_feed_item(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 2)

@@ -101,6 +101,9 @@ class BlackHeavenSearchLobbyView(GameView):
         decline_button = discord.ui.Button(label="Decline", emoji="❌", style=discord.ButtonStyle.danger)
         decline_button.callback = self._on_decline
         self.add_item(decline_button)
+        cancel_button = discord.ui.Button(label="Cancel Invite", emoji="🚫", style=discord.ButtonStyle.secondary)
+        cancel_button.callback = self._on_cancel
+        self.add_item(cancel_button)
 
     async def _respond(self, interaction: discord.Interaction, decision: str):
         if interaction.user.id not in self.responses:
@@ -134,8 +137,29 @@ class BlackHeavenSearchLobbyView(GameView):
     async def _on_decline(self, interaction: discord.Interaction):
         await self._respond(interaction, "declined")
 
+    async def _on_cancel(self, interaction: discord.Interaction):
+        """Leader-only -- lets the leader free up their one-pending-invite slot (see
+        GameManager.has_pending_black_heaven_search_invite) without waiting out the full 5min
+        timeout or badgering invitees into declining."""
+        if interaction.user.id != self.leader.id:
+            await interaction.response.send_message("Only the leader can cancel this invite.", ephemeral=True)
+            return
+        if self.resolved:
+            await interaction.response.defer()
+            return
+        self.resolved = True
+        await asyncio.to_thread(self.game.clear_black_heaven_search_invite_pending, self.leader.id)
+        await asyncio.to_thread(self._build_components)
+        embed = discord.Embed(
+            title="🌑 Search Black Heaven — Invite Cancelled",
+            description=f"**{self.leader.display_name}** cancelled this invite.",
+            color=discord.Color.dark_grey(),
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
+
     async def _resolve(self, interaction: discord.Interaction):
         self.resolved = True
+        await asyncio.to_thread(self.game.clear_black_heaven_search_invite_pending, self.leader.id)
         await asyncio.to_thread(self._build_components)
         required_ok = all(self.responses[uid] == "accepted" for uid in self._required_ids())
         if not required_ok:
@@ -170,6 +194,7 @@ class BlackHeavenSearchLobbyView(GameView):
         if self.resolved:
             return
         self.resolved = True
+        await asyncio.to_thread(self.game.clear_black_heaven_search_invite_pending, self.leader.id)
         for uid, status in self.responses.items():
             if status == "pending":
                 self.responses[uid] = "declined"
@@ -196,7 +221,7 @@ class BlackHeavenSearchLobbyView(GameView):
             ),
             color=discord.Color.dark_purple(),
         )
-        embed.set_footer(text="Both required invitees must Accept to begin. Expires in 5 min.")
+        embed.set_footer(text="Both required invitees must Accept to begin. The leader can Cancel. Expires in 5 min.")
         return embed
 
 
@@ -214,6 +239,7 @@ class BlackHeavenSearchView(TeamBattleEngine, GameView):
         self.board_exhausted = False
         self.turn_index = 0
         self.last_bubble_notice: str = None
+        self.gu_roll_result: dict = None  # set once the "gu" bubble is popped -- see grant_black_heaven_gu_reward
         self.bubble_resolving = False
         self.battles_fought = 0  # feeds roll_black_heaven_battle_monster's own scaling
 
@@ -344,9 +370,8 @@ class BlackHeavenSearchView(TeamBattleEngine, GameView):
                 return
 
             if category == "gu":
-                results = await asyncio.to_thread(self.game.grant_black_heaven_gu_reward, self.team)
-                summary = "\n".join(f"**{name}**: {reward}" for name, reward in results)
-                self.last_bubble_notice = f"🐛 **A Rank 7/8 Unique Gu!**\n{summary}"
+                self.gu_roll_result = await asyncio.to_thread(self.game.grant_black_heaven_gu_reward, self.team)
+                self.last_bubble_notice = f"🐛 **A rare Gu!** The whole team rolls for it:\n{self._gu_roll_field_text()}"
             elif category == "essence_crystal":
                 results = await asyncio.to_thread(self.game.grant_black_heaven_essence_crystal_reward, self.team)
                 summary = "\n".join(f"**{name}**: {reward}" for name, reward in results)
@@ -489,6 +514,19 @@ class BlackHeavenSearchView(TeamBattleEngine, GameView):
             embed.set_image(url=f"attachment://{os.path.basename(black_heaven.BLACK_HEAVEN_IMAGE_PATH)}")
         return embed
 
+    def _gu_roll_field_text(self) -> str:
+        """Shared by both the bubble-board-exhausted embed and the final "resolved" embed --
+        see grant_black_heaven_gu_reward (manager.py) for what's actually in gu_roll_result."""
+        roll_lines = "\n".join(
+            f"🎲 **{name}**: {roll}" + (" 🏆" if name == self.gu_roll_result["winner_name"] and roll == self.gu_roll_result["winner_roll"] else "")
+            for name, roll in self.gu_roll_result["rolls"]
+        )
+        return (
+            f"**{self.gu_roll_result['gu_name']}** — _{self.gu_roll_result['effect_text']}_\n"
+            f"{roll_lines}\n"
+            f"🏆 **{self.gu_roll_result['winner_name']}** wins with a **{self.gu_roll_result['winner_roll']}** and claims it!"
+        )
+
     def _build_phase_embed(self) -> discord.Embed:
         team_names = ", ".join(name for _, name in self.team)
 
@@ -508,9 +546,12 @@ class BlackHeavenSearchView(TeamBattleEngine, GameView):
             max_pops = self._max_bubble_pops()
             pops_used = sum(self.actually_clicked)
             if self.board_exhausted:
-                gu_index = self.board.index("gu")
-                if self.actually_clicked[gu_index]:
-                    gu_line = "🐛 Your team actually found one of Black Heaven's own Gu this run!"
+                if self.gu_roll_result:
+                    gu_line = (
+                        f"🐛 Your team found **{self.gu_roll_result['gu_name']}**! "
+                        f"_{self.gu_roll_result['effect_text']}_\n"
+                        f"🏆 **{self.gu_roll_result['winner_name']}** won the roll-off with a **{self.gu_roll_result['winner_roll']}** and claims it."
+                    )
                 else:
                     gu_line = "🐛 The Gu was hidden in one of the bubbles your team never got to — it's gone unclaimed."
                 embed = discord.Embed(
@@ -590,13 +631,13 @@ class BlackHeavenSearchView(TeamBattleEngine, GameView):
             qi_lines = [f"**{p['name']}**: {p.get('qi_lost_on_death', 0):,.2f} qi lost" for p in self.participants.values()]
             if qi_lines:
                 embed.add_field(name="💀 Qi Lost", value="\n".join(qi_lines)[:1024], inline=False)
+            if self.gu_roll_result:
+                embed.add_field(name="🐛 Gu Found Before the Wipe", value=self._gu_roll_field_text()[:1024], inline=False)
             return embed
 
-        gu_index = self.board.index("gu") if self.board else None
-        found_gu = gu_index is not None and self.actually_clicked[gu_index]
         gu_line = (
-            "🐛 Your team walks out with one of Black Heaven's own Gu."
-            if found_gu else
+            f"🐛 Your team walks out with **{self.gu_roll_result['gu_name']}**."
+            if self.gu_roll_result else
             "🐛 The Gu bubble went unclaimed this run."
         )
         embed = discord.Embed(
@@ -604,4 +645,6 @@ class BlackHeavenSearchView(TeamBattleEngine, GameView):
             description=f"Your team makes it back out of the dark.\n\n{gu_line}",
             color=discord.Color.dark_purple(),
         )
+        if self.gu_roll_result:
+            embed.add_field(name="🐛 Gu Roll-Off", value=self._gu_roll_field_text()[:1024], inline=False)
         return embed

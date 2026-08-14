@@ -2995,6 +2995,26 @@ class GameManager:
     # mid-Search.
     ACTIVE_BLACK_HEAVEN_SEARCH_STALE_SECONDS = 2 * 3600
     BLACK_HEAVEN_SEARCH_COOLDOWN_SECONDS = 4 * 3600
+    # A leader could previously fire off unlimited BlackHeavenSearchLobbyView invites back to
+    # back (nothing gated a NEW invite while a PRIOR one was still pending -- only
+    # has_active_black_heaven_search/the leader's own cooldown, both of which only become true
+    # once a lobby actually RESOLVES) and accept them one at a time later, each starting its
+    # own independent run and its own free rewards. Fixed by requiring the leader clear this
+    # flag (accept/decline/cancel/timeout all clear it, see BlackHeavenSearchLobbyView) before
+    # sending another. Stale-guard window comfortably exceeds the lobby's own 300s Discord view
+    # timeout, covering a redeploy mid-invite the same way ACTIVE_BLACK_HEAVEN_SEARCH_STALE_
+    # SECONDS covers one mid-run.
+    BLACK_HEAVEN_SEARCH_INVITE_PENDING_STALE_SECONDS = 600
+
+    def has_pending_black_heaven_search_invite(self, player: dict) -> bool:
+        started = player["black_heaven_search_invite_pending_ts"]
+        return bool(started) and (time.time() - started) < self.BLACK_HEAVEN_SEARCH_INVITE_PENDING_STALE_SECONDS
+
+    def set_black_heaven_search_invite_pending(self, leader_id: int):
+        self.db.set_black_heaven_search_invite_pending(leader_id, int(time.time()))
+
+    def clear_black_heaven_search_invite_pending(self, leader_id: int):
+        self.db.set_black_heaven_search_invite_pending(leader_id, 0)
 
     def has_active_black_heaven_search(self, player: dict) -> bool:
         started = player["active_black_heaven_started_ts"]
@@ -3142,16 +3162,29 @@ class GameManager:
         name = random.choice(canon_gu_black_heaven.BLACK_HEAVEN_CANON_GU_NAMES)
         return equipment.gu_item_name(name, "Common")
 
-    def grant_black_heaven_gu_reward(self, team: list) -> list:
-        """One independent Gu roll per team member (mirrors grant_inheritance_ground_pill_
-        reward's own "guaranteed grant, randomized which one" shape) -- each team member can
-        find a DIFFERENT one of the 15. Returns [(name, reward_str), ...]."""
-        results = []
-        for user_id, name in team:
-            gu_name = self.roll_black_heaven_bubble_gu()
-            self.db.add_item(user_id, gu_name, 1)
-            results.append((name, f"1x **{gu_name}**"))
-        return results
+    def grant_black_heaven_gu_reward(self, team: list) -> dict:
+        """The guaranteed "gu" bubble now awards ONE of Black Heaven's own 15 Gu to the whole
+        team's own dice-roll-off winner, per explicit request ("when the gu is found have all
+        characters roll for it and show what they rolled") -- direct mirror of Inheritance
+        Ground's own Core Gu share resolution (see InheritanceGroundView's no-backstab branch,
+        inheritance_ground_view.py): everyone rolls 1-100, highest wins, ties broken randomly.
+        Only the winner actually receives the item. Returns a dict (not a per-member list, since
+        there's now exactly one outcome to show, not one per person):
+        {"rolls": [(name, roll), ...], "winner_name": str, "winner_roll": int, "gu_name": str,
+        "gu_family": str, "effect_text": str}."""
+        gu_name = self.roll_black_heaven_bubble_gu()
+        gu_family, _quality = equipment.parse_gu_name(gu_name)
+        rolls = [(uid, name, random.randint(1, 100)) for uid, name in team]
+        best_roll = max(roll for _, _, roll in rolls)
+        winner_id, winner_name, _ = random.choice([r for r in rolls if r[2] == best_roll])
+        self.db.add_item(winner_id, gu_name, 1)
+        canon = canon_gu.CANON_GU_BY_NAME.get(gu_family, {})
+        return {
+            "rolls": [(name, roll) for _, name, roll in rolls],
+            "winner_name": winner_name, "winner_roll": best_roll,
+            "gu_name": gu_name, "gu_family": gu_family,
+            "effect_text": canon.get("effect_text", ""),
+        }
 
     def grant_black_heaven_essence_crystal_reward(self, team: list) -> list:
         results = []
@@ -5448,7 +5481,7 @@ class GameManager:
     def sect_create(self, user_id: int, name: str, sect_name: str):
         player = self.db.get_or_create_player(user_id, name)
         if player["sect_id"]:
-            return False, "You're already in a sect — leave it first with `/sect_leave`."
+            return False, "You're already in a sect — leave it first via the Leave Sect button in `/sect`."
         sect_name = sect_name.strip()
         if not sect_name:
             return False, "A sect needs a real name."
@@ -5466,14 +5499,14 @@ class GameManager:
         sect_reject_application below)."""
         player = self.db.get_or_create_player(user_id, name)
         if player["sect_id"]:
-            return False, "You're already in a sect — leave it first with `/sect_leave`."
+            return False, "You're already in a sect — leave it first via the Leave Sect button in `/sect`."
         existing = self.db.get_pending_application_for_player(user_id)
         if existing:
             existing_sect = self.db.get_sect(existing["sect_id"])
             existing_sect_name = existing_sect["name"] if existing_sect else "a sect"
             return False, (
                 f"You already have a pending application to **{existing_sect_name}** — "
-                "cancel it first with `/sect_cancel_application` if you'd rather apply elsewhere."
+                "cancel it first via the Cancel Application button in `/sect` if you'd rather apply elsewhere."
             )
         sect = self.db.get_sect_by_name(sect_name.strip())
         if sect is None:
@@ -5535,8 +5568,8 @@ class GameManager:
         if player["sect_rank"] == sects.SECT_LEADER:
             if self.db.count_sect_members(sect_id) > 1:
                 return False, (
-                    "You're the Sect Leader — transfer leadership with `/sect_transfer @member` "
-                    "before you can leave, or the sect would be left without one."
+                    "You're the Sect Leader — transfer leadership via the Transfer Leadership button "
+                    "in `/sect` before you can leave, or the sect would be left without one."
                 )
             self._release_mentor_relationships(user_id)
             self.db.set_player_sect(user_id, None, None)
@@ -5571,7 +5604,7 @@ class GameManager:
         if target["sect_id"] != player["sect_id"]:
             return False, f"{target_name} isn't a member of your sect."
         if target_id == user_id:
-            return False, "You can't kick yourself — use `/sect_leave` instead."
+            return False, "You can't kick yourself — use the Leave Sect button in `/sect` instead."
         self._release_mentor_relationships(target_id)
         self.db.set_player_sect(target_id, None, None)
         return True, f"👢 **{target_name}** is expelled from the sect."
@@ -6070,7 +6103,7 @@ class GameManager:
             return False, "You can't promote yourself."
         current_idx = sects.rank_index(target["sect_rank"])
         if current_idx >= sects.rank_index(sects.SECT_LEADER) - 1:
-            return False, f"**{target_name}** is already a Vice Leader — use `/sect_transfer` to hand off leadership instead."
+            return False, f"**{target_name}** is already a Vice Leader — use the Transfer Leadership button in `/sect` to hand off leadership instead."
         next_rank = sects.SECT_RANKS[current_idx + 1]
         if next_rank not in sects.promotable_target_ranks(player["sect_rank"]):
             return False, f"Your rank ({player['sect_rank']}) can't promote members to {next_rank}."
@@ -6091,10 +6124,10 @@ class GameManager:
         if target["sect_id"] != player["sect_id"]:
             return False, f"{target_name} isn't a member of your sect."
         if target_id == user_id:
-            return False, "You can't demote yourself — use `/sect_transfer` if you want to step down."
+            return False, "You can't demote yourself — use the Transfer Leadership button in `/sect` if you want to step down."
         current_idx = sects.rank_index(target["sect_rank"])
         if current_idx <= 0:
-            return False, f"**{target_name}** is already an Outer Disciple — use `/sect_kick` to remove them instead."
+            return False, f"**{target_name}** is already an Outer Disciple — use the Kick button in `/sect` to remove them instead."
         prev_rank = sects.SECT_RANKS[current_idx - 1]
         self.db.set_sect_rank(target_id, prev_rank)
         return True, f"⬇️ **{target_name}** is demoted to {sects.RANK_EMOJI[prev_rank]} {prev_rank}."
