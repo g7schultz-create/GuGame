@@ -1,6 +1,6 @@
 """
-GuPetView -- the /gu_pet menu. Refine tab (Phase 2): sacrifice 10-20 identical copies of one
-owned Gu plus Soul Nourishing Pill/Soul Crystal catalysts into a blank Gu Pet. Feed tab
+GuPetView -- the /gu_pet menu. Refine tab (Phase 2): sacrifice 1-3 Immortal-quality Gu plus
+Soul Nourishing Pill/Soul Crystal catalysts into a blank Gu Pet. Feed tab
 (Phase 3): daily feeding during growth. Status tab (Phase 5): browse every owned pet's
 species/satiety/stat_bonuses and pick which one is active (players.active_gu_pet_id -- only
 the active pet's bonuses actually apply, see GameManager.compute_equipment_bonuses, a later
@@ -36,6 +36,7 @@ class GuPetView(GameView):
         self.selected_target_rank: int = None
         self.selected_feed_pet_id: int = None
         self.selected_feed_item: str = None
+        self.selected_feed_quantity: int = 1
         self.selected_status_pet_id: int = None
         self.selected_status_feed_item: str = None
         self.last_result: str = None
@@ -93,35 +94,41 @@ class GuPetView(GameView):
             for item_name, qty in candidates
         ]
         item_select = discord.ui.Select(
-            placeholder="Choose a Gu to sacrifice (needs 10+ identical copies)",
+            placeholder=f"Choose a Gu to sacrifice ({gu_pet.REFINE_REQUIRED_GU_QUALITY} quality)",
             options=item_options[:25] or [discord.SelectOption(label="No eligible Gu owned", value="none")],
             disabled=not item_options, row=1,
         )
         item_select.callback = self._on_pick_sacrifice_item
         self.add_item(item_select)
 
-        max_eligible_rank = 1
+        # No hard Gu Refiner rank gate anymore -- every rank is always selectable, an
+        # under-ranked attempt just carries worse (never zero) odds instead of being refused
+        # outright (see gu_pet.refine_success_chance). Defaults to the highest rank the player
+        # is natively qualified for (gap >= 0) purely as a safe starting suggestion, not a cap.
+        owned_sacrifice = dict(candidates).get(self.selected_sacrifice_item, 0)
+        preview_quantity = min(gu_pet.REFINE_MAX_SACRIFICE, max(gu_pet.REFINE_MIN_SACRIFICE, owned_sacrifice))
+        default_rank = gu_pet.MIN_RANK
         for rank in range(gu_pet.MIN_RANK, gu_pet.MAX_RANK + 1):
             if player["gu_refiner_rank"] >= gu_pet.gu_refiner_rank_required(rank):
-                max_eligible_rank = rank
-        if self.selected_target_rank is None or self.selected_target_rank > max_eligible_rank:
-            self.selected_target_rank = max_eligible_rank
+                default_rank = rank
+        if self.selected_target_rank is None:
+            self.selected_target_rank = default_rank
 
         rank_options = [
             discord.SelectOption(
                 label=f"Rank {rank} ({gu_pet.rank_to_rarity(rank)})", value=str(rank),
+                description=f"~{gu_pet.refine_success_chance(player['gu_refiner_rank'], rank, preview_quantity) * 100:.0f}% success chance"[:100],
                 default=(rank == self.selected_target_rank),
             )
-            for rank in range(gu_pet.MIN_RANK, max_eligible_rank + 1)
+            for rank in range(gu_pet.MIN_RANK, gu_pet.MAX_RANK + 1)
         ]
-        rank_select = discord.ui.Select(placeholder="Target Gu Pet rank", options=rank_options, row=2)
+        rank_select = discord.ui.Select(placeholder="Target Gu Pet rank (any rank -- odds scale with your Gu Refiner rank)", options=rank_options, row=2)
         rank_select.callback = self._on_pick_target_rank
         self.add_item(rank_select)
 
         catalysts = gu_pet.refine_catalyst_recipe(self.selected_target_rank)
         inventory = self.game.get_inventory(self.user_id)
         can_afford_catalysts = all(inventory.get(mat, 0) >= qty for mat, qty in catalysts.items())
-        owned_sacrifice = dict(candidates).get(self.selected_sacrifice_item, 0)
         button = discord.ui.Button(
             label="Refine", emoji="🧪", style=discord.ButtonStyle.success, row=3,
             disabled=not (item_options and can_afford_catalysts and owned_sacrifice >= gu_pet.REFINE_MIN_SACRIFICE),
@@ -169,14 +176,37 @@ class GuPetView(GameView):
         self.add_item(item_select)
 
         feedable_by_name = {c[0]: c[1] for c in feedable}
+        selected_pet = next((p for p in growing_pets if p["pet_id"] == self.selected_feed_pet_id), None)
+        remaining_days = (selected_pet["growth_days_required"] - selected_pet["growth_days_fed"]) if selected_pet else 1
+        owned_qty = feedable_by_name.get(self.selected_feed_item, 0)
+        # Feeding more in one visit covers more growth-days at once (see GameManager.
+        # feed_gu_pet) -- capped at whatever's actually still useful so a big stockpile never
+        # gets wasted past the finish line.
+        max_useful = max(1, min(owned_qty, remaining_days)) if owned_qty > 0 else 1
+        if self.selected_feed_quantity is None or self.selected_feed_quantity > max_useful:
+            self.selected_feed_quantity = 1
+        quantity_choices = sorted({q for q in (1, 5, 10, max_useful) if q <= max_useful})
+        quantity_select = discord.ui.Select(
+            placeholder="How much to feed this visit (more = faster growth)",
+            options=[
+                discord.SelectOption(
+                    label=f"Feed {q}" + (" (finishes it!)" if q == max_useful and q >= remaining_days else ""),
+                    value=str(q), default=(q == self.selected_feed_quantity),
+                )
+                for q in quantity_choices
+            ] or [discord.SelectOption(label="Feed 1", value="1", default=True)],
+            disabled=not item_options, row=4,
+        )
+        quantity_select.callback = self._on_pick_feed_quantity
+        self.add_item(quantity_select)
+
         button = discord.ui.Button(
             label="Feed", emoji="🍖", style=discord.ButtonStyle.success, row=3,
-            disabled=not (pet_options and item_options and feedable_by_name.get(self.selected_feed_item, 0) > 0),
+            disabled=not (pet_options and item_options and owned_qty > 0),
         )
         button.callback = self._on_feed
         self.add_item(button)
 
-        selected_pet = next((p for p in growing_pets if p["pet_id"] == self.selected_feed_pet_id), None)
         ready = selected_pet is not None and selected_pet["growth_days_fed"] >= selected_pet["growth_days_required"]
         crystallize_button = discord.ui.Button(
             label="Crystallize", emoji="💎", style=discord.ButtonStyle.primary, row=3, disabled=not ready,
@@ -332,16 +362,26 @@ class GuPetView(GameView):
         value = select.values[0]
         if value != "none":
             self.selected_feed_item = value
+        self.selected_feed_quantity = 1  # owned quantity just changed, re-pick fresh
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _on_pick_feed_quantity(self, interaction: discord.Interaction):
+        select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 4)
+        self.selected_feed_quantity = int(select.values[0])
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_feed(self, interaction: discord.Interaction):
         result = await asyncio.to_thread(
-            self.game.feed_gu_pet, self.user_id, self.display_name, self.selected_feed_pet_id, self.selected_feed_item, 1,
+            self.game.feed_gu_pet, self.user_id, self.display_name, self.selected_feed_pet_id,
+            self.selected_feed_item, self.selected_feed_quantity,
         )
         self.last_result = result.get("reason") or result.get("message")
         self.selected_feed_item = None  # owned quantity just changed, re-pick fresh
+        self.selected_feed_quantity = 1
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -454,9 +494,10 @@ class GuPetView(GameView):
     def _fill_refine_embed(self, embed: discord.Embed):
         player = self.game.get_player_stats(self.user_id, self.display_name)
         embed.description = (
-            "Sacrifice **10-20 identical copies** of one owned Gu (pure energy mass — its own stats/identity "
-            "never carry over) plus catalysts to hatch a blank Gu Pet, then feed it daily through the **Feed** "
-            "tab to grow it.\n\n"
+            f"Sacrifice **1-3 {gu_pet.REFINE_REQUIRED_GU_QUALITY}-quality Gu** (pure energy mass — its own "
+            "stats/identity never carry over) plus catalysts to hatch a blank Gu Pet, then feed it through the "
+            "**Feed** tab to grow it. Any rank is attemptable at any Gu Refiner rank — reaching above your own "
+            "level just costs success chance instead of being blocked outright.\n\n"
             f"Your Gu Refiner rank: **{professions.rank_name(player['gu_refiner_rank'])}**"
         )
         if self.selected_target_rank is not None:
@@ -464,6 +505,11 @@ class GuPetView(GameView):
             inventory = self.game.get_inventory(self.user_id)
             catalyst_lines = "\n".join(f"**{mat}**: {inventory.get(mat, 0)}/{qty}" for mat, qty in catalysts.items())
             embed.add_field(name=f"Catalysts (Rank {self.selected_target_rank})", value=catalyst_lines, inline=False)
+            candidates = self.game.gu_pet_refine_candidates(self.user_id)
+            owned_sacrifice = dict(candidates).get(self.selected_sacrifice_item, 0)
+            preview_quantity = min(gu_pet.REFINE_MAX_SACRIFICE, max(gu_pet.REFINE_MIN_SACRIFICE, owned_sacrifice))
+            chance = gu_pet.refine_success_chance(player["gu_refiner_rank"], self.selected_target_rank, preview_quantity)
+            embed.add_field(name="Success Chance", value=f"**~{chance * 100:.0f}%** (sacrificing {preview_quantity})", inline=True)
         owned_pets = self.game.get_player_gu_pets(self.user_id)
         if owned_pets:
             lines = [
@@ -472,14 +518,15 @@ class GuPetView(GameView):
                 for pet in owned_pets
             ]
             embed.add_field(name=f"Owned Gu Pets ({len(owned_pets)})", value="\n".join(lines)[:1024], inline=False)
-        embed.set_footer(text="Higher Gu Refiner rank unlocks higher pet ranks and improves your success chance.")
+        embed.set_footer(text="Higher Gu Refiner rank improves your success chance at every rank, and removes the penalty for reaching above your level.")
 
     def _fill_feed_embed(self, embed: discord.Embed):
         growing_pets = [p for p in self.game.get_player_gu_pets(self.user_id) if p["stage"] == gu_pet.STAGE_GROWTH]
         embed.description = (
-            "One feed per real day per Gu Pet. Ore/Herb/Beast Material/Beast Core/Pills all grow different "
-            "stats — the RATIO of everything fed decides its species once it's done growing (see the "
-            "**Status** tab once that's ready). A Qi Multiplier Pill doubles that single feed's yield."
+            "One feed visit per real day per Gu Pet, but feeding MORE material in that visit covers more "
+            "growth-days at once — a big stockpile finishes it faster. Ore/Herb/Beast Material/Beast Core/Pills "
+            "all grow different stats — the RATIO of everything fed decides its species once it's done growing "
+            "(see the **Status** tab once that's ready). A Qi Multiplier Pill doubles that single feed's yield."
         )
         if not growing_pets:
             embed.add_field(name="No Growing Gu Pets", value="Refine one first from the **Refine** tab.", inline=False)

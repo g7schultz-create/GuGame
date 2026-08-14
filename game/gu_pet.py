@@ -1,9 +1,10 @@
 """
 Gu Pet — a single-slot companion acquired through the (previously dormant) Gu Refiner
-profession: sacrifice 10-20 identical copies of one owned Gu (pure "energy mass", the
-sacrificed Gu's own stats/identity never carry over) plus Soul Nourishing Pill/Soul Crystal
-catalysts (the same two items Nascent Soul Avatar leveling already uses) into a blank Rank I
-pet. See GameManager.refine_gu_pet.
+profession: sacrifice 1-3 Immortal-quality Gu (pure "energy mass", the sacrificed Gu's own
+stats/identity never carry over -- see REFINE_REQUIRED_GU_QUALITY's own comment for why the
+quality floor sits at the TOP of equipment.GU_QUALITY_ORDER rather than a raw duplicate count)
+plus Soul Nourishing Pill/Soul Crystal catalysts (the same two items Nascent Soul Avatar
+leveling already uses) into a blank Rank I pet. See GameManager.refine_gu_pet.
 
 Lifecycle, mirroring avatar.py's own role as the pure data/rules module (no Discord/DB code
 here):
@@ -30,7 +31,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from . import accessories_data, gathering, items
+from . import accessories_data, equipment, gathering, items, professions
 
 MIN_RANK = 1
 MAX_RANK = 7
@@ -75,8 +76,14 @@ def rank_to_rarity(rank: int) -> str:
 
 # -- Refinement (design doc sections 2-4) -- see GameManager.refine_gu_pet -----------------
 
-REFINE_MIN_SACRIFICE = 10
-REFINE_MAX_SACRIFICE = 20
+# Only the TOP of equipment.GU_QUALITY_ORDER counts as a valid sacrifice -- reaching Immortal
+# quality on even one Gu already means having fused dozens of raw duplicate copies through
+# /upgrade_gu's own Fuse action (each tier-up consumes several copies of the tier below), so
+# requiring another 10-20 raw duplicates ON TOP of that was redundant. 1-3 Immortal Gu instead
+# -- individually a much bigger investment than a raw duplicate, so the range shrinks to match.
+REFINE_REQUIRED_GU_QUALITY = equipment.GU_QUALITY_ORDER[-1]
+REFINE_MIN_SACRIFICE = 1
+REFINE_MAX_SACRIFICE = 3
 
 # Soul Nourishing Pill + Soul Crystal -- the SAME two catalyst items Nascent Soul Avatar
 # leveling already uses (see avatar.AVATAR_LEVEL_UP_RECIPE), scaled per TARGET pet rank with
@@ -97,22 +104,45 @@ def refine_catalyst_recipe(target_rank: int) -> Dict[str, int]:
     return GU_PET_REFINE_CATALYST_RECIPE[max(MIN_RANK, min(target_rank, MAX_RANK))]
 
 
-# Success-formula bonus per Gu Refiner rank index above the minimum required for the
-# ATTEMPTED target rank (design doc section 3.1's own "(Refiner Level - Required Level) *
-# 5%" term) -- layered ON TOP of professions.craft_success_chance's own absolute-rank curve
-# (which already covers "base rate scales with rank" the way craft_gear/craft_pill do), so
-# this term specifically rewards being over-ranked for an easy target rather than double-
-# counting absolute rank twice.
+# No hard Gu Refiner rank GATE on the target pet rank -- any player can attempt any Rank
+# I-VII pet at any Gu Refiner rank (by explicit request: "any pet at any gu refiner level,
+# but the chance gets better the higher your refiner level is"). The success formula's base
+# is anchored on the TARGET rank's own required Gu Refiner rank (professions.
+# craft_success_chance(gu_refiner_rank_required(target_rank)) -- "how hard is this pet,
+# intrinsically"), then shifted by the GAP between the player's real Gu Refiner rank and that
+# requirement: a positive gap (over-ranked for an easy target) adds REFINE_RANK_ABOVE_
+# REQUIRED_BONUS_PCT per rank of headroom; a negative gap (under-ranked for a hard target)
+# subtracts REFINE_RANK_BELOW_REQUIRED_PENALTY_PCT per rank of shortfall -- steeper than the
+# bonus on purpose (reaching above your level should cost more than being over-qualified
+# gains), floored at REFINE_MIN_SUCCESS_CHANCE_FLOOR so an extreme mismatch (e.g. a Novice
+# attempting a Rank VII pet) is still POSSIBLE, just a real gamble, never impossible.
 REFINE_RANK_ABOVE_REQUIRED_BONUS_PCT = 0.05
+REFINE_RANK_BELOW_REQUIRED_PENALTY_PCT = 0.12
+REFINE_MIN_SUCCESS_CHANCE_FLOOR = 0.05
 
-# Material Quality Bonus (design doc section 3.1) -- scales with how many of the 10-20
-# allowed copies were actually sacrificed, 0% at the minimum up to this cap at the maximum.
+# Material Quality Bonus (design doc section 3.1) -- scales with how many of the 1-3
+# allowed Immortal Gu were actually sacrificed, 0% at the minimum up to this cap at the maximum.
 REFINE_MAX_MATERIAL_QUALITY_BONUS_PCT = 0.10
 
 
 def material_quality_bonus_pct(quantity: int) -> float:
     span = REFINE_MAX_SACRIFICE - REFINE_MIN_SACRIFICE
     return REFINE_MAX_MATERIAL_QUALITY_BONUS_PCT * (max(0, min(quantity, REFINE_MAX_SACRIFICE) - REFINE_MIN_SACRIFICE) / span)
+
+
+def refine_success_chance(player_gu_refiner_rank: int, target_rank: int, quantity: int) -> float:
+    """The real /gu_pet Refine success chance -- see the comment above REFINE_RANK_ABOVE_
+    REQUIRED_BONUS_PCT for the full rationale. Shared by GameManager.refine_gu_pet (the real
+    roll) and the Refine tab's rank-Select (a preview of the odds before committing), so the
+    two can never drift apart."""
+    required_refiner_rank = gu_refiner_rank_required(target_rank)
+    base_chance = professions.craft_success_chance(required_refiner_rank)
+    rank_gap = player_gu_refiner_rank - required_refiner_rank
+    gap_adjustment = (
+        rank_gap * REFINE_RANK_ABOVE_REQUIRED_BONUS_PCT if rank_gap >= 0
+        else rank_gap * REFINE_RANK_BELOW_REQUIRED_PENALTY_PCT
+    )
+    return max(REFINE_MIN_SUCCESS_CHANCE_FLOOR, min(1.0, base_chance + gap_adjustment + material_quality_bonus_pct(quantity)))
 
 
 # Secondary banded roll splitting a success into Critical/Standard, or a failure into

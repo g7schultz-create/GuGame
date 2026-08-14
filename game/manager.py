@@ -2030,20 +2030,20 @@ class GameManager:
         return True, f"Broke down {quantity}x **{item_name}** for **{stones:,}** 🪙 spirit stones.", stones
 
     # -- Gu Pet: the Gu Refiner profession's own crafting action (see game/gu_pet.py /
-    # /gu_pet) -- sacrifice 10-20 identical copies of one owned Gu (pure "energy mass," never
-    # carrying its own stats/identity over) plus Soul Nourishing Pill/Soul Crystal catalysts
-    # into a blank Rank I-VII Gu Pet. -----------------------------------------------------
+    # /gu_pet) -- sacrifice 1-3 Immortal-quality Gu (pure "energy mass," never carrying its
+    # own stats/identity over -- see gu_pet.REFINE_REQUIRED_GU_QUALITY's own comment) plus
+    # Soul Nourishing Pill/Soul Crystal catalysts into a blank Rank I-VII Gu Pet. -----------
 
     def gu_pet_refine_candidates(self, user_id: int):
-        """[(item_name, owned_quantity), ...] for every tiered Gu the player owns at least
-        gu_pet.REFINE_MIN_SACRIFICE copies of, strongest first -- same shape/reasoning as
+        """[(item_name, owned_quantity), ...] for every Immortal-quality Gu the player owns at
+        least gu_pet.REFINE_MIN_SACRIFICE copies of, strongest first -- same shape/reasoning as
         gu_upgrade_candidates (a big collection can blow past Discord's 25-option Select cap,
         so the strongest candidates should be the ones that survive the cut)."""
         inventory = self.db.get_inventory(user_id)
         candidates = []
         for item_name, qty in inventory.items():
-            family, _ = equipment.parse_gu_name(item_name)
-            if family is None or qty < gu_pet.REFINE_MIN_SACRIFICE:
+            family, quality = equipment.parse_gu_name(item_name)
+            if family is None or quality != gu_pet.REFINE_REQUIRED_GU_QUALITY or qty < gu_pet.REFINE_MIN_SACRIFICE:
                 continue
             candidates.append((item_name, qty))
         candidates.sort(key=lambda c: -equipment.gear_power_score(equipment.EQUIPMENT[c[0]]))
@@ -2059,18 +2059,17 @@ class GameManager:
         player = self.db.get_or_create_player(user_id, name)
         if not (gu_pet.MIN_RANK <= target_rank <= gu_pet.MAX_RANK):
             return {"ok": False, "reason": f"Gu Pet rank must be between {gu_pet.MIN_RANK} and {gu_pet.MAX_RANK}."}
-        required_refiner_rank = gu_pet.gu_refiner_rank_required(target_rank)
-        if player["gu_refiner_rank"] < required_refiner_rank:
-            return {
-                "ok": False,
-                "reason": f"Rank {target_rank} needs Gu Refiner rank **{professions.rank_name(required_refiner_rank)}** "
-                          f"(you're **{professions.rank_name(player['gu_refiner_rank'])}**) — study Gu Refiner with /study to advance.",
-            }
+        # No hard Gu Refiner rank gate on the target rank -- any player can attempt any pet
+        # rank at any Gu Refiner rank; being under-ranked for a hard target just tanks the
+        # success chance instead of blocking the attempt outright (see gu_pet.
+        # refine_success_chance's own comment for the full formula).
         if not (gu_pet.REFINE_MIN_SACRIFICE <= quantity <= gu_pet.REFINE_MAX_SACRIFICE):
-            return {"ok": False, "reason": f"You must sacrifice between {gu_pet.REFINE_MIN_SACRIFICE} and {gu_pet.REFINE_MAX_SACRIFICE} identical copies."}
-        family, _ = equipment.parse_gu_name(item_name)
+            return {"ok": False, "reason": f"You must sacrifice between {gu_pet.REFINE_MIN_SACRIFICE} and {gu_pet.REFINE_MAX_SACRIFICE} {gu_pet.REFINE_REQUIRED_GU_QUALITY} Gu."}
+        family, quality = equipment.parse_gu_name(item_name)
         if family is None:
             return {"ok": False, "reason": "That isn't a tiered Gu."}
+        if quality != gu_pet.REFINE_REQUIRED_GU_QUALITY:
+            return {"ok": False, "reason": f"Only **{gu_pet.REFINE_REQUIRED_GU_QUALITY}**-quality Gu can be sacrificed (that one was {quality})."}
         inventory = self.db.get_inventory(user_id)
         if inventory.get(item_name, 0) < quantity:
             return {"ok": False, "reason": f"You only own {inventory.get(item_name, 0)}x **{item_name}** (need {quantity})."}
@@ -2081,11 +2080,7 @@ class GameManager:
             return {"ok": False, "reason": f"Missing catalysts: {missing_text}."}
 
         rng = rng or random.Random()
-        chance = min(1.0, (
-            professions.craft_success_chance(player["gu_refiner_rank"])
-            + max(0, player["gu_refiner_rank"] - required_refiner_rank) * gu_pet.REFINE_RANK_ABOVE_REQUIRED_BONUS_PCT
-            + gu_pet.material_quality_bonus_pct(quantity)
-        ))
+        chance = gu_pet.refine_success_chance(player["gu_refiner_rank"], target_rank, quantity)
         success = rng.random() < chance
 
         self.db.remove_item(user_id, item_name, quantity)
@@ -2102,7 +2097,8 @@ class GameManager:
             flavor = "The ritual flares with unexpected power" if is_critical else "The ritual completes"
             message = (
                 f"✨ {flavor} — a blank **Rank {target_rank} ({gu_pet.rank_to_rarity(target_rank)})** Gu Pet stirs to life! "
-                f"Feed it once a day through `/gu_pet` to help it grow (needs {days_required} days)."
+                f"Feed it through `/gu_pet` (once/day) to help it grow (needs {days_required} days' worth of feeding — "
+                "feed more material per visit to cover several days at once)."
             )
             return {"ok": True, "outcome": outcome, "message": message, "pet_id": pet_id, "chance": chance}
 
@@ -2137,11 +2133,16 @@ class GameManager:
         self.db.set_active_gu_pet(user_id, pet_id)
 
     def feed_gu_pet(self, user_id: int, name: str, pet_id: int, item_name: str, quantity: int = 1) -> dict:
-        """One feed per real day (see gu_pet.FEED_COOLDOWN_SECONDS) while stage='growth' --
-        refused entirely once mature (see the Status tab's satiety upkeep instead) or once
-        already fed enough days to crystallize (see GameManager.crystallize_gu_pet, a later
-        phase, which is what actually consumes this milestone). Returns {"ok": False,
-        "reason": ...} or {"ok": True, "message", "days_fed", "days_required",
+        """One feed ACTION per real day (see gu_pet.FEED_COOLDOWN_SECONDS) while
+        stage='growth' -- refused entirely once mature (see the Status tab's satiety upkeep
+        instead) or once already fed enough days to crystallize (see GameManager.
+        crystallize_gu_pet, which is what actually consumes this milestone). quantity fed
+        advances growth_days_fed by that same amount (not a flat +1) -- feeding more in one
+        sitting shortens the total real-time span, still gated to once/day so it can't be
+        finished in a single instant; the ratio-shaping choice of WHICH category to feed stays
+        entirely up to the player either way. Auto-clamped to never consume more than the pet
+        still needs, so a big stockpile never gets wasted past the finish line. Returns
+        {"ok": False, "reason": ...} or {"ok": True, "message", "days_fed", "days_required",
         "ready_to_crystallize"}."""
         self.db.get_or_create_player(user_id, name)
         pet = self.db.get_gu_pet(pet_id)
@@ -2161,6 +2162,7 @@ class GameManager:
             return {"ok": False, "reason": "That can't be fed to a growing Gu Pet — try an Ore, Herb, Beast Material, Beast Core, or Pill."}
         if quantity < 1:
             return {"ok": False, "reason": "Quantity must be at least 1."}
+        quantity = min(quantity, pet["growth_days_required"] - pet["growth_days_fed"])
         owned = self.db.get_inventory(user_id).get(item_name, 0)
         if owned < quantity:
             return {"ok": False, "reason": f"You only own {owned}x **{item_name}** (need {quantity})."}
@@ -2186,7 +2188,7 @@ class GameManager:
         fed_totals = dict(pet["fed_totals"])
         fed_totals[category] = fed_totals.get(category, 0) + quantity
 
-        new_days_fed = pet["growth_days_fed"] + 1
+        new_days_fed = min(pet["growth_days_required"], pet["growth_days_fed"] + quantity)
         self.db.update_gu_pet(
             pet_id, stat_bonuses=stat_bonuses, fed_totals=fed_totals,
             growth_days_fed=new_days_fed, feed_streak_days=new_streak, last_fed_ts=now,
