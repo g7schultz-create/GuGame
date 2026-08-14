@@ -482,9 +482,21 @@ def roll_specialty_bonus(species_key: str, rank: int, rng: Optional[random.Rando
 # Grand Forge Beetle/Ink-Spitter Cicada/Balance-Furnace Toad/Unbound (the Cultivation-side
 # species) intentionally have no entry here -- their own specialty bonuses are the section
 # just above.
+# Verified against a real endgame player's own live stats (2026-08-14, "make sure pets provide
+# a meaningful dps increase") -- simulated resolve_attack across a range of defender DEF
+# values. The ORIGINAL values (bleed 0.08/crit_chance 0.03/crit_damage 0.10, armor_pen 0.12)
+# landed as low as +1.6-8% DPS at Rank I-II (combat_multiplier 1.0, the common case now that
+# roll_target_rank makes a low-rank pet the norm rather than a deliberate choice) -- felt like
+# a rounding error for something this expensive to acquire. Raised so even a freshly-hatched
+# Rank I-II pet lands solidly in the +9-30% range against a comparably-tiered opponent, while
+# Rank VII (combat_multiplier 3.0) climbs to +25-100%+, a real payoff for the investment.
+# Flame-Spit Mantis stays weak specifically against a LOW-DEF target even after this raise --
+# that's inherent to what armor penetration IS (nothing to penetrate), not a tuning gap; the
+# alternative (raising it enough to fix that one matchup) would make it absurd against a
+# high-DEF target instead.
 COMBAT_SPECIALTY_BASE_VALUES: Dict[str, Dict[str, float]] = {
-    SPECIES_VAMPIRIC_BEETLE: {"gu_pet_bleed_damage_pct": 0.08, "crit_chance_pct": 0.03, "crit_damage_pct": 0.10},
-    SPECIES_FLAME_SPIT_MANTIS: {"armor_penetration_pct": 0.12},
+    SPECIES_VAMPIRIC_BEETLE: {"gu_pet_bleed_damage_pct": 0.14, "crit_chance_pct": 0.05, "crit_damage_pct": 0.16},
+    SPECIES_FLAME_SPIT_MANTIS: {"armor_penetration_pct": 0.18},
 }
 # Crag-Shell Turtle's own "Automatically shields you when your HP drops low" role_text --
 # reuses apply_encounter_start_bonuses' EXISTING encounter-start shield mechanism (the same
