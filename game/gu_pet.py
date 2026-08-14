@@ -72,6 +72,69 @@ def rank_to_rarity(rank: int) -> str:
     return GU_PET_RANK_TO_RARITY[max(MIN_RANK, min(rank, MAX_RANK))]
 
 
+# -- Refinement (design doc sections 2-4) -- see GameManager.refine_gu_pet -----------------
+
+REFINE_MIN_SACRIFICE = 10
+REFINE_MAX_SACRIFICE = 20
+
+# Soul Nourishing Pill + Soul Crystal -- the SAME two catalyst items Nascent Soul Avatar
+# leveling already uses (see avatar.AVATAR_LEVEL_UP_RECIPE), scaled per TARGET pet rank with
+# the same tapering-multiplicative shape that recipe already uses, not per quantity sacrificed
+# (quantity sacrificed instead feeds the success roll's material_quality_bonus below).
+GU_PET_REFINE_CATALYST_RECIPE: Dict[int, Dict[str, int]] = {
+    1: {"Soul Nourishing Pill": 3, "Soul Crystal": 1},
+    2: {"Soul Nourishing Pill": 5, "Soul Crystal": 2},
+    3: {"Soul Nourishing Pill": 8, "Soul Crystal": 3},
+    4: {"Soul Nourishing Pill": 12, "Soul Crystal": 5},
+    5: {"Soul Nourishing Pill": 18, "Soul Crystal": 8},
+    6: {"Soul Nourishing Pill": 26, "Soul Crystal": 12},
+    7: {"Soul Nourishing Pill": 36, "Soul Crystal": 17},
+}
+
+
+def refine_catalyst_recipe(target_rank: int) -> Dict[str, int]:
+    return GU_PET_REFINE_CATALYST_RECIPE[max(MIN_RANK, min(target_rank, MAX_RANK))]
+
+
+# Success-formula bonus per Gu Refiner rank index above the minimum required for the
+# ATTEMPTED target rank (design doc section 3.1's own "(Refiner Level - Required Level) *
+# 5%" term) -- layered ON TOP of professions.craft_success_chance's own absolute-rank curve
+# (which already covers "base rate scales with rank" the way craft_gear/craft_pill do), so
+# this term specifically rewards being over-ranked for an easy target rather than double-
+# counting absolute rank twice.
+REFINE_RANK_ABOVE_REQUIRED_BONUS_PCT = 0.05
+
+# Material Quality Bonus (design doc section 3.1) -- scales with how many of the 10-20
+# allowed copies were actually sacrificed, 0% at the minimum up to this cap at the maximum.
+REFINE_MAX_MATERIAL_QUALITY_BONUS_PCT = 0.10
+
+
+def material_quality_bonus_pct(quantity: int) -> float:
+    span = REFINE_MAX_SACRIFICE - REFINE_MIN_SACRIFICE
+    return REFINE_MAX_MATERIAL_QUALITY_BONUS_PCT * (max(0, min(quantity, REFINE_MAX_SACRIFICE) - REFINE_MIN_SACRIFICE) / span)
+
+
+# Secondary banded roll splitting a success into Critical/Standard, or a failure into
+# Minor/Major (design doc section 3.2) -- same "roll, then a secondary banded roll" shape
+# accessories_data.DRAWBACK_ROLL_CHANCE already uses for its own secondary roll.
+REFINE_CRITICAL_SHARE_OF_SUCCESS = 0.15
+REFINE_MAJOR_FAILURE_SHARE_OF_FAILURE = 0.40
+
+# Critical success shaves this many days off the rolled growth window (floored at
+# GROWTH_DAYS_MIN) -- the design doc's own "reduced maturation-time requirement" option
+# (its sibling option, "expanded baseline Satiety Capacity," would need a per-pet satiety
+# cap field beyond this module's flat SATIETY_MAX, so this plan picks the one option that
+# fits the existing schema rather than both).
+CRITICAL_SUCCESS_GROWTH_DAYS_REDUCTION = 2
+
+# Major failure's temporary Qi-regen debuff (design doc section 3.2's "Aperture Backlash") --
+# reuses the existing buffs table's qi_multiplier_bonus mechanism with a negative value,
+# capped well short of -100% so total_multiplier can never go negative or zero.
+APERTURE_BACKLASH_QI_MULTIPLIER_PENALTY = -0.15
+APERTURE_BACKLASH_DURATION_SECONDS = 30 * 60
+MUTATED_GU_RESIDUE_ITEM_NAME = "Mutated Gu Residue"
+
+
 def gu_refiner_rank_required(target_rank: int) -> int:
     return GU_PET_RANK_REQUIRED[max(MIN_RANK, min(target_rank, MAX_RANK))]
 

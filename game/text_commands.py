@@ -92,7 +92,7 @@ _NO_ARG_COMMANDS = [
     "sect", "sect_list", "sect_leave", "sect_cancel_application", "avatar", "split_body", "tournament",
     "master", "sect_master", "dao_path", "transmute", "killer_move", "use_support_move", "verify",
     "companion", "dc", "search_forgotten_blessed_land", "teach", "essence_exchange", "white_heaven",
-    "black_heaven",
+    "black_heaven", "gu_pet",
 ]
 
 # Short aliases for the text-command interface (e.g. `i h` == `i hunt`) — every command gets
@@ -122,6 +122,7 @@ ALIASES = {
     "killer_move": ["km"], "use_support_move": ["usm"], "verify": ["v"],
     "search_forgotten_blessed_land": ["sfbl", "sf"],
     "teach": ["te"],
+    "gu_pet": ["gp"],
     "inheritance_ground": ["ig"],
     "white_heaven": ["wh"],
     "black_heaven": ["bh"],

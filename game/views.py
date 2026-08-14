@@ -503,7 +503,7 @@ class ProfileView(GameView):
             value = "Nothing — use `/study` to begin advancing a profession."
         embed.add_field(name="📖 Currently Studying", value=value, inline=False)
 
-        embed.set_footer(text="Miner/Gatherer/Farmer ranks boost gathering yield; Explorer rank improves /explore odds. Alchemist/Blacksmith/Gu Refiner crafting is coming soon.")
+        embed.set_footer(text="Miner/Gatherer/Farmer ranks boost gathering yield; Explorer rank improves /explore odds; Alchemist/Blacksmith/Gu Refiner rank boosts /alchemy, /blacksmith, and /gu_pet success chance.")
         return embed
 
     def _avatar_embed(self) -> discord.Embed:

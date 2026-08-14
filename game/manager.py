@@ -7,7 +7,7 @@ from typing import Optional
 
 from . import (
     accessories_data, accessories_gen, alchemy, avatar, avatar_gear, black_heaven, blacksmith, canon_gu, chargen,
-    combat, dao_companion, dao_paths, discovery_gen, equipment, exploration, gathering, gu_types,
+    combat, dao_companion, dao_paths, discovery_gen, equipment, exploration, gathering, gu_pet, gu_types,
     inheritance_ground_data, items, killer_move_gen, manual_data, manual_gen, monsters, professions, realms,
     search_data, sects, split_body, tournament, treasure_hunt, white_heaven, world_boss, world_regions,
 )
@@ -1977,6 +1977,110 @@ class GameManager:
         stones = equipment.gu_breakdown_value(item_name) * quantity
         self.db.add_spirit_stones(user_id, stones)
         return True, f"Broke down {quantity}x **{item_name}** for **{stones:,}** 🪙 spirit stones.", stones
+
+    # -- Gu Pet: the Gu Refiner profession's own crafting action (see game/gu_pet.py /
+    # /gu_pet) -- sacrifice 10-20 identical copies of one owned Gu (pure "energy mass," never
+    # carrying its own stats/identity over) plus Soul Nourishing Pill/Soul Crystal catalysts
+    # into a blank Rank I-VII Gu Pet. -----------------------------------------------------
+
+    def gu_pet_refine_candidates(self, user_id: int):
+        """[(item_name, owned_quantity), ...] for every tiered Gu the player owns at least
+        gu_pet.REFINE_MIN_SACRIFICE copies of, strongest first -- same shape/reasoning as
+        gu_upgrade_candidates (a big collection can blow past Discord's 25-option Select cap,
+        so the strongest candidates should be the ones that survive the cut)."""
+        inventory = self.db.get_inventory(user_id)
+        candidates = []
+        for item_name, qty in inventory.items():
+            family, _ = equipment.parse_gu_name(item_name)
+            if family is None or qty < gu_pet.REFINE_MIN_SACRIFICE:
+                continue
+            candidates.append((item_name, qty))
+        candidates.sort(key=lambda c: -equipment.gear_power_score(equipment.EQUIPMENT[c[0]]))
+        return candidates
+
+    def refine_gu_pet(self, user_id: int, name: str, item_name: str, quantity: int, target_rank: int, rng: Optional[random.Random] = None) -> dict:
+        """Returns {"ok": False, "reason": ...} on a validation refusal (never spends
+        anything), or {"ok": True, "outcome": "critical"|"standard"|"minor_failure"|
+        "major_failure", "message": ..., **outcome-specific fields} once the ritual actually
+        runs. Materials are ALWAYS consumed once validation passes (Minor Failure refunds the
+        sacrificed Gu specifically -- see below), matching craft_gear/craft_pill's own
+        "consume regardless of outcome" risk model."""
+        player = self.db.get_or_create_player(user_id, name)
+        if not (gu_pet.MIN_RANK <= target_rank <= gu_pet.MAX_RANK):
+            return {"ok": False, "reason": f"Gu Pet rank must be between {gu_pet.MIN_RANK} and {gu_pet.MAX_RANK}."}
+        required_refiner_rank = gu_pet.gu_refiner_rank_required(target_rank)
+        if player["gu_refiner_rank"] < required_refiner_rank:
+            return {
+                "ok": False,
+                "reason": f"Rank {target_rank} needs Gu Refiner rank **{professions.rank_name(required_refiner_rank)}** "
+                          f"(you're **{professions.rank_name(player['gu_refiner_rank'])}**) — study Gu Refiner with /study to advance.",
+            }
+        if not (gu_pet.REFINE_MIN_SACRIFICE <= quantity <= gu_pet.REFINE_MAX_SACRIFICE):
+            return {"ok": False, "reason": f"You must sacrifice between {gu_pet.REFINE_MIN_SACRIFICE} and {gu_pet.REFINE_MAX_SACRIFICE} identical copies."}
+        family, _ = equipment.parse_gu_name(item_name)
+        if family is None:
+            return {"ok": False, "reason": "That isn't a tiered Gu."}
+        inventory = self.db.get_inventory(user_id)
+        if inventory.get(item_name, 0) < quantity:
+            return {"ok": False, "reason": f"You only own {inventory.get(item_name, 0)}x **{item_name}** (need {quantity})."}
+        catalysts = gu_pet.refine_catalyst_recipe(target_rank)
+        missing = {mat: qty for mat, qty in catalysts.items() if inventory.get(mat, 0) < qty}
+        if missing:
+            missing_text = ", ".join(f"{qty}x {mat} (have {inventory.get(mat, 0)})" for mat, qty in missing.items())
+            return {"ok": False, "reason": f"Missing catalysts: {missing_text}."}
+
+        rng = rng or random.Random()
+        chance = min(1.0, (
+            professions.craft_success_chance(player["gu_refiner_rank"])
+            + max(0, player["gu_refiner_rank"] - required_refiner_rank) * gu_pet.REFINE_RANK_ABOVE_REQUIRED_BONUS_PCT
+            + gu_pet.material_quality_bonus_pct(quantity)
+        ))
+        success = rng.random() < chance
+
+        self.db.remove_item(user_id, item_name, quantity)
+        for mat, qty in catalysts.items():
+            self.db.remove_item(user_id, mat, qty)
+
+        if success:
+            is_critical = rng.random() < gu_pet.REFINE_CRITICAL_SHARE_OF_SUCCESS
+            days_required = gu_pet.growth_days_required(rng)
+            if is_critical:
+                days_required = max(gu_pet.GROWTH_DAYS_MIN, days_required - gu_pet.CRITICAL_SUCCESS_GROWTH_DAYS_REDUCTION)
+            pet_id = self.db.create_gu_pet(user_id, target_rank, days_required)
+            outcome = "critical" if is_critical else "standard"
+            flavor = "The ritual flares with unexpected power" if is_critical else "The ritual completes"
+            message = (
+                f"✨ {flavor} — a blank **Rank {target_rank} ({gu_pet.rank_to_rarity(target_rank)})** Gu Pet stirs to life! "
+                f"Feed it once a day through `/gu_pet` to help it grow (needs {days_required} days)."
+            )
+            return {"ok": True, "outcome": outcome, "message": message, "pet_id": pet_id, "chance": chance}
+
+        is_major = rng.random() < gu_pet.REFINE_MAJOR_FAILURE_SHARE_OF_FAILURE
+        if is_major:
+            self.db.add_buff(
+                user_id, "Aperture Backlash", gu_pet.APERTURE_BACKLASH_QI_MULTIPLIER_PENALTY,
+                gu_pet.APERTURE_BACKLASH_DURATION_SECONDS,
+            )
+            self.db.add_item(user_id, gu_pet.MUTATED_GU_RESIDUE_ITEM_NAME, 1)
+            message = (
+                f"💥 The ritual backfires violently — {quantity}x **{item_name}** and every catalyst are destroyed, "
+                f"and your dantian suffers **Aperture Backlash** (reduced Qi regen for "
+                f"{gu_pet.APERTURE_BACKLASH_DURATION_SECONDS // 60} minutes). A twisted **{gu_pet.MUTATED_GU_RESIDUE_ITEM_NAME}** is all that's left."
+            )
+            return {"ok": True, "outcome": "major_failure", "message": message, "chance": chance}
+
+        self.db.add_item(user_id, item_name, quantity)
+        message = (
+            f"💨 The ritual fizzles — the catalysts are consumed, but your {quantity}x **{item_name}** "
+            "are unharmed and refunded."
+        )
+        return {"ok": True, "outcome": "minor_failure", "message": message, "chance": chance}
+
+    def get_player_gu_pets(self, user_id: int) -> list:
+        return self.db.get_player_gu_pets(user_id)
+
+    def set_active_gu_pet(self, user_id: int, pet_id: Optional[int]):
+        self.db.set_active_gu_pet(user_id, pet_id)
 
     # -- Killer Move: assemble a core Gu + 10 component Gu into a procedurally-generated
     # active ability (see game/killer_move_gen.py / game/gu_types.py / /killer_move) --

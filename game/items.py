@@ -175,13 +175,27 @@ del _tier
 ITEMS["Soul Nourishing Pill"] = Item(
     name="Soul Nourishing Pill",
     category="Materials",
-    description="A pill distilled for a cultivator's Nascent Soul avatar. Feed it through /avatar to strengthen the avatar.",
+    description="A pill distilled for a cultivator's Nascent Soul avatar. Feed it through /avatar to strengthen the avatar, or sacrifice it as a catalyst in a Gu Refiner's /gu_pet refinement ritual.",
     subcategory="Avatar",
 )
 ITEMS["Soul Crystal"] = Item(
     name="Soul Crystal",
     category="Materials",
-    description="A crystallized shard of soul essence. Feed it through /avatar alongside Soul Nourishing Pills to level up the avatar.",
+    description="A crystallized shard of soul essence. Feed it through /avatar alongside Soul Nourishing Pills to level up the avatar, or sacrifice it as a catalyst in a Gu Refiner's /gu_pet refinement ritual.",
+    subcategory="Avatar",
+)
+# Gu Refiner's own Major Failure byproduct (see GameManager.refine_gu_pet /
+# gu_pet.MUTATED_GU_RESIDUE_ITEM_NAME) -- inert for now, matching this file's own "crafting
+# material for a future system" convention (use=None) rather than inventing a bonus
+# blacksmithing-ingredient mechanic disproportionate to one failure byproduct's value; sells
+# for real spirit stones via /sell immediately. Shelved under the same "Avatar" subcategory
+# Soul Nourishing Pill/Soul Crystal already use -- both are Gu-Refiner-adjacent leftover
+# materials, and reusing an existing subcategory avoids growing the shared subcategory list
+# (see feedback_shared_category_lists_row_budget.md's own warning about that).
+ITEMS["Mutated Gu Residue"] = Item(
+    name="Mutated Gu Residue",
+    category="Materials",
+    description="A twisted, unstable remnant left behind by a failed Gu Pet refinement. Worthless to feed, but worth real spirit stones to a buyer.",
     subcategory="Avatar",
 )
 

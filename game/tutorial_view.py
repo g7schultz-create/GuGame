@@ -253,7 +253,7 @@ class TutorialView(GameView):
             "`/explore` odds; Alchemist and Blacksmith rank boost your `/alchemy` and `/blacksmith` "
             "success chance.\n"
             "• Check `/profile`'s Professions tab, or `/cd`, for your current study progress.\n"
-            "• Gu Refiner can be studied too, but its crafting action is still coming soon."
+            "• Gu Refiner rank gates and boosts `/gu_pet`'s Refine action — see the **Gu Pet** tab."
         )
         return embed
 

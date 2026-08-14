@@ -6,11 +6,10 @@ you finish or you wait), starting around an hour per rank and stretching to two 
 the final rank.
 
 Miner/Gatherer/Farmer ranks scale gathering/harvest yield; Explorer rank improves
-/explore's odds of a better rarity band; Alchemist rank scales /alchemy's success chance
-(see craft_success_chance) — the first of the three crafting professions to have its rank
-actually do something. Blacksmith/Gu Refiner can be studied and ranked up like the rest,
-but still have no crafting action wired to their rank — that's a separate follow-up once
-their recipes are defined, same as Alchemist was until now.
+/explore's odds of a better rarity band; Alchemist/Blacksmith/Gu Refiner ranks all gate and
+scale their own real crafting action's success chance (see craft_success_chance and each of
+GameManager.craft_pill/craft_gear/refine_gu_pet) — every profession now has its rank actually
+do something.
 """
 
 from typing import Optional
@@ -18,8 +17,7 @@ from typing import Optional
 PROFESSIONS = ["Miner", "Gatherer", "Alchemist", "Blacksmith", "Gu Refiner", "Explorer", "Farmer"]
 
 # Matches the emoji each profession's own action command already uses (⛏️ /mine, 🌿
-# /gather, ⚗️ /alchemy, 🔨 /blacksmith, 🧭 /explore, 🌾 /farm) — Gu Refiner has no crafting
-# action wired up yet (see the module docstring), so it borrows the general Gu emoji.
+# /gather, ⚗️ /alchemy, 🔨 /blacksmith, 🧭 /explore, 🌾 /farm, 🐛 /gu_pet).
 PROFESSION_EMOJI = {
     "Miner": "⛏️", "Gatherer": "🌿", "Alchemist": "⚗️", "Blacksmith": "🔨",
     "Gu Refiner": "🐛", "Explorer": "🧭", "Farmer": "🌾",

@@ -18,6 +18,7 @@ from .join_view import JoinView
 from .trading import TradeRequestView
 from .equipment_view import EquipmentView
 from .avatar_view import AvatarView
+from .gu_pet_view import GuPetView
 from .split_body_view import SplitBodyView
 from .hunt import AbandonHuntView, HuntView
 from .pvp_view import PvPView
@@ -670,6 +671,22 @@ class GameCog(commands.Cog):
         view = GuCollectionView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
+
+    # Deliberately its own top-level command, not a /gu subcommand -- this bot has no
+    # app_commands.Group/subcommand precedent anywhere (every multi-action feature is one
+    # command opening a tabbed view), and /gu above is already a separate, unrelated
+    # read-only Gu-collection viewer.
+    @app_commands.command(name="gu_pet", description="Refine, feed, and manage your Gu Pet companion")
+    @app_commands.guilds(GUILD)
+    async def gu_pet(self, interaction: discord.Interaction):
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
+        if not player["character_confirmed"]:
+            await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
+            return
+        view = GuPetView(interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
+        view.message = await interaction.original_response()
 
     @app_commands.command(name="verify", description="Assign yourself a Discord role matching your current cultivation rank")
     @app_commands.guilds(GUILD)
