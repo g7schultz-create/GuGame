@@ -8,6 +8,17 @@ GUILD_ID = 1529945910837117169
 TOKEN = os.getenv("DISCORD_TOKEN")
 DB_PATH = os.getenv("DB_PATH", "game.db")
 
+# Gu Pet AI portrait generation (see game/gu_pet_images.py / /gu_pet) -- optional-with-
+# fallback, like the announce-channel vars below, NOT TOKEN's hard-crash shape: a missing key
+# must degrade to "pets still work, no portrait", never crash the bot.
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# Generated portraits are disposable, regenerable content (unlike DB_PATH's own irreplaceable
+# player data), so this is safe to default alongside it and auto-create at boot without ever
+# being git-tracked. Railway's own /data Volume (see DB_PATH) covers this the same way.
+IMAGE_CACHE_DIR = os.getenv("IMAGE_CACHE_DIR", os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), "gu_pet_images"))
+os.makedirs(IMAGE_CACHE_DIR, exist_ok=True)
+
 # World Boss spawn/defeat announcements (see GameCog.world_boss_tick in cog.py) -- optional;
 # if unset, world bosses still spawn/respawn on schedule, they just don't get a proactive
 # channel announcement. Set WORLD_BOSS_ANNOUNCE_CHANNEL_ID in the environment to a real

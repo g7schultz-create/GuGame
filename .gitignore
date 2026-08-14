@@ -6,3 +6,4 @@ __pycache__/
 *.pyc
 .claude/
 bot_restart*.log
+gu_pet_images/

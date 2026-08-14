@@ -1,13 +1,17 @@
+import asyncio
 import dataclasses
 import json
 import math
+import os
 import random
 import time
 from typing import Optional
 
+from config import IMAGE_CACHE_DIR
+
 from . import (
     accessories_data, accessories_gen, alchemy, avatar, avatar_gear, black_heaven, blacksmith, canon_gu, chargen,
-    combat, dao_companion, dao_paths, discovery_gen, equipment, exploration, gathering, gu_pet, gu_types,
+    combat, dao_companion, dao_paths, discovery_gen, equipment, exploration, gathering, gu_pet, gu_pet_images, gu_types,
     inheritance_ground_data, items, killer_move_gen, manual_data, manual_gen, monsters, professions, realms,
     search_data, sects, split_body, tournament, treasure_hunt, white_heaven, world_boss, world_regions,
 )
@@ -2271,6 +2275,48 @@ class GameManager:
         species = gu_pet.SPECIES[species_key]
         message = f"✨ {species.emoji} Your Gu Pet crystallizes into a **{species.name}** ({path})! {species.role_text}"
         return {"ok": True, "message": message, "species": species_key, "path": path}
+
+    async def get_or_create_gu_pet_image(self, pet_id: int) -> Optional[str]:
+        """The only async method on GameManager -- see game/gu_pet_images.py's own module
+        docstring for why generate_pet_image needs a genuine await rather than asyncio.
+        to_thread. The DB reads/writes in here still go through asyncio.to_thread (blocking
+        sqlite calls, same as every other DB access in this codebase) -- only the actual
+        network call is awaited directly. Checks the shared cache (Common/Uncommon/Rare) or
+        the pet's own image_path (Epic+) first; on a miss, generates, writes the PNG to
+        config.IMAGE_CACHE_DIR, and records the path. Returns None (never raises) on any
+        failure along the way -- a missing portrait must never block anything about owning or
+        using a Gu Pet."""
+        pet = await asyncio.to_thread(self.db.get_gu_pet, pet_id)
+        if pet is None or pet["species"] is None:
+            return None
+        unique = gu_pet_images.should_generate_unique_image(pet)
+        if unique:
+            if pet["image_path"] and os.path.exists(pet["image_path"]):
+                return pet["image_path"]
+        else:
+            cache_key = gu_pet_images.get_pet_cache_key(pet)
+            cached_path = await asyncio.to_thread(self.db.get_cached_gu_pet_image, cache_key)
+            if cached_path and os.path.exists(cached_path):
+                return cached_path
+
+        image_bytes = await gu_pet_images.generate_pet_image(pet)
+        if image_bytes is None:
+            return None
+
+        safe_key = gu_pet_images.get_pet_cache_key(pet).replace("|", "_").replace(" ", "-")
+        filename = f"gu_pet_{pet_id}.png" if unique else f"gu_pet_shared_{safe_key}.png"
+        path = os.path.join(IMAGE_CACHE_DIR, filename)
+        try:
+            with open(path, "wb") as f:
+                f.write(image_bytes)
+        except OSError:
+            return None
+
+        if unique:
+            await asyncio.to_thread(self.db.update_gu_pet, pet_id, image_path=path)
+        else:
+            await asyncio.to_thread(self.db.set_cached_gu_pet_image, cache_key, path)
+        return path
 
     def _settle_gu_pet_satiety(self, pet: Optional[dict]) -> Optional[dict]:
         """Lazy time-based settlement, mirroring GameDatabase.settle_qi's own idiom (no

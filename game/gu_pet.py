@@ -472,3 +472,41 @@ def satiety_band(satiety: float) -> Tuple[float, str]:
 # something valuable.
 MODE_SWITCH_COOLDOWN_SECONDS = 10 * 60
 MODE_SWITCH_FEE_SPIRIT_STONES = 50
+
+
+# -- AI portrait flavor traits (see game/gu_pet_images.py's build_pet_prompt) ------------
+
+# Neither source spec defines where an image prompt's element/color-palette/temperament
+# should come from -- these are small fixed word-bank tables derived from species+path,
+# the same idiom accessories_data.py's own NAME_MATERIALS/NAME_CONCEPTS use for accessory/
+# artifact name generation, rather than a separate trait-roll system.
+FLAVOR_ELEMENT: Dict[str, str] = {
+    SPECIES_GRAND_FORGE_BEETLE: "earth and molten metal",
+    SPECIES_INK_SPITTER_CICADA: "ink and starlight",
+    SPECIES_BALANCE_FURNACE_TOAD: "balanced yin-yang qi",
+    SPECIES_UNBOUND: "raw, undirected spirit qi",
+    SPECIES_VAMPIRIC_BEETLE: "crimson blood qi",
+    SPECIES_FLAME_SPIT_MANTIS: "searing flame",
+    SPECIES_CRAG_SHELL_TURTLE: "ancient stone",
+}
+FLAVOR_COLOR_PALETTE: Dict[str, str] = {
+    SPECIES_GRAND_FORGE_BEETLE: "burnished bronze and ember-orange",
+    SPECIES_INK_SPITTER_CICADA: "midnight indigo and pale jade",
+    SPECIES_BALANCE_FURNACE_TOAD: "amber and deep teal",
+    SPECIES_UNBOUND: "shifting silver-grey",
+    SPECIES_VAMPIRIC_BEETLE: "black carapace veined with crimson",
+    SPECIES_FLAME_SPIT_MANTIS: "obsidian and molten gold",
+    SPECIES_CRAG_SHELL_TURTLE: "mossy grey stone and jade",
+}
+FLAVOR_TEMPERAMENT_BY_PATH: Dict[str, str] = {
+    PATH_CULTIVATION: "serene and contemplative",
+    PATH_COMBAT: "fierce and battle-worn",
+}
+# Rank-scaled framing, echoing GU_PET_RANK_TO_RARITY's own 7-tier ladder without duplicating
+# its wording -- a Rank I pet reads as freshly hatched, a Rank VII pet as a legend.
+FLAVOR_RANK_INTENSITY: Dict[int, str] = {
+    1: "a young, newly-hatched", 2: "a young, newly-hatched",
+    3: "a matured", 4: "a powerful, battle-tested",
+    5: "a powerful, battle-tested", 6: "an ancient, legendary",
+    7: "a mythical, world-shaking",
+}

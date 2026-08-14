@@ -7,6 +7,12 @@ the active pet's bonuses actually apply, see GameManager.compute_equipment_bonus
 phase). Mode tab (Phase 5): flips the ACTIVE pet between Combat/Cultivation Mode (see
 GameManager.toggle_gu_pet_mode) -- see game/gu_pet.py's own module docstring for the full
 lifecycle.
+
+AI portrait reveal (Phase 8, see game/gu_pet_images.py): a successful Crystallize fires a
+fire-and-forget asyncio.create_task that generates (or reuses a cached) portrait a few
+seconds later and edits the already-sent message in place -- see _resolve_gu_pet_portrait.
+Persistent portrait display on the Status tab (a full gallery/codex browser) is a deliberate
+scope cut, same as the source spec's own "lower priority" framing.
 """
 
 import asyncio
@@ -345,10 +351,35 @@ class GuPetView(GameView):
             self.game.crystallize_gu_pet, self.user_id, self.display_name, self.selected_feed_pet_id,
         )
         self.last_result = result.get("reason") or result.get("message")
+        crystallized_pet_id = self.selected_feed_pet_id if result.get("ok") else None
         self.selected_feed_pet_id = None  # this pet just left the "growing" list entirely
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
+        if crystallized_pet_id is not None:
+            # Fire-and-forget AI portrait reveal (see game/gu_pet_images.py) -- species/path
+            # only exist from THIS moment on, so crystallization is the earliest a portrait
+            # prompt can be built at all. Called from this async handler on the main thread,
+            # matching every other asyncio.create_task call site in this codebase (never via
+            # asyncio.to_thread, which requires a running loop on the CURRENT thread).
+            asyncio.create_task(self._resolve_gu_pet_portrait(crystallized_pet_id))
+
+    async def _resolve_gu_pet_portrait(self, pet_id: int):
+        """Resolves a few seconds after _on_crystallize's own response already went out --
+        generates (or reuses a cached) AI portrait and edits the message in place via
+        attachment://. Silently does nothing if OPENAI_API_KEY is unset, the request fails,
+        or the view's message isn't available for any reason -- a missing portrait must never
+        surface as an error to the player (see game/gu_pet_images.py's own module docstring)."""
+        image_path = await self.game.get_or_create_gu_pet_image(pet_id)
+        if image_path is None or self.message is None:
+            return
+        try:
+            embed = self.message.embeds[0] if self.message.embeds else discord.Embed(title="🐛 Gu Pet")
+            embed.set_image(url="attachment://gu_pet_portrait.png")
+            file = discord.File(image_path, filename="gu_pet_portrait.png")
+            await self.message.edit(embed=embed, attachments=[file])
+        except discord.HTTPException:
+            pass
 
     async def _on_pick_status_pet(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 1)
