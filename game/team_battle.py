@@ -76,6 +76,11 @@ class RaidEnemy:
         # doesn't stack" shape as Fire Dao Path's above, ticked alongside it in Phase 1.5.
         self.sunfire_burn_damage_per_tick = 0
         self.sunfire_burn_ticks_remaining = 0
+        # Vampiric Beetle Gu Pet's own bleed DoT (see gu_pet.COMBAT_SPECIALTY_BASE_VALUES'
+        # gu_pet_bleed_damage_pct) -- a third, independent burn-like source alongside Fire Dao
+        # Path/Sunfire above, same "refreshes, doesn't stack" shape, ticked alongside them.
+        self.gu_pet_bleed_damage_per_tick = 0
+        self.gu_pet_bleed_ticks_remaining = 0
         # Blood Fang Wolf-style enrage (monster.enrage_atk_pct_per_stack/enrage_stack_cap) --
         # grows whenever EITHER side loses HP to this specific enemy (see Phase 1 and
         # _resolve_enemy_hit), boosts this enemy's own str_multiplier in Phase 3.
@@ -645,6 +650,15 @@ class TeamBattleEngine:
                         target.sunfire_burn_damage_per_tick = tick_damage
                         target.sunfire_burn_ticks_remaining = dao_paths.FIRE_BURN_TICKS
                         self._log(f"☀️ **{p['name']}**'s sunfire catches hold of {target.monster.name}!")
+                    # Vampiric Beetle Gu Pet: same "refreshes, doesn't stack" shape as Fire Dao
+                    # Path/Sunfire above -- a third, independent DoT source, ticked in Phase 1.66.
+                    gu_pet_bleed_pct = bonuses.get("gu_pet_bleed_damage_pct", 0)
+                    if gu_pet_bleed_pct > 0 and target.hp > 0:
+                        tick_damage = dao_paths.fire_burn_tick_damage(result.damage, gu_pet_bleed_pct)
+                        if tick_damage > 0:
+                            target.gu_pet_bleed_damage_per_tick = tick_damage
+                            target.gu_pet_bleed_ticks_remaining = dao_paths.FIRE_BURN_TICKS
+                            self._log(f"🩸 **{p['name']}**'s Gu Pet's bleed catches hold of {target.monster.name}!")
                     if target.hp <= 0:
                         self._log(f"💥 {target.monster.name} is defeated!")
                         self._on_enemy_defeated(target)
@@ -701,6 +715,19 @@ class TeamBattleEngine:
             enemy.hp -= burn_damage
             enemy.sunfire_burn_ticks_remaining -= 1
             self._log(f"☀️ {enemy.monster.name} burns in sunfire for {burn_damage} damage!")
+            if enemy.hp <= 0:
+                self._log(f"💥 {enemy.monster.name} is defeated!")
+                self._on_enemy_defeated(enemy)
+
+        # Phase 1.61: Vampiric Beetle Gu Pet bleed ticks -- same shape as Phase 1.5/1.6 above,
+        # a third, independently-ticking damage pool.
+        for enemy in self.enemies:
+            if enemy.gu_pet_bleed_ticks_remaining <= 0 or not enemy.alive:
+                continue
+            bleed_damage = min(enemy.hp, enemy.gu_pet_bleed_damage_per_tick)
+            enemy.hp -= bleed_damage
+            enemy.gu_pet_bleed_ticks_remaining -= 1
+            self._log(f"🩸 {enemy.monster.name} bleeds for {bleed_damage} damage!")
             if enemy.hp <= 0:
                 self._log(f"💥 {enemy.monster.name} is defeated!")
                 self._on_enemy_defeated(enemy)

@@ -425,6 +425,7 @@ SPECIAL_STAT_TEXT = {
     # Status tab's equipment.describe_stat_bonuses call).
     "gear_budget_bonus_pct": lambda v: f"+{v * 100:.1f}% Blacksmith Gear Budget",
     "manual_rarity_bonus_pct": lambda v: f"+{v * 100:.1f}% Manual Rarity Odds",
+    "gu_pet_bleed_damage_pct": lambda v: f"+{v * 100:.0f}% Bleed Damage",
 }
 
 

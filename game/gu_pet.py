@@ -398,6 +398,35 @@ def roll_specialty_bonus(species_key: str, rank: int, rng: Optional[random.Rando
     return {}
 
 
+# -- Combat Mode specialty bonuses (design doc section 10) ------------------------------
+
+# Unlike the Cultivation-side specialty bonuses above (rolled ONCE at crystallization, into
+# the pet's own stat_bonuses), these are a FIXED per-species base value scaled LIVE by
+# GU_PET_RANK_SCALING[rank]["combat_multiplier"] and the current satiety multiplier at
+# consumption time (see GameManager.compute_equipment_bonuses' own Combat-Mode Gu Pet block)
+# -- no RNG roll needed since combat_multiplier already carries the rank-scaling job.
+# gu_pet_bleed_damage_pct is deliberately a NEW, distinctly-named key from monsters.py's own
+# bleed_damage_pct (an ability MONSTERS use against players, the opposite direction) -- see
+# hunt.py/team_battle.py/tournament.py's own Gu Pet bleed-tick blocks, which reuse
+# dao_paths.fire_burn_tick_damage/FIRE_BURN_TICKS's exact tick-engine shape (that constant is
+# the shared tick-count for every DoT-style effect in this codebase, not fire-specific --
+# Blazing Glory Sunfire Physique's own independent burn already reuses it the same way).
+# Grand Forge Beetle/Ink-Spitter Cicada/Balance-Furnace Toad/Unbound (the Cultivation-side
+# species) intentionally have no entry here -- their own specialty bonuses are the section
+# just above.
+COMBAT_SPECIALTY_BASE_VALUES: Dict[str, Dict[str, float]] = {
+    SPECIES_VAMPIRIC_BEETLE: {"gu_pet_bleed_damage_pct": 0.08, "crit_chance_pct": 0.03, "crit_damage_pct": 0.10},
+    SPECIES_FLAME_SPIT_MANTIS: {"armor_penetration_pct": 0.12},
+}
+# Crag-Shell Turtle's own "Automatically shields you when your HP drops low" role_text --
+# reuses apply_encounter_start_bonuses' EXISTING encounter-start shield mechanism (the same
+# one accessories with an encounter_shield effect already grant) instead of building a new
+# HP-threshold proc system from scratch, same "adapt to what already exists, note the trade-
+# off" style this codebase's own accessories_data.py uses throughout.
+TURTLE_SHIELD_DEF_PCT_BASE = 0.15
+TURTLE_SHIELD_DURATION_SECONDS = 180
+
+
 # -- Satiety (design doc sections 11-12) -------------------------------------------------
 
 # (min_inclusive, max_inclusive, output_multiplier, label) -- checked top-down, first match

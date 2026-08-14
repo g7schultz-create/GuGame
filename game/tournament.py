@@ -92,6 +92,10 @@ def run_battle_royale(participants: list, rng: Optional[random.Random] = None) -
     # per_tick, ticks_remaining], seeded/refreshed on a landed hit, ticked once per round
     # after every attacker's turn (see the burn-tick block below).
     burn_state: dict = {}
+    # Vampiric Beetle Gu Pet's own bleed DoT (see gu_pet.COMBAT_SPECIALTY_BASE_VALUES'
+    # gu_pet_bleed_damage_pct) -- same shape as burn_state above, a second independent
+    # damage-over-time pool (see the bleed-tick block below).
+    gu_pet_bleed_state: dict = {}
     events, eliminated_order, rounds_used = [], [], 0
     while len(alive) > 1 and rounds_used < TOURNAMENT_MAX_ROUNDS:
         rounds_used += 1
@@ -114,10 +118,16 @@ def run_battle_royale(participants: list, rng: Optional[random.Random] = None) -
                     tick_damage = dao_paths.fire_burn_tick_damage(result.damage, fire_pct)
                     if tick_damage > 0:
                         burn_state[target_id] = [tick_damage, dao_paths.FIRE_BURN_TICKS]
+                gu_pet_bleed_pct = attacker["snapshot"]["special"].get("gu_pet_bleed_damage_pct", 0)
+                if gu_pet_bleed_pct > 0 and defender["hp"] > 0:
+                    tick_damage = dao_paths.fire_burn_tick_damage(result.damage, gu_pet_bleed_pct)
+                    if tick_damage > 0:
+                        gu_pet_bleed_state[target_id] = [tick_damage, dao_paths.FIRE_BURN_TICKS]
                 if defender["hp"] <= 0:
                     eliminated_order.append(target_id)
                     del alive[target_id]
                     burn_state.pop(target_id, None)
+                    gu_pet_bleed_state.pop(target_id, None)
 
         # Fire Dao Path burn ticks -- once per round, after every attacker's turn. Stops the
         # instant only 1 combatant remains (same invariant the attack loop above already
@@ -143,6 +153,30 @@ def run_battle_royale(participants: list, rng: Optional[random.Random] = None) -
                     burn_state.pop(target_id, None)
                 else:
                     burn_state[target_id][1] = ticks_remaining
+
+        # Vampiric Beetle Gu Pet bleed ticks -- same shape as the Fire Dao Path burn ticks
+        # just above, a second independent damage-over-time pool.
+        for target_id in list(gu_pet_bleed_state.keys()):
+            if len(alive) <= 1:
+                break
+            if target_id not in alive:
+                gu_pet_bleed_state.pop(target_id, None)
+                continue
+            tick_damage, ticks_remaining = gu_pet_bleed_state[target_id]
+            defender = alive[target_id]
+            actual = min(defender["hp"], tick_damage)
+            defender["hp"] -= actual
+            events.append(f"Round {rounds_used}: {defender['name']} bleeds for {actual:.0f} damage.")
+            if defender["hp"] <= 0:
+                eliminated_order.append(target_id)
+                del alive[target_id]
+                gu_pet_bleed_state.pop(target_id, None)
+            else:
+                ticks_remaining -= 1
+                if ticks_remaining <= 0:
+                    gu_pet_bleed_state.pop(target_id, None)
+                else:
+                    gu_pet_bleed_state[target_id][1] = ticks_remaining
 
     capped = len(alive) > 1
     if capped:

@@ -1607,6 +1607,11 @@ class GameManager:
         # unread in effect_params under several of these items (a live dead-effect bug fixed
         # 2026-08-13; see that method's own docstring).
         "search_recharge_reduction_pct",
+        # Gu Pet (see game/gu_pet.py / /gu_pet) -- Vampiric Beetle's own Combat-Mode bleed DoT
+        # (see hunt.py/team_battle.py/tournament.py's own tick blocks, reusing dao_paths.
+        # fire_burn_tick_damage's exact engine). Deliberately distinct from monsters.py's own
+        # bleed_damage_pct, which is a MONSTER ability against players, the opposite direction.
+        "gu_pet_bleed_damage_pct",
     )
 
     # A manual's essence_recovery_pct (see manual_view.EFFECT_LABELS) is the exact same
@@ -1809,6 +1814,25 @@ class GameManager:
                         stats["hp"] = stats.get("hp", 0) + player_row["max_hp"] * scaled
                     elif stat in special:
                         special[stat] += scaled
+            # Combat Mode's own counterpart -- Vampiric Beetle/Flame-Spit Mantis's FIXED
+            # per-species base values (see gu_pet.COMBAT_SPECIALTY_BASE_VALUES), scaled by
+            # this pet's own rank combat_multiplier AND satiety, unlike the Cultivation block
+            # above which reads real rolled/fed values straight off the pet's own
+            # stat_bonuses. Read here every attack (hunt.py/team_battle.py call
+            # compute_equipment_bonuses fresh per swing, not a stale encounter-start
+            # snapshot), so armor_penetration_pct/crit_chance_pct/crit_damage_pct reach
+            # combat.resolve_attack with zero new combat code -- gu_pet_bleed_damage_pct
+            # additionally needs its own seed+tick engine (see hunt.py/team_battle.py/
+            # tournament.py) since bleed isn't a resolve_attack kwarg the way crit/armor-pen
+            # are. Crag-Shell Turtle has no entry in COMBAT_SPECIALTY_BASE_VALUES -- its own
+            # shield rides apply_encounter_start_bonuses instead (see
+            # _drain_active_gu_pet_combat_dispatch).
+            elif pet and pet["stage"] == gu_pet.STAGE_MATURE and pet["mode"] == gu_pet.MODE_COMBAT:
+                satiety_mult, _ = gu_pet.satiety_band(pet["satiety"])
+                combat_mult = gu_pet.rank_scaling(pet["rank"])["combat_multiplier"]
+                for stat, base_value in gu_pet.COMBAT_SPECIALTY_BASE_VALUES.get(pet["species"], {}).items():
+                    if stat in special:
+                        special[stat] += base_value * combat_mult * satiety_mult
         return {"stats": stats, **special}
 
     # -- Spirit Severing Dao Paths (see game/dao_paths.py / /dao_path, /transmute) ------------
@@ -2313,10 +2337,15 @@ class GameManager:
         return {"ok": True, "message": f"{emoji} Your Gu Pet switches to **{label} Mode**.", "mode": new_mode}
 
     def _drain_active_gu_pet_combat_dispatch(self, user_id: int, player: Optional[dict] = None):
-        """Combat Mode's own flat per-dispatch satiety drain (see apply_encounter_start_
-        bonuses, the single "once per new encounter" hook this is threaded into). Settles the
-        pet first (see _settle_gu_pet_satiety) so the time anchor stays fresh even for a pet
-        that's dispatched often but never has its Status tab opened."""
+        """Combat Mode's own per-dispatch Gu Pet upkeep (see apply_encounter_start_bonuses,
+        the single "once per new encounter" hook this rides): drains a flat amount of satiety
+        (see gu_pet.SATIETY_DRAIN_PER_COMBAT_DISPATCH), settling the pet first (see
+        _settle_gu_pet_satiety) so the time anchor stays fresh even for a pet that's
+        dispatched often but never has its Status tab opened. Also grants Crag-Shell Turtle's
+        own "shields you" role_text here -- reuses the SAME encounter-start shield mechanism
+        accessories with an encounter_shield effect already grant (see
+        apply_encounter_start_bonuses' own add_buff call just above its call to this method),
+        rather than building a new HP-threshold proc system from scratch."""
         player = player or self.db.get_player_row(user_id)
         if not player or not player["active_gu_pet_id"]:
             return
@@ -2328,6 +2357,15 @@ class GameManager:
             return
         new_satiety = max(0.0, pet["satiety"] - gu_pet.SATIETY_DRAIN_PER_COMBAT_DISPATCH)
         self.db.update_gu_pet(pet["pet_id"], satiety=new_satiety)
+        if pet["species"] == gu_pet.SPECIES_CRAG_SHELL_TURTLE:
+            satiety_mult, _ = gu_pet.satiety_band(new_satiety)
+            combat_mult = gu_pet.rank_scaling(pet["rank"])["combat_multiplier"]
+            def_bonus_pct = gu_pet.TURTLE_SHIELD_DEF_PCT_BASE * combat_mult * satiety_mult
+            if def_bonus_pct > 0:
+                self.db.add_buff(
+                    user_id, "Crag-Shell Turtle's Shell", 0, gu_pet.TURTLE_SHIELD_DURATION_SECONDS,
+                    def_bonus=def_bonus_pct * 100,
+                )
 
     # -- Killer Move: assemble a core Gu + 10 component Gu into a procedurally-generated
     # active ability (see game/killer_move_gen.py / game/gu_types.py / /killer_move) --

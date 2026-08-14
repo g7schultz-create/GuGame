@@ -160,6 +160,12 @@ class HuntView(GameView):
         # stack, on every landed hit" shape, ticked alongside it in _apply_pending_burn_tick.
         self._sunfire_burn_damage_per_tick = 0
         self._sunfire_burn_ticks_remaining = 0
+        # Vampiric Beetle Gu Pet's own bleed DoT (see gu_pet.COMBAT_SPECIALTY_BASE_VALUES'
+        # gu_pet_bleed_damage_pct) -- a third, independent burn-like source alongside Fire Dao
+        # Path/Sunfire above, same "refreshes, doesn't stack, on every landed hit" shape,
+        # ticked alongside them in _apply_pending_gu_pet_bleed_tick.
+        self._gu_pet_bleed_damage_per_tick = 0
+        self._gu_pet_bleed_ticks_remaining = 0
         # Uncommon/Rare-tier physique combat state (see character_data.py for the families).
         self._first_empower_discounted = False  # Thunder Muscle family
         self._flee_reroll_used = False  # Void family
@@ -329,11 +335,25 @@ class HuntView(GameView):
         if self.monster_hp <= 0:
             self._handle_victory()
 
+    def _apply_pending_gu_pet_bleed_tick(self):
+        """Vampiric Beetle Gu Pet: a third, independent DoT source from Fire Dao Path/Sunfire
+        above -- seeded on a landed hit (see _do_attack), ticks once per round the same way."""
+        if self._gu_pet_bleed_ticks_remaining <= 0 or self.monster_hp <= 0:
+            return
+        damage = min(self.monster_hp, self._gu_pet_bleed_damage_per_tick)
+        self.monster_hp -= damage
+        self._gu_pet_bleed_ticks_remaining -= 1
+        self._log_line(f"🩸 {self.monster.name} bleeds for {damage} damage!")
+        if self.monster_hp <= 0:
+            self._handle_victory()
+
     def _finish_round(self):
         if self.status == "fighting":
             self._apply_pending_burn_tick()
         if self.status == "fighting":
             self._apply_pending_sunfire_tick()
+        if self.status == "fighting":
+            self._apply_pending_gu_pet_bleed_tick()
         if self.status == "fighting":
             self.round += 1
             if self.inspire_rounds_remaining > 0:
@@ -570,6 +590,16 @@ class HuntView(GameView):
                 self._sunfire_burn_damage_per_tick = tick_damage
                 self._sunfire_burn_ticks_remaining = dao_paths.FIRE_BURN_TICKS
                 self._log_line(f"☀️ Sunfire catches hold of {self.monster.name}!")
+            # Vampiric Beetle Gu Pet: same "refreshes, doesn't stack, on every landed hit"
+            # shape as Fire Dao Path/Sunfire above -- a third, independent DoT source (see
+            # _gu_pet_bleed_damage_per_tick/_apply_pending_gu_pet_bleed_tick).
+            gu_pet_bleed_pct = bonuses.get("gu_pet_bleed_damage_pct", 0)
+            if gu_pet_bleed_pct > 0 and self.monster_hp > 0:
+                tick_damage = dao_paths.fire_burn_tick_damage(result.damage, gu_pet_bleed_pct)
+                if tick_damage > 0:
+                    self._gu_pet_bleed_damage_per_tick = tick_damage
+                    self._gu_pet_bleed_ticks_remaining = dao_paths.FIRE_BURN_TICKS
+                    self._log_line(f"🩸 Your Gu Pet's bleed catches hold of {self.monster.name}!")
             # Void Burial Gu / Nightmare Web Gu (see content/canon_gu_black_heaven.py) --
             # freeze_chance_pct is additive on top of any class-ability freeze_chance already
             # passed in (e.g. Frostbinder's own Freeze action), not a replacement, so the two
