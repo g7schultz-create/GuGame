@@ -31,6 +31,7 @@ class GuPetView(GameView):
         self.selected_feed_pet_id: int = None
         self.selected_feed_item: str = None
         self.selected_status_pet_id: int = None
+        self.selected_status_feed_item: str = None
         self.last_result: str = None
         self._build_components()
 
@@ -204,6 +205,36 @@ class GuPetView(GameView):
         button.callback = self._on_set_active_pet
         self.add_item(button)
 
+        selected_pet = next((p for p in pets if p["pet_id"] == self.selected_status_pet_id), None)
+        if selected_pet is not None and selected_pet["stage"] == gu_pet.STAGE_MATURE and selected_pet["satiety"] < gu_pet.SATIETY_MAX:
+            required_tier = gu_pet.rank_scaling(selected_pet["rank"])["satiety_material_tier"]
+            feedable = [c for c in self.game.gu_pet_feedable_inventory(self.user_id) if c[3] == required_tier]
+            if self.selected_status_feed_item is None or not any(c[0] == self.selected_status_feed_item for c in feedable):
+                self.selected_status_feed_item = feedable[0][0] if feedable else None
+            feed_options = [
+                discord.SelectOption(
+                    label=item_name[:100], value=item_name,
+                    description=f"Own {qty} — {category.replace('_', ' ').title()}, Tier {tier}"[:100],
+                    default=(item_name == self.selected_status_feed_item),
+                )
+                for item_name, qty, category, tier in feedable
+            ]
+            feed_select = discord.ui.Select(
+                placeholder=f"Feed a Tier {required_tier} material to restore Satiety",
+                options=feed_options[:25] or [discord.SelectOption(label=f"No Tier {required_tier} materials owned", value="none")],
+                disabled=not feed_options, row=2,
+            )
+            feed_select.callback = self._on_pick_status_feed_item
+            self.add_item(feed_select)
+
+            feedable_by_name = {c[0]: c[1] for c in feedable}
+            feed_button = discord.ui.Button(
+                label="Feed for Satiety", emoji="🍖", style=discord.ButtonStyle.success, row=3,
+                disabled=not (feed_options and feedable_by_name.get(self.selected_status_feed_item, 0) > 0),
+            )
+            feed_button.callback = self._on_feed_satiety
+            self.add_item(feed_button)
+
     def _build_mode_components(self):
         player = self.game.get_player_stats(self.user_id, self.display_name)
         pet = self.game.get_gu_pet(player["active_gu_pet_id"]) if player["active_gu_pet_id"] else None
@@ -335,6 +366,25 @@ class GuPetView(GameView):
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
 
+    async def _on_pick_status_feed_item(self, interaction: discord.Interaction):
+        select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 2)
+        value = select.values[0]
+        if value != "none":
+            self.selected_status_feed_item = value
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _on_feed_satiety(self, interaction: discord.Interaction):
+        result = await asyncio.to_thread(
+            self.game.feed_gu_pet_satiety, self.user_id, self.display_name, self.selected_status_pet_id, self.selected_status_feed_item, 1,
+        )
+        self.last_result = result.get("reason") or result.get("message")
+        self.selected_status_feed_item = None  # owned quantity just changed, re-pick fresh
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
     async def _on_toggle_mode(self, interaction: discord.Interaction):
         await self._do_toggle_mode(interaction, pay_fee=False)
 
@@ -450,7 +500,9 @@ class GuPetView(GameView):
         embed.add_field(name="Satiety", value=f"**{pet['satiety']:.0f}/100** — {band_label} ({multiplier*100:.0f}% output)", inline=True)
         if pet["stat_bonuses"]:
             embed.add_field(name="Stat Bonuses", value=equipment.describe_stat_bonuses(pet["stat_bonuses"])[:1024], inline=False)
-        embed.set_footer(text="Feed a mature pet's own rank-tier material to refill Satiety (see the Feed tab's upkeep section).")
+        if pet["satiety"] < gu_pet.SATIETY_MAX:
+            required_tier = gu_pet.rank_scaling(pet["rank"])["satiety_material_tier"]
+            embed.set_footer(text=f"Feed it a Tier {required_tier} material below to restore Satiety.")
 
     def _fill_mode_embed(self, embed: discord.Embed):
         player = self.game.get_player_stats(self.user_id, self.display_name)

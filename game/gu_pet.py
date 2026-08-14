@@ -365,6 +365,39 @@ def crystallize(fed_totals: Dict[str, int]) -> Tuple[str, str]:
     return best_species, path
 
 
+# -- Cultivation Mode specialty bonuses (design doc section 10) -------------------------
+
+# Rolled ONCE, at crystallization (see GameManager.crystallize_gu_pet), into the SAME
+# stat_bonuses dict growth-feeding already writes to -- gear_budget_bonus_pct/manual_rarity_
+# bonus_pct then ride GameManager._gu_pet_cultivation_bonus the same generic "root OR
+# physique OR Gu OR active Cultivation-Mode Gu Pet" shape _trait_bonus already uses for
+# every other such key. Combat-side species (Vampiric Beetle/Flame-Spit Mantis/Crag-Shell
+# Turtle) return {} here -- their own specialty bonuses are Phase 7's concern.
+TOAD_HYBRID_FRACTION = 0.5  # Balance-Furnace Toad's "smaller boost to BOTH" (see its role_text)
+UNBOUND_CULTIVATION_SPEED_PCT_BASE = 0.02  # Unbound's own small flat fallback bonus (see its role_text), scaled by rank below
+
+
+def roll_specialty_bonus(species_key: str, rank: int, rng: Optional[random.Random] = None) -> Dict[str, float]:
+    r = rng or random
+    scaling = rank_scaling(rank)
+    if species_key == SPECIES_GRAND_FORGE_BEETLE:
+        lo, hi = scaling["blacksmith_budget_bonus_range"]
+        return {"gear_budget_bonus_pct": r.uniform(lo, hi)}
+    if species_key == SPECIES_INK_SPITTER_CICADA:
+        lo, hi = scaling["manual_unique_bonus_range"]
+        return {"manual_rarity_bonus_pct": r.uniform(lo, hi)}
+    if species_key == SPECIES_BALANCE_FURNACE_TOAD:
+        blo, bhi = scaling["blacksmith_budget_bonus_range"]
+        mlo, mhi = scaling["manual_unique_bonus_range"]
+        return {
+            "gear_budget_bonus_pct": r.uniform(blo, bhi) * TOAD_HYBRID_FRACTION,
+            "manual_rarity_bonus_pct": r.uniform(mlo, mhi) * TOAD_HYBRID_FRACTION,
+        }
+    if species_key == SPECIES_UNBOUND:
+        return {"cultivation_speed_pct": UNBOUND_CULTIVATION_SPEED_PCT_BASE * (rank / MAX_RANK)}
+    return {}
+
+
 # -- Satiety (design doc sections 11-12) -------------------------------------------------
 
 # (min_inclusive, max_inclusive, output_multiplier, label) -- checked top-down, first match
@@ -383,6 +416,12 @@ SATIETY_MAX = 100.0
 # see apply_encounter_start_bonuses' own call sites).
 SATIETY_DRAIN_PER_CULTIVATION_HOUR = 100.0 / (7 * 24)  # empties over ~1 week of pure idle time
 SATIETY_DRAIN_PER_COMBAT_DISPATCH = 4.0  # empties over ~25 dispatches with no re-feeding
+
+# Upkeep feeding for a MATURE pet (see GameManager.feed_gu_pet_satiety) -- unlike growth-
+# phase feed_gu_pet, this has no daily gate (satiety is an ongoing resource, not a one-time
+# growth milestone) but DOES require the item's tier to exactly match GU_PET_RANK_SCALING
+# [pet_rank]["satiety_material_tier"], any of the 5 feed categories.
+SATIETY_REFILL_PER_ITEM = 10.0
 
 
 def satiety_band(satiety: float) -> Tuple[float, str]:

@@ -114,6 +114,21 @@ ASSEMBLE_RARITY_WEIGHTS = {
     "Legendary": 9, "Mythic": 5, "Divine": 3, "Unique": 10,
 }
 
+
+def weighted_rarity_choices(base_weights: Dict[str, float], bonus_pct: float) -> Dict[str, float]:
+    """base_weights shifted toward the top of RARITY_ORDER by bonus_pct (see
+    GameManager.assemble_manual's Ink-Spitter Cicada/Balance-Furnace Toad gu_pet.
+    manual_rarity_bonus_pct hook) -- each rarity's weight is scaled up by (1 + bonus_pct *
+    its own star tier / len(RARITY_ORDER)), so Unique (the top of the ladder) shifts the most
+    and Common barely moves at all, rather than a flat rescale that would leave the
+    distribution's shape unchanged. A no-op copy when bonus_pct is 0."""
+    if not bonus_pct:
+        return dict(base_weights)
+    return {
+        rarity: weight * (1 + bonus_pct * (RARITY_STARS[rarity] / len(RARITY_ORDER)))
+        for rarity, weight in base_weights.items()
+    }
+
 # -- Page refinement (see design doc section 6) ----------------------------------------------
 @dataclass
 class RefinementSpec:

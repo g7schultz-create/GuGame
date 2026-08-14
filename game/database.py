@@ -1379,6 +1379,28 @@ class GameDatabase:
             total_manual_pct += json.loads(inst_row["stat_bonuses"]).get("cultivation_speed_pct", 0) * 100
         total_manual_pct += _avatar.scaled_bonus(player["avatar_soul"], player["avatar_level"], "cultivation_speed_pct") * 100
 
+        # Gu Pet (see game/gu_pet.py / /gu_pet) -- an active MATURE pet in Cultivation Mode
+        # can carry cultivation_speed_pct too (see gu_pet.CATEGORY_STAT_KEYS' "pill" category
+        # and gu_pet.roll_specialty_bonus's Unbound fallback). This is the REAL hook for it --
+        # this exact "only folded into GameManager.compute_equipment_bonuses' generic display
+        # pool, never read by settle_qi/get_qi_status" mistake has already bitten avatar
+        # gear/soul cultivation speed TWICE in this codebase (see the avatar-gear/avatar-soul
+        # comments just above), so this rides _qi_rate_components from the start instead.
+        # Computed READ-ONLY here (current satiety live off last_satiety_update_ts, the same
+        # lazy-settlement math GameManager._settle_gu_pet_satiety uses, just without the
+        # write-back -- that write-back is a pure optimization owned by that method, not a
+        # correctness requirement for this read).
+        from . import gu_pet as _gu_pet
+
+        if player["active_gu_pet_id"]:
+            pet_row = cur.execute("SELECT * FROM gu_pets WHERE pet_id = ?", (player["active_gu_pet_id"],)).fetchone()
+            if pet_row and pet_row["stage"] == _gu_pet.STAGE_MATURE and pet_row["mode"] == _gu_pet.MODE_CULTIVATION:
+                elapsed_hours = max(0, now - (pet_row["last_satiety_update_ts"] or now)) / 3600.0
+                current_satiety = max(0.0, pet_row["satiety"] - elapsed_hours * _gu_pet.SATIETY_DRAIN_PER_CULTIVATION_HOUR)
+                satiety_mult, _ = _gu_pet.satiety_band(current_satiety)
+                pet_cultivation_pct = json.loads(pet_row["stat_bonuses"]).get("cultivation_speed_pct", 0)
+                total_manual_pct += pet_cultivation_pct * satiety_mult * 100
+
         player_rank = _realms.STAGES[player["realm_index"]].great_realm_index + 1
         soft_cap = _search_data.CULTIVATION_SOFT_CAP_BY_PLAYER_RANK.get(player_rank, 100)
         hard_cap = _search_data.CULTIVATION_HARD_CAP_BY_PLAYER_RANK.get(player_rank, 100)

@@ -1786,6 +1786,29 @@ class GameManager:
                         continue
                     elif stat in special:
                         special[stat] += value
+        # Gu Pet (see game/gu_pet.py / /gu_pet) -- an active MATURE pet in Cultivation Mode
+        # rides the exact same "generic pool" shape as the avatar-soul/avatar-gear blocks just
+        # above, satiety-scaled (gu_pet.satiety_band). cultivation_speed_pct is excluded for
+        # the SAME double-counting reason as those two blocks -- it's already folded into
+        # qi_status["manual_bonus"] via GameDatabase._qi_rate_components instead (see that
+        # function's own Gu Pet comment; this is the "_qi_rate_components is the real hook,
+        # not compute_equipment_bonuses" trap this codebase has hit twice before with avatar
+        # gear/soul, deliberately avoided here from the start). gear_budget_bonus_pct/manual_
+        # rarity_bonus_pct (see gu_pet.roll_specialty_bonus) aren't in `special` either -- they
+        # ride _gu_pet_cultivation_bonus at their own consumption sites (craft_gear/
+        # assemble_manual) instead, same as every other _trait_bonus-only key.
+        if player_row and player_row["active_gu_pet_id"]:
+            pet = self.get_gu_pet(player_row["active_gu_pet_id"])
+            if pet and pet["stage"] == gu_pet.STAGE_MATURE and pet["mode"] == gu_pet.MODE_CULTIVATION:
+                satiety_mult, _ = gu_pet.satiety_band(pet["satiety"])
+                for stat, value in pet["stat_bonuses"].items():
+                    if stat == "cultivation_speed_pct":
+                        continue
+                    scaled = value * satiety_mult
+                    if stat == "hp_pct":
+                        stats["hp"] = stats.get("hp", 0) + player_row["max_hp"] * scaled
+                    elif stat in special:
+                        special[stat] += scaled
         return {"stats": stats, **special}
 
     # -- Spirit Severing Dao Paths (see game/dao_paths.py / /dao_path, /transmute) ------------
@@ -2163,6 +2186,39 @@ class GameManager:
         candidates.sort(key=lambda c: -c[3])
         return candidates
 
+    def feed_gu_pet_satiety(self, user_id: int, name: str, pet_id: int, item_name: str, quantity: int = 1) -> dict:
+        """Upkeep feeding for a MATURE pet (see gu_pet.SATIETY_REFILL_PER_ITEM) -- any of the
+        5 feed categories, but the item's tier must exactly match this pet's own locked rank
+        (gu_pet.rank_scaling(rank)["satiety_material_tier"]), no daily gate."""
+        self.db.get_or_create_player(user_id, name)
+        pet = self.db.get_gu_pet(pet_id)
+        if pet is None or pet["owner_id"] != user_id:
+            return {"ok": False, "reason": "You don't own that Gu Pet."}
+        if pet["stage"] != gu_pet.STAGE_MATURE:
+            return {"ok": False, "reason": "This Gu Pet hasn't crystallized yet — use the Feed tab's growth feeding instead."}
+        pet = self._settle_gu_pet_satiety(pet)
+        category_tier = gu_pet.feed_category_and_tier(item_name)
+        if category_tier is None:
+            return {"ok": False, "reason": "That can't be fed to a Gu Pet — try an Ore, Herb, Beast Material, Beast Core, or Pill."}
+        category, tier = category_tier
+        required_tier = gu_pet.rank_scaling(pet["rank"])["satiety_material_tier"]
+        if tier != required_tier:
+            return {"ok": False, "reason": f"This Rank {pet['rank']} Gu Pet needs Tier {required_tier} materials for its upkeep (that was Tier {tier})."}
+        if quantity < 1:
+            return {"ok": False, "reason": "Quantity must be at least 1."}
+        owned = self.db.get_inventory(user_id).get(item_name, 0)
+        if owned < quantity:
+            return {"ok": False, "reason": f"You only own {owned}x **{item_name}** (need {quantity})."}
+        if pet["satiety"] >= gu_pet.SATIETY_MAX:
+            return {"ok": False, "reason": "This Gu Pet is already fully satiated."}
+
+        self.db.remove_item(user_id, item_name, quantity)
+        new_satiety = min(gu_pet.SATIETY_MAX, pet["satiety"] + gu_pet.SATIETY_REFILL_PER_ITEM * quantity)
+        self.db.update_gu_pet(pet_id, satiety=new_satiety)
+        _, band_label = gu_pet.satiety_band(new_satiety)
+        message = f"🍖 Fed {quantity}x **{item_name}** — Satiety now **{new_satiety:.0f}/100** ({band_label})."
+        return {"ok": True, "message": message, "satiety": new_satiety}
+
     def crystallize_gu_pet(self, user_id: int, name: str, pet_id: int) -> dict:
         """Locks in a permanent species + Path from the RATIO of everything fed during
         growth (see gu_pet.crystallize) once the growth window is actually complete --
@@ -2182,9 +2238,11 @@ class GameManager:
 
         species_key, path = gu_pet.crystallize(pet["fed_totals"])
         mode = gu_pet.MODE_COMBAT if path == gu_pet.PATH_COMBAT else gu_pet.MODE_CULTIVATION
+        stat_bonuses = dict(pet["stat_bonuses"])
+        stat_bonuses.update(gu_pet.roll_specialty_bonus(species_key, pet["rank"]))
         self.db.update_gu_pet(
             pet_id, stage=gu_pet.STAGE_MATURE, species=species_key, path=path, mode=mode,
-            satiety=gu_pet.SATIETY_MAX, last_satiety_update_ts=int(time.time()),
+            stat_bonuses=stat_bonuses, satiety=gu_pet.SATIETY_MAX, last_satiety_update_ts=int(time.time()),
         )
         species = gu_pet.SPECIES[species_key]
         message = f"✨ {species.emoji} Your Gu Pet crystallizes into a **{species.name}** ({path})! {species.role_text}"
@@ -3085,6 +3143,22 @@ class GameManager:
             total += gu.stat_bonuses.get(key, 0)
         return total
 
+    def _gu_pet_cultivation_bonus(self, player, key: str) -> float:
+        """An active MATURE Gu Pet's own Cultivation-Mode specialty contribution to `key`
+        (see gu_pet.roll_specialty_bonus -- gear_budget_bonus_pct/manual_rarity_bonus_pct are
+        the only two keys this ever actually finds today), satiety-scaled. Kept separate from
+        _trait_bonus (root/physique/Gu ability, all pure dict lookups) rather than folded into
+        it, since this needs a real DB read (+ lazy satiety-settlement write, see get_gu_pet)
+        that would add unnecessary DB traffic to every OTHER _trait_bonus call site (mining,
+        gathering, meditate, study, ...) that has nothing to do with Gu Pets."""
+        if not player["active_gu_pet_id"]:
+            return 0.0
+        pet = self.get_gu_pet(player["active_gu_pet_id"])
+        if pet is None or pet["stage"] != gu_pet.STAGE_MATURE or pet["mode"] != gu_pet.MODE_CULTIVATION:
+            return 0.0
+        satiety_mult, _ = gu_pet.satiety_band(pet["satiety"])
+        return pet["stat_bonuses"].get(key, 0) * satiety_mult
+
     def _check_cooldown(self, player, column: str, cooldown_seconds: int, extra_reduction_pct: float = 0.0):
         """Returns remaining seconds (0 if ready). A manual's cooldown_reduction_pct (see
         manual_view.EFFECT_LABELS) — and the Time Dao Path's own scaled bonus, folded into the
@@ -3742,7 +3816,7 @@ class GameManager:
         }
         if success:
             slot_type = equipment.BLACKSMITH_GEAR_SLOT_TYPE[gear_type]
-            budget_bonus_pct = self._trait_bonus(player, "gear_budget_bonus_pct")
+            budget_bonus_pct = self._trait_bonus(player, "gear_budget_bonus_pct") + self._gu_pet_cultivation_bonus(player, "gear_budget_bonus_pct")
             stat_bonuses = blacksmith.roll_gear_stats(tier, random.Random(), budget_bonus_pct=budget_bonus_pct)
             power_score = equipment.gear_power_score_from_stats(stat_bonuses)
             gear_id = self.db.create_crafted_gear(user_id, gear_type, slot_type, tier, stat_bonuses, power_score)
@@ -4979,9 +5053,13 @@ class GameManager:
         # payoff for the player's own page choices. Feeds RARITY_EFFICIENCY (the "extra
         # multiplier") and RARITY_DEFECT_CHANCE (a lucky high roll also flaws less) below,
         # exactly the same way it already does for generate_manual's loot path.
-        rarity = rng.choices(
-            list(manual_data.ASSEMBLE_RARITY_WEIGHTS), weights=list(manual_data.ASSEMBLE_RARITY_WEIGHTS.values()),
-        )[0]
+        # Ink-Spitter Cicada's (or Balance-Furnace Toad's) own manual_rarity_bonus_pct (see
+        # gu_pet.roll_specialty_bonus) shifts these weights toward the higher-rarity end
+        # before the roll (see manual_data.weighted_rarity_choices) -- a no-op dict copy for
+        # everyone without an active Cultivation-Mode Cicada/Toad pet.
+        rarity_bonus_pct = self._gu_pet_cultivation_bonus(player, "manual_rarity_bonus_pct")
+        rarity_weights = manual_data.weighted_rarity_choices(manual_data.ASSEMBLE_RARITY_WEIGHTS, rarity_bonus_pct)
+        rarity = rng.choices(list(rarity_weights), weights=list(rarity_weights.values()))[0]
         root_spec = chargen.get_root_spec(player["root_name"])
         coherence = manual_gen.calculate_coherence(
             pages, primary_path,

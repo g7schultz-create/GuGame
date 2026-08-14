@@ -418,6 +418,13 @@ SPECIAL_STAT_TEXT = {
     "alchemy_bonus_pill_chance_pct": lambda v: f"+{v * 100:.0f}% Bonus Pill Chance",
     "crafting_success_pct": lambda v: f"+{v * 100:.0f}% Crafting Success",
     "pill_save_chance_pct": lambda v: f"+{v * 100:.0f}% Pill Save Chance",
+    # Gu Pet (see game/gu_pet.py) -- Grand Forge Beetle/Ink-Spitter Cicada/Balance-Furnace
+    # Toad's own Cultivation-Mode specialty bonuses (see gu_pet.roll_specialty_bonus),
+    # consumed via GameManager._gu_pet_cultivation_bonus rather than the generic
+    # compute_equipment_bonuses pool -- registered here purely for display (the /gu_pet
+    # Status tab's equipment.describe_stat_bonuses call).
+    "gear_budget_bonus_pct": lambda v: f"+{v * 100:.1f}% Blacksmith Gear Budget",
+    "manual_rarity_bonus_pct": lambda v: f"+{v * 100:.1f}% Manual Rarity Odds",
 }
 
 
