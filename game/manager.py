@@ -2082,6 +2082,84 @@ class GameManager:
     def set_active_gu_pet(self, user_id: int, pet_id: Optional[int]):
         self.db.set_active_gu_pet(user_id, pet_id)
 
+    def feed_gu_pet(self, user_id: int, name: str, pet_id: int, item_name: str, quantity: int = 1) -> dict:
+        """One feed per real day (see gu_pet.FEED_COOLDOWN_SECONDS) while stage='growth' --
+        refused entirely once mature (see the Status tab's satiety upkeep instead) or once
+        already fed enough days to crystallize (see GameManager.crystallize_gu_pet, a later
+        phase, which is what actually consumes this milestone). Returns {"ok": False,
+        "reason": ...} or {"ok": True, "message", "days_fed", "days_required",
+        "ready_to_crystallize"}."""
+        self.db.get_or_create_player(user_id, name)
+        pet = self.db.get_gu_pet(pet_id)
+        if pet is None or pet["owner_id"] != user_id:
+            return {"ok": False, "reason": "You don't own that Gu Pet."}
+        if pet["stage"] != gu_pet.STAGE_GROWTH:
+            return {"ok": False, "reason": "This Gu Pet has already matured — see the Status tab for its satiety upkeep instead."}
+        if pet["growth_days_fed"] >= pet["growth_days_required"]:
+            return {"ok": False, "reason": "This Gu Pet has been fed enough to crystallize — use the Status tab to complete it."}
+        now = int(time.time())
+        if now - pet["last_fed_ts"] < gu_pet.FEED_COOLDOWN_SECONDS:
+            from .ui_utils import format_duration
+            remaining = gu_pet.FEED_COOLDOWN_SECONDS - (now - pet["last_fed_ts"])
+            return {"ok": False, "reason": f"This Gu Pet has already been fed today — try again in {format_duration(remaining)}."}
+        category_tier = gu_pet.feed_category_and_tier(item_name)
+        if category_tier is None:
+            return {"ok": False, "reason": "That can't be fed to a growing Gu Pet — try an Ore, Herb, Beast Material, Beast Core, or Pill."}
+        if quantity < 1:
+            return {"ok": False, "reason": "Quantity must be at least 1."}
+        owned = self.db.get_inventory(user_id).get(item_name, 0)
+        if owned < quantity:
+            return {"ok": False, "reason": f"You only own {owned}x **{item_name}** (need {quantity})."}
+
+        category, tier = category_tier
+        # Consecutive REAL days, not just "fed at all" -- a gap of 2+ days since the last
+        # feed resets the streak, same "did you actually keep the daily habit" idiom every
+        # other streak-flavored mechanic in this codebase already uses.
+        was_yesterday = pet["last_fed_ts"] > 0 and (now - pet["last_fed_ts"]) < 2 * gu_pet.FEED_COOLDOWN_SECONDS
+        new_streak = pet["feed_streak_days"] + 1 if was_yesterday else 1
+
+        self.db.remove_item(user_id, item_name, quantity)
+        primary_key, secondary_key = gu_pet.CATEGORY_STAT_KEYS[category]
+        streak_mult = 1 + gu_pet.streak_bonus_pct(new_streak)
+        yield_mult = gu_pet.QI_MULTIPLIER_PILL_FEED_YIELD_MULTIPLIER if item_name.startswith("Qi Multiplier Pill") else 1.0
+        primary_delta = gu_pet.BASE_YIELD_PER_TIER * tier * quantity * streak_mult * yield_mult
+
+        stat_bonuses = dict(pet["stat_bonuses"])
+        stat_bonuses[primary_key] = stat_bonuses.get(primary_key, 0) + primary_delta
+        if secondary_key:
+            stat_bonuses[secondary_key] = stat_bonuses.get(secondary_key, 0) + primary_delta * gu_pet.SECONDARY_YIELD_FRACTION
+
+        fed_totals = dict(pet["fed_totals"])
+        fed_totals[category] = fed_totals.get(category, 0) + quantity
+
+        new_days_fed = pet["growth_days_fed"] + 1
+        self.db.update_gu_pet(
+            pet_id, stat_bonuses=stat_bonuses, fed_totals=fed_totals,
+            growth_days_fed=new_days_fed, feed_streak_days=new_streak, last_fed_ts=now,
+        )
+        ready = new_days_fed >= pet["growth_days_required"]
+        message = (
+            f"🍖 Fed {quantity}x **{item_name}** ({category.replace('_', ' ').title()}, Tier {tier}) — "
+            f"day {new_days_fed}/{pet['growth_days_required']}, streak {new_streak}."
+            + (" This Gu Pet is ready to crystallize!" if ready else "")
+        )
+        return {"ok": True, "message": message, "days_fed": new_days_fed, "days_required": pet["growth_days_required"], "ready_to_crystallize": ready}
+
+    def gu_pet_feedable_inventory(self, user_id: int) -> list:
+        """[(item_name, owned_quantity, category, tier), ...] for every owned item
+        gu_pet.feed_category_and_tier recognizes, tier-descending (a player's best material
+        should surface first, same "strongest first" convention gu_upgrade_candidates/
+        gu_pet_refine_candidates already use)."""
+        candidates = []
+        for item_name, qty in self.db.get_inventory(user_id).items():
+            category_tier = gu_pet.feed_category_and_tier(item_name)
+            if category_tier is None:
+                continue
+            category, tier = category_tier
+            candidates.append((item_name, qty, category, tier))
+        candidates.sort(key=lambda c: -c[3])
+        return candidates
+
     # -- Killer Move: assemble a core Gu + 10 component Gu into a procedurally-generated
     # active ability (see game/killer_move_gen.py / game/gu_types.py / /killer_move) --
     # additive alongside the gu_ability equipment slot above, not a replacement of it. -------

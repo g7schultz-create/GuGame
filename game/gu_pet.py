@@ -29,7 +29,7 @@ RARITY_ORDER exactly (the only existing rarity ladder with no leftover tier once
 import random
 from typing import Dict, Optional, Tuple
 
-from . import accessories_data
+from . import accessories_data, gathering, items
 
 MIN_RANK = 1
 MAX_RANK = 7
@@ -162,6 +162,64 @@ def streak_bonus_pct(feed_streak_days: int) -> float:
 # The 5 feeding-material categories (design doc section 6) -- each maps onto a real,
 # already-existing item family rather than inventing new ones.
 FEED_CATEGORIES = ("beast_material", "beast_core", "ore", "herb", "pill")
+
+
+def feed_category_and_tier(item_name: str) -> Optional[Tuple[str, int]]:
+    """Which of the 5 FEED_CATEGORIES item_name belongs to, plus its tier -- or None if it
+    isn't a feedable item at all. Ore/Herb/Beast Material/Beast Core all share the generic
+    "Tier N ..." naming gathering.item_tier already parses; Beast Material and Beast Core
+    share the exact same items.py subcategory ("Beast Material" covers both), so this checks
+    the item's own name suffix to tell them apart instead of trusting subcategory. Pills use
+    their own `rank` field (already set to the pill's tier at registration, see items.py's
+    tiered-pill loop) rather than gathering.item_tier's "Tier N ..." naming, which pill names
+    don't follow."""
+    item = items.ITEMS.get(item_name)
+    if item is None:
+        return None
+    if item.category == "Pills" and item.rank is not None:
+        return "pill", item.rank
+    tier = gathering.item_tier(item_name)
+    if tier is None:
+        return None
+    if item_name.endswith("Beast Core"):
+        return "beast_core", tier
+    if item_name.endswith("Beast Material"):
+        return "beast_material", tier
+    if item_name.endswith("Ore"):
+        return "ore", tier
+    if item_name.endswith("Herb"):
+        return "herb", tier
+    return None
+
+
+# Primary/secondary stat_bonuses keys each category's feeding grows (design doc section 6's
+# own Primary/Secondary Stat columns, mapped onto real, already-consumed stat_bonuses keys
+# rather than inventing new ones -- secondary is None where the doc's own label has no clean
+# existing equivalent). All 4 non-Pill categories reuse keys already read generically via
+# GameManager.compute_equipment_bonuses' pool; Pill leans toward the pet's OWN Cultivation-
+# mode identity (cultivation_speed_pct) rather than a combat stat, matching the doc's own
+# "Pills -> Refinement path" framing.
+CATEGORY_STAT_KEYS: Dict[str, Tuple[str, Optional[str]]] = {
+    "beast_material": ("physical_damage_pct", "dodge_chance_pct"),
+    "beast_core": ("technique_damage_pct", "crit_damage_pct"),
+    "ore": ("hp", "deviation_resistance_pct"),
+    "herb": ("insight_gain_pct", "cooldown_reduction_pct"),
+    "pill": ("cultivation_speed_pct", "essence_regen_pct"),
+}
+
+# Stat yield per feed = BASE_YIELD_PER_TIER * tier * quantity * (1 + streak bonus), the
+# secondary stat getting SECONDARY_YIELD_FRACTION of the primary's delta. A Qi Multiplier
+# Pill fed alongside a normal material doubles that single feed's yield (design doc section
+# 7's "Doubles stat accumulation yields for that feeding") -- Aptitude Enhancing/Healing
+# pills' own doc-described catalyst effects ("permanently raises the growth ceiling" /
+# "resets conflicting path points, or bypasses cooldown") are deliberately NOT implemented:
+# neither maps onto a concept this schema actually has (no per-pet growth ceiling exists to
+# raise, and "conflicting path points" is never defined anywhere in the source doc) -- both
+# pills still feed normally as ordinary Pill-category materials instead, an honest scope cut
+# rather than guessing at underspecified behavior.
+BASE_YIELD_PER_TIER = 0.01
+SECONDARY_YIELD_FRACTION = 0.5
+QI_MULTIPLIER_PILL_FEED_YIELD_MULTIPLIER = 2.0
 
 # Combat-vs-Cultivation Path assignment (design doc section 8.1) -- the two buckets are
 # complementary and always sum to 100% of fed_totals, so an exact 50/50 split has to pick a

@@ -24,6 +24,8 @@ class GuPetView(GameView):
         self.active_tab = "refine"
         self.selected_sacrifice_item: str = None
         self.selected_target_rank: int = None
+        self.selected_feed_pet_id: int = None
+        self.selected_feed_item: str = None
         self.last_result: str = None
         self._build_components()
 
@@ -47,6 +49,8 @@ class GuPetView(GameView):
 
         if self.active_tab == "refine":
             self._build_refine_components()
+        elif self.active_tab == "feed":
+            self._build_feed_components()
 
     def _make_tab_callback(self, key: str):
         async def callback(interaction: discord.Interaction):
@@ -109,6 +113,53 @@ class GuPetView(GameView):
         button.callback = self._on_refine
         self.add_item(button)
 
+    def _build_feed_components(self):
+        growing_pets = [p for p in self.game.get_player_gu_pets(self.user_id) if p["stage"] == gu_pet.STAGE_GROWTH]
+        if self.selected_feed_pet_id is None and growing_pets:
+            self.selected_feed_pet_id = growing_pets[0]["pet_id"]
+
+        pet_options = [
+            discord.SelectOption(
+                label=f"Rank {p['rank']} Gu Pet #{p['pet_id']} — day {p['growth_days_fed']}/{p['growth_days_required']}"[:100],
+                value=str(p["pet_id"]), default=(p["pet_id"] == self.selected_feed_pet_id),
+            )
+            for p in growing_pets
+        ]
+        pet_select = discord.ui.Select(
+            placeholder="Choose a growing Gu Pet to feed",
+            options=pet_options[:25] or [discord.SelectOption(label="No growing Gu Pets — refine one first", value="none")],
+            disabled=not pet_options, row=1,
+        )
+        pet_select.callback = self._on_pick_feed_pet
+        self.add_item(pet_select)
+
+        feedable = self.game.gu_pet_feedable_inventory(self.user_id)
+        if self.selected_feed_item is None and feedable:
+            self.selected_feed_item = feedable[0][0]
+        item_options = [
+            discord.SelectOption(
+                label=item_name[:100], value=item_name,
+                description=f"Own {qty} — {category.replace('_', ' ').title()}, Tier {tier}"[:100],
+                default=(item_name == self.selected_feed_item),
+            )
+            for item_name, qty, category, tier in feedable
+        ]
+        item_select = discord.ui.Select(
+            placeholder="Choose a material to feed (Ore/Herb/Beast Material/Beast Core/Pill)",
+            options=item_options[:25] or [discord.SelectOption(label="No feedable materials owned", value="none")],
+            disabled=not item_options, row=2,
+        )
+        item_select.callback = self._on_pick_feed_item
+        self.add_item(item_select)
+
+        feedable_by_name = {c[0]: c[1] for c in feedable}
+        button = discord.ui.Button(
+            label="Feed", emoji="🍖", style=discord.ButtonStyle.success, row=3,
+            disabled=not (pet_options and item_options and feedable_by_name.get(self.selected_feed_item, 0) > 0),
+        )
+        button.callback = self._on_feed
+        self.add_item(button)
+
     # -- action handlers ------------------------------------------------------------------
 
     async def _on_pick_sacrifice_item(self, interaction: discord.Interaction):
@@ -151,15 +202,45 @@ class GuPetView(GameView):
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
 
+    async def _on_pick_feed_pet(self, interaction: discord.Interaction):
+        select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 1)
+        value = select.values[0]
+        if value != "none":
+            self.selected_feed_pet_id = int(value)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _on_pick_feed_item(self, interaction: discord.Interaction):
+        select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 2)
+        value = select.values[0]
+        if value != "none":
+            self.selected_feed_item = value
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _on_feed(self, interaction: discord.Interaction):
+        result = await asyncio.to_thread(
+            self.game.feed_gu_pet, self.user_id, self.display_name, self.selected_feed_pet_id, self.selected_feed_item, 1,
+        )
+        self.last_result = result.get("reason") or result.get("message")
+        self.selected_feed_item = None  # owned quantity just changed, re-pick fresh
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
     # -- embed building ---------------------------------------------------------------
 
     def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title="🐛 Gu Pet", color=discord.Color.dark_green())
         if self.active_tab == "refine":
             self._fill_refine_embed(embed)
+        elif self.active_tab == "feed":
+            self._fill_feed_embed(embed)
         else:
             label = next(lbl for key, lbl, _ in self.TABS if key == self.active_tab)
-            embed.description = f"The **{label}** tab arrives in a later update — for now, use the **Refine** tab to acquire a Gu Pet."
+            embed.description = f"The **{label}** tab arrives in a later update — for now, use the **Refine**/**Feed** tabs to acquire and grow a Gu Pet."
         if self.last_result:
             embed.add_field(name="Result", value=self.last_result[:1024], inline=False)
         return embed
@@ -186,3 +267,27 @@ class GuPetView(GameView):
             ]
             embed.add_field(name=f"Owned Gu Pets ({len(owned_pets)})", value="\n".join(lines)[:1024], inline=False)
         embed.set_footer(text="Higher Gu Refiner rank unlocks higher pet ranks and improves your success chance.")
+
+    def _fill_feed_embed(self, embed: discord.Embed):
+        growing_pets = [p for p in self.game.get_player_gu_pets(self.user_id) if p["stage"] == gu_pet.STAGE_GROWTH]
+        embed.description = (
+            "One feed per real day per Gu Pet. Ore/Herb/Beast Material/Beast Core/Pills all grow different "
+            "stats — the RATIO of everything fed decides its species once it's done growing (see the "
+            "**Status** tab once that's ready). A Qi Multiplier Pill doubles that single feed's yield."
+        )
+        if not growing_pets:
+            embed.add_field(name="No Growing Gu Pets", value="Refine one first from the **Refine** tab.", inline=False)
+            return
+        pet = next((p for p in growing_pets if p["pet_id"] == self.selected_feed_pet_id), growing_pets[0])
+        streak_bonus = gu_pet.streak_bonus_pct(pet["feed_streak_days"])
+        embed.add_field(
+            name=f"Rank {pet['rank']} Gu Pet #{pet['pet_id']}",
+            value=(
+                f"Day **{pet['growth_days_fed']}/{pet['growth_days_required']}** • "
+                f"Streak **{pet['feed_streak_days']}** (+{streak_bonus*100:.0f}% yield)"
+            ),
+            inline=False,
+        )
+        if pet["fed_totals"]:
+            totals_text = ", ".join(f"{cat.replace('_', ' ').title()}: {qty}" for cat, qty in pet["fed_totals"].items())
+            embed.add_field(name="Fed So Far", value=totals_text, inline=False)
