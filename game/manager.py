@@ -5598,6 +5598,34 @@ class GameManager:
         dust_granted = self._grant_insight_dust(user_id, values["dust"]) if values["dust"] else 0
         return True, f"Dismantled **{manual['name']}** for {values['ink']} manual ink and {dust_granted} insight dust."
 
+    def gamble_manual_for_page(self, user_id: int, name: str, manual_id: int, category: str) -> dict:
+        """/manual's own "Gamble" button -- destroys a completed manual for a guaranteed page
+        of the player's CHOSEN category, but at a rank that's rolled rather than picked (see
+        manual_data.gamble_page_rank_weights, peaked at the manual's own rank). Same ownership/
+        equipped/Unique guards as dismantle_manual -- a manual too valuable to casually
+        dismantle is too valuable to casually gamble away either. Returns a dict:
+          ok=False, reason=...
+          ok=True, manual_name, page_name, page_rank, category"""
+        player = self.db.get_or_create_player(user_id, name)
+        manual = self.db.get_manual(manual_id)
+        if manual is None or manual["owner_id"] != user_id:
+            return {"ok": False, "reason": "You don't own that manual."}
+        if manual_id in (player["equipped_primary_manual_id"], player["equipped_auxiliary_manual_id"]):
+            return {"ok": False, "reason": "Unequip it first."}
+        if manual["rarity"] == "Unique":
+            return {"ok": False, "reason": "Unique manuals can't be gambled away."}
+        if category not in manual_data.PAGE_CATEGORIES:
+            return {"ok": False, "reason": "Not a real page category."}
+
+        weights = manual_data.gamble_page_rank_weights(manual["rank"])
+        rolled_rank = random.choices(list(weights.keys()), weights=list(weights.values()), k=1)[0]
+        candidates = [p for p in manual_data.PAGES.values() if p.category == category and p.rank == rolled_rank]
+        page = random.choice(candidates)
+
+        self.db.delete_manual(manual_id)
+        self.db.add_player_page(user_id, page.page_id, 1)
+        return {"ok": True, "manual_name": manual["name"], "page_name": page.name, "page_rank": rolled_rank, "category": category}
+
     # -- Sects (see sects.py — Phase 1: core structure only, no mentor/contribution/wars/
     # buildings/missions/leaderboards yet) ----------------------------------------------
 

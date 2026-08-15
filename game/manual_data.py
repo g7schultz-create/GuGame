@@ -82,6 +82,27 @@ MANUAL_RANK_TABLE: Dict[int, RankSpec] = {
 }
 MAX_MANUAL_RANK = 8
 
+# -- Gamble a completed manual for a page (2026-08-15, /manual's own "Gamble" button) -------
+# Destroys a manual for a guaranteed page of the player's CHOSEN category, but at a rank
+# that's rolled, not picked -- the actual "gamble." Weighted geometrically around (not capped
+# by) the manual's own rank, so a low-rank manual keeps a real, if small, shot at the very top,
+# and a high-rank manual mostly (but not purely) gets back what it's worth. This is the whole
+# point of the button: converting a manual you don't need into one of a category you do, at
+# roughly the same power level, with some variance either way.
+GAMBLE_PAGE_RANK_BASE_WEIGHT = 100
+GAMBLE_PAGE_RANK_DECAY_PER_STEP = 0.35
+
+
+def gamble_page_rank_weights(manual_rank: int) -> Dict[int, float]:
+    """{page_rank: weight} across every real page rank (1-MAX_MANUAL_RANK), peaked at
+    page_rank == manual_rank and decaying by GAMBLE_PAGE_RANK_DECAY_PER_STEP per rank of
+    distance in either direction."""
+    return {
+        page_rank: GAMBLE_PAGE_RANK_BASE_WEIGHT * (GAMBLE_PAGE_RANK_DECAY_PER_STEP ** abs(page_rank - manual_rank))
+        for page_rank in range(1, MAX_MANUAL_RANK + 1)
+    }
+
+
 # -- Rarity (see design doc section 7) -------------------------------------------------------
 RARITY_ORDER = ["Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Divine", "Unique"]
 RARITY_STARS = {rarity: i + 1 for i, rarity in enumerate(RARITY_ORDER)}

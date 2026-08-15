@@ -45,6 +45,7 @@ class ManualView(GameView):
         self.active_tab = "pages"
         self.selected_page_id: str = None
         self.selected_manual_id: int = None
+        self.gamble_category: str = None
         self.assemble_selection: list = []
         self.last_result: str = None
         self.page_studied_filter = "all"  # "all" | "studied" | "unstudied"
@@ -373,6 +374,27 @@ class ManualView(GameView):
         dismantle_btn.callback = self._on_dismantle_manual
         self.add_item(dismantle_btn)
 
+        # Row 4: gamble a manual for a page of a CHOSEN category, at a rolled (not chosen)
+        # rank -- see GameManager.gamble_manual_for_page. The category picker doubles as the
+        # gamble target: nothing else lives on this row, so there's no budget pressure adding
+        # it alongside the button it gates.
+        category_options = [
+            discord.SelectOption(label=category, value=category, default=(category == self.gamble_category))
+            for category in manual_data.PAGE_CATEGORIES
+        ]
+        category_select = discord.ui.Select(
+            placeholder="Gamble for a page of which category?", options=category_options, row=4, disabled=not has_selection,
+        )
+        category_select.callback = self._on_pick_gamble_category
+        self.add_item(category_select)
+
+        gamble_btn = discord.ui.Button(
+            label="Gamble for Page", emoji="🎲", style=discord.ButtonStyle.danger, row=3,
+            disabled=not has_selection or self.gamble_category is None,
+        )
+        gamble_btn.callback = self._on_gamble_manual
+        self.add_item(gamble_btn)
+
     # -- callbacks ------------------------------------------------------------------------
 
     def _make_studied_filter_callback(self, key: str):
@@ -575,6 +597,30 @@ class ManualView(GameView):
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
 
+    async def _on_pick_gamble_category(self, interaction: discord.Interaction):
+        select = next(c for c in self.children if isinstance(c, discord.ui.Select) and c.row == 4)
+        self.gamble_category = select.values[0]
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _on_gamble_manual(self, interaction: discord.Interaction):
+        result = await asyncio.to_thread(
+            self.game.gamble_manual_for_page, self.user_id, self.display_name, self.selected_manual_id, self.gamble_category,
+        )
+        if result["ok"]:
+            self.last_result = (
+                f"🎲 Gambled away **{result['manual_name']}** — got back **{result['page_name']}** "
+                f"(Rank {result['page_rank']} {result['category']})!"
+            )
+            self.selected_manual_id = None
+            self.gamble_category = None
+        else:
+            self.last_result = result["reason"]
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
     # -- embed ------------------------------------------------------------------------------
 
     def _pages_embed(self, embed: discord.Embed):
@@ -713,6 +759,16 @@ class ManualView(GameView):
             )
             embed.add_field(name="Effects", value=_format_effects(selected["effects"])[:1024], inline=False)
             embed.add_field(name="Flaws", value=_format_flaws(selected["flaws"])[:1024], inline=False)
+
+            weights = manual_data.gamble_page_rank_weights(selected["rank"])
+            total = sum(weights.values())
+            odds_text = " • ".join(f"R{rank} {weight / total * 100:.0f}%" for rank, weight in weights.items())
+            category_note = f" of **{self.gamble_category}**" if self.gamble_category else " (pick a category below first)"
+            embed.add_field(
+                name="🎲 Gamble Odds",
+                value=f"Destroys this manual for a page{category_note} — rank isn't chosen, it's rolled:\n{odds_text}",
+                inline=False,
+            )
 
     def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"📚 {self.display_name}'s Manuals", color=discord.Color.dark_purple())
