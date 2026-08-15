@@ -526,6 +526,10 @@ class GameDatabase:
             cur.execute("ALTER TABLE trade_offers ADD COLUMN manual_id INTEGER")
         if "accessory_instance_id" not in trade_offers_columns:
             cur.execute("ALTER TABLE trade_offers ADD COLUMN accessory_instance_id INTEGER")
+        # Gu Pets are tradeable too (2026-08-14, see GameManager.add_trade_gu_pet) -- same
+        # one-of-a-kind owned-instance shape as gear_id/manual_id/accessory_instance_id above.
+        if "pet_id" not in trade_offers_columns:
+            cur.execute("ALTER TABLE trade_offers ADD COLUMN pet_id INTEGER")
 
         # Dao Companion (see game/dao_companion.py / /offer_companion) -- one row per bonded
         # pair, looked up via "WHERE partner_a_id = ? OR partner_b_id = ?" (get_dao_companion).
@@ -3144,7 +3148,7 @@ class GameDatabase:
         con = self.connect()
         cur = con.cursor()
         cur.execute(
-            "SELECT kind, item_name, quantity, gear_id, manual_id, accessory_instance_id "
+            "SELECT kind, item_name, quantity, gear_id, manual_id, accessory_instance_id, pet_id "
             "FROM trade_offers WHERE trade_id = ? AND user_id = ?", (trade_id, user_id),
         )
         rows = cur.fetchall()
@@ -3155,6 +3159,7 @@ class GameDatabase:
         offer["crafted_gear"] = []
         offer["manuals"] = []
         offer["accessories"] = []
+        offer["gu_pets"] = []
         for row in rows:
             if row["kind"] in self.TRADE_CURRENCIES:
                 offer[row["kind"]] = row["quantity"]
@@ -3164,6 +3169,8 @@ class GameDatabase:
                 offer["manuals"].append(row["manual_id"])
             elif row["kind"] == "accessory":
                 offer["accessories"].append(row["accessory_instance_id"])
+            elif row["kind"] == "gu_pet":
+                offer["gu_pets"].append(row["pet_id"])
             elif row["kind"] == "page":
                 offer["pages"][row["item_name"]] = row["quantity"]
             else:
@@ -3279,6 +3286,23 @@ class GameDatabase:
         con.commit()
         con.close()
 
+    def add_trade_gu_pet(self, trade_id: int, user_id: int, pet_id: int, item_name: str):
+        """Offers a unique Gu Pet — same one-of-a-kind shape as add_trade_manual/add_trade_
+        accessory (a pet_id can only ever be offered once)."""
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute(
+            "SELECT 1 FROM trade_offers WHERE trade_id = ? AND user_id = ? AND kind = 'gu_pet' AND pet_id = ?",
+            (trade_id, user_id, pet_id),
+        )
+        if cur.fetchone() is None:
+            cur.execute(
+                "INSERT INTO trade_offers (trade_id, user_id, kind, item_name, quantity, pet_id) VALUES (?, ?, 'gu_pet', ?, 1, ?)",
+                (trade_id, user_id, item_name, pet_id),
+            )
+        con.commit()
+        con.close()
+
     def clear_trade_offer(self, trade_id: int, user_id: int):
         con = self.connect()
         con.execute("DELETE FROM trade_offers WHERE trade_id = ? AND user_id = ?", (trade_id, user_id))
@@ -3302,7 +3326,7 @@ class GameDatabase:
         offers = {}
         for uid in (initiator_id, target_id):
             rows = con.execute(
-                "SELECT kind, item_name, quantity, gear_id, manual_id, accessory_instance_id "
+                "SELECT kind, item_name, quantity, gear_id, manual_id, accessory_instance_id, pet_id "
                 "FROM trade_offers WHERE trade_id = ? AND user_id = ?", (trade_id, uid),
             ).fetchall()
             offers[uid] = {currency: 0 for currency in self.TRADE_CURRENCIES}
@@ -3311,6 +3335,7 @@ class GameDatabase:
             offers[uid]["crafted_gear"] = []
             offers[uid]["manuals"] = []
             offers[uid]["accessories"] = []
+            offers[uid]["gu_pets"] = []
             for row in rows:
                 if row["kind"] in self.TRADE_CURRENCIES:
                     offers[uid][row["kind"]] = row["quantity"]
@@ -3320,6 +3345,8 @@ class GameDatabase:
                     offers[uid]["manuals"].append(row["manual_id"])
                 elif row["kind"] == "accessory":
                     offers[uid]["accessories"].append(row["accessory_instance_id"])
+                elif row["kind"] == "gu_pet":
+                    offers[uid]["gu_pets"].append(row["pet_id"])
                 elif row["kind"] == "page":
                     offers[uid]["pages"][row["item_name"]] = row["quantity"]
                 else:
@@ -3383,6 +3410,15 @@ class GameDatabase:
                     "SELECT 1 FROM equipped WHERE user_id = ? AND accessory_instance_id = ?", (uid, instance_id)
                 ).fetchone()
                 if equipped_elsewhere is not None:
+                    con.close()
+                    return False
+            for pet_id in offers[uid]["gu_pets"]:
+                # Re-verified here too — unlike gear/manuals/accessories, a Gu Pet currently
+                # set as this player's active_gu_pet_id is NOT blocked (there's no UI path to
+                # deactivate one without activating a different pet first); _transfer below
+                # clears the pointer automatically instead if it turns out to match.
+                pet_row = con.execute("SELECT owner_id FROM gu_pets WHERE pet_id = ?", (pet_id,)).fetchone()
+                if pet_row is None or pet_row["owner_id"] != uid:
                     con.close()
                     return False
 
@@ -3460,6 +3496,16 @@ class GameDatabase:
                         )
                     con.execute("UPDATE accessory_artifact_instances SET attuned = 0 WHERE instance_id = ?", (instance_id,))
                 con.execute("UPDATE accessory_artifact_instances SET owner_id = ? WHERE instance_id = ?", (to_id, instance_id))
+            for pet_id in offer["gu_pets"]:
+                con.execute("UPDATE gu_pets SET owner_id = ? WHERE pet_id = ?", (to_id, pet_id))
+                # If this was the OLD owner's active pet, every combat/cultivation bonus site
+                # (see _qi_rate_components, GameManager.toggle_gu_pet_mode/compute_*) looks it
+                # up by this pointer alone with no owner_id re-check -- left uncleared, the
+                # old owner would keep drawing bonuses from a pet they no longer own.
+                con.execute(
+                    "UPDATE players SET active_gu_pet_id = NULL WHERE user_id = ? AND active_gu_pet_id = ?",
+                    (from_id, pet_id),
+                )
 
         from . import accessories_data as _accessories_data
 
@@ -3492,7 +3538,7 @@ class GameDatabase:
         offers = {}
         for uid in (initiator_id, target_id):
             rows = con.execute(
-                "SELECT kind, item_name, quantity, gear_id, manual_id, accessory_instance_id "
+                "SELECT kind, item_name, quantity, gear_id, manual_id, accessory_instance_id, pet_id "
                 "FROM trade_offers WHERE trade_id = ? AND user_id = ?", (trade_id, uid),
             ).fetchall()
             offers[uid] = {currency: 0 for currency in self.TRADE_CURRENCIES}
@@ -3501,6 +3547,7 @@ class GameDatabase:
             offers[uid]["crafted_gear"] = []
             offers[uid]["manuals"] = []
             offers[uid]["accessories"] = []
+            offers[uid]["gu_pets"] = []
             for row in rows:
                 if row["kind"] in self.TRADE_CURRENCIES:
                     offers[uid][row["kind"]] = row["quantity"]
@@ -3510,6 +3557,8 @@ class GameDatabase:
                     offers[uid]["manuals"].append(row["manual_id"])
                 elif row["kind"] == "accessory":
                     offers[uid]["accessories"].append(row["accessory_instance_id"])
+                elif row["kind"] == "gu_pet":
+                    offers[uid]["gu_pets"].append(row["pet_id"])
                 elif row["kind"] == "page":
                     offers[uid]["pages"][row["item_name"]] = row["quantity"]
                 else:
@@ -3520,7 +3569,7 @@ class GameDatabase:
             is_empty = (
                 all(offer[currency] == 0 for currency in self.TRADE_CURRENCIES)
                 and not offer["items"] and not offer["pages"] and not offer["crafted_gear"]
-                and not offer["manuals"] and not offer["accessories"]
+                and not offer["manuals"] and not offer["accessories"] and not offer["gu_pets"]
             )
             if is_empty:
                 con.close()
@@ -3577,6 +3626,11 @@ class GameDatabase:
                     "SELECT 1 FROM equipped WHERE user_id = ? AND accessory_instance_id = ?", (uid, instance_id)
                 ).fetchone()
                 if equipped_elsewhere is not None:
+                    con.close()
+                    return None
+            for pet_id in offer["gu_pets"]:
+                pet_row = con.execute("SELECT owner_id FROM gu_pets WHERE pet_id = ?", (pet_id,)).fetchone()
+                if pet_row is None or pet_row["owner_id"] != uid:
                     con.close()
                     return None
 
@@ -3656,6 +3710,17 @@ class GameDatabase:
                             )
                         con.execute("UPDATE accessory_artifact_instances SET attuned = 0 WHERE instance_id = ?", (instance_id,))
                 con.execute("UPDATE accessory_artifact_instances SET owner_id = ? WHERE instance_id = ?", (to_id, instance_id))
+            for pet_id in offer["gu_pets"]:
+                con.execute("UPDATE gu_pets SET owner_id = ? WHERE pet_id = ?", (to_id, pet_id))
+                # Guarded on from_id != to_id -- same reasoning as the accessories attunement
+                # guard just above: when the winner is being "transferred" their own pot, a
+                # pet of THEIRS that happens to be active must not get deactivated just
+                # because _transfer touched it.
+                if from_id != to_id:
+                    con.execute(
+                        "UPDATE players SET active_gu_pet_id = NULL WHERE user_id = ? AND active_gu_pet_id = ?",
+                        (from_id, pet_id),
+                    )
 
         from . import accessories_data as _accessories_data
 

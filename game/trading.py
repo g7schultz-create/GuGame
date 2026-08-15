@@ -4,6 +4,7 @@ import discord
 from . import accessories_data
 from . import blacksmith
 from . import equipment as equipment_module
+from . import gu_pet
 from . import manual_data
 from .base_view import GameView
 from .equipment import EQUIPMENT, describe_stat_bonuses, gear_power_score
@@ -20,21 +21,26 @@ from .views import _default_subcategory
 # "Pages" is a 5th, for manual_data.PAGES — a third separate catalog, quantity-stacked per
 # player like ITEMS rather than an owned-instance table like Equipment's Manual/Gu/etc, but
 # with its own 10-category/7-rank shape that doesn't fit either existing pattern cleanly
-# enough to reuse it outright.
-TRADE_CATEGORIES = ITEM_CATEGORIES + ["Equipment", "Pages"]
+# enough to reuse it outright. "Gu Pets" is a 6th (2026-08-14) -- yet another separate
+# owned-instance table (game/gu_pet.py's gu_pets), but with no slot_type/rank-category shape
+# to hang subcategories off of at all, so it's the simplest of the three: one flat list, no
+# subcategory row, same as Healing/Materials before Materials grew subcategories of its own.
+TRADE_CATEGORIES = ITEM_CATEGORIES + ["Equipment", "Pages", "Gu Pets"]
 EQUIPMENT_SLOT_TYPES = ["Weapon", "Head", "Body", "Ring", "Earring", "Necklace", "Bracelet", "Artifact", "Manual", "Gu"]
-CATEGORY_EMOJI = {**_ITEM_CATEGORY_EMOJI, "Equipment": "⚔️", "Pages": "📄"}
+CATEGORY_EMOJI = {**_ITEM_CATEGORY_EMOJI, "Equipment": "⚔️", "Pages": "📄", "Gu Pets": "🐛"}
 # Crafted_gear instances (rolled Weapon/Head/Body pieces — see blacksmith.py) aren't
 # quantity-tracked catalog items, so a trade Select option's value is prefixed to tell a
 # unique instance apart from an ordinary item_name — same convention as equipment_view.py's
 # own INSTANCE_VALUE_PREFIX (kept as a separate constant since each view only ever
 # interprets its own Select's values, never the other's).
 INSTANCE_VALUE_PREFIX = "gear:"
-# Same convention for manuals (see manual_view.py) and accessory/artifact instances (see
-# accessories_view.py) — each is its own owned-instance table, not a quantity-tracked
-# catalog item, so they get their own value prefixes alongside crafted_gear's.
+# Same convention for manuals (see manual_view.py), accessory/artifact instances (see
+# accessories_view.py), and Gu Pets (game/gu_pet.py) — each is its own owned-instance table,
+# not a quantity-tracked catalog item, so they get their own value prefixes alongside
+# crafted_gear's.
 MANUAL_VALUE_PREFIX = "manual:"
 ACCESSORY_VALUE_PREFIX = "accessory:"
+GU_PET_VALUE_PREFIX = "pet:"
 # Pages ARE quantity-stacked like plain ITEMS (see player_pages), but still get their own
 # prefix -- unlike an item_name, a page_id alone doesn't tell _remaining/_make_add_callback
 # which catalog/table to look the candidate up in, so it needs the same disambiguation the
@@ -87,7 +93,7 @@ def _offer_is_empty(offer: dict) -> bool:
     currencies_empty = all(offer[currency] == 0 for currency in ("spirit_stones", "manual_ink", "insight_dust"))
     return (
         currencies_empty and not offer["items"] and not offer["pages"]
-        and not offer["crafted_gear"] and not offer["manuals"] and not offer["accessories"]
+        and not offer["crafted_gear"] and not offer["manuals"] and not offer["accessories"] and not offer["gu_pets"]
     )
 
 
@@ -100,15 +106,24 @@ def _default_trade_subcategory(category: str):
 
 
 def _build_trade_category_buttons(active_category: str, row: int, callback_factory):
-    buttons = []
-    for category in TRADE_CATEGORIES:
-        button = discord.ui.Button(label=category, emoji=CATEGORY_EMOJI.get(category), row=row)
-        is_active = category == active_category
-        button.style = discord.ButtonStyle.primary if is_active else discord.ButtonStyle.secondary
-        button.disabled = is_active
-        button.callback = callback_factory(category)
-        buttons.append(button)
-    return buttons
+    """A single Select rather than a button row -- TRADE_CATEGORIES grew past Discord's 5-
+    per-row button cap once Gu Pets became a 6th category (2026-08-14). Collapsing to a Select
+    keeps this at exactly 1 row regardless of how many categories exist, the same fix already
+    applied to Equipment's 10 slot types / Pages' 10 categories in
+    _build_trade_subcategory_buttons -- critical here since the worst-case subcategory (e.g.
+    Equipment > Gu, which also needs a tier filter row) already sits at the view's full 5-row
+    ceiling; a 2nd category-button row would have pushed that case over it."""
+    options = [
+        discord.SelectOption(label=category, emoji=CATEGORY_EMOJI.get(category), default=(category == active_category))
+        for category in TRADE_CATEGORIES
+    ]
+    select = discord.ui.Select(placeholder=f"Category: {active_category}", options=options, row=row)
+
+    async def _on_select(interaction: discord.Interaction):
+        await callback_factory(select.values[0])(interaction)
+
+    select.callback = _on_select
+    return [select]
 
 
 def _build_trade_subcategory_buttons(active_category: str, active_subcategory: str, row_start: int, callback_factory):
@@ -197,6 +212,11 @@ def _format_trade_offer_lines(game, offer: dict) -> list:
             continue
         emoji = equipment_module.SLOT_TYPE_EMOJI.get(affix.slot_type, "🎒")
         lines.append(f"{emoji} {affix.name} #{instance_id} (Rank {affix.rank} {affix.rarity})")
+    for pet_id in offer["gu_pets"]:
+        pet = game.get_gu_pet(pet_id)
+        if pet is None:
+            continue
+        lines.append(f"{gu_pet.pet_display_emoji(pet)} {gu_pet.pet_display_name(pet)}")
     return lines
 
 
@@ -338,6 +358,16 @@ class TradeAddItemView(GameView):
             if instance_id in self.game.db.get_equipped_accessory_ids(self.user_id).values():
                 return 0
             if instance_id in self.game.get_trade_offer(self.trade_id, self.user_id)["accessories"]:
+                return 0
+            return 1
+        if selected.startswith(GU_PET_VALUE_PREFIX):
+            # Unlike crafted_gear/manuals/accessories, a currently-active Gu Pet is NOT
+            # excluded here -- see GameManager.add_trade_gu_pet's own docstring for why.
+            pet_id = int(selected[len(GU_PET_VALUE_PREFIX):])
+            pet = self.game.get_gu_pet(pet_id)
+            if pet is None or pet["owner_id"] != self.user_id:
+                return 0
+            if pet_id in self.game.get_trade_offer(self.trade_id, self.user_id)["gu_pets"]:
                 return 0
             return 1
         if selected.startswith(PAGE_VALUE_PREFIX):
@@ -497,6 +527,28 @@ class TradeAddItemView(GameView):
                     "tier_label": f"Rank {affix.rank}", "option": option,
                 })
 
+        if self.category == "Gu Pets":
+            # Gu Pets (see /gu_pet, game/gu_pet.py) — owned-instance table, same shape as
+            # crafted_gear/manuals/accessories above: candidates whenever owned and not
+            # already sitting in this offer. Unlike those three, a currently-active pet is
+            # NOT excluded (see GameManager.add_trade_gu_pet's own docstring). No tier
+            # concept beyond rank, which doubles as a genuine power signal here.
+            offered_pet_ids = set(current_offer["gu_pets"])
+            for pet in self.game.get_player_gu_pets(self.user_id):
+                if pet["pet_id"] in offered_pet_ids:
+                    continue
+                value = f"{GU_PET_VALUE_PREFIX}{pet['pet_id']}"
+                display_name = gu_pet.pet_display_name(pet)
+                option = discord.SelectOption(
+                    label=f"{gu_pet.pet_display_emoji(pet)} {display_name} (1 left)"[:100], value=value,
+                    description=(f"{pet['mode'].title()} Mode" if pet["stage"] == gu_pet.STAGE_MATURE else "Still growing")[:100],
+                    default=(value == self.selected_item),
+                )
+                candidates.append({
+                    "sort_key": (-pet["rank"], display_name), "tier_key": pet["rank"],
+                    "tier_label": f"Rank {pet['rank']}", "option": option,
+                })
+
         if self.category == "Pages":
             # Manual pages (see /assemble_manual, manual_view.py) — quantity-stacked per
             # (user_id, page_id) like plain ITEMS, not an owned-instance table, but pages
@@ -643,6 +695,19 @@ class TradeAddItemView(GameView):
                 affix = accessories_data.ITEMS.get(instance["item_id"]) if instance else None
                 display_name = f"{affix.name} #{instance_id}" if affix else "that piece"
                 added_ok = await asyncio.to_thread(self.game.add_trade_accessory, self.trade_id, self.user_id, interaction.user.display_name, instance_id)
+                if added_ok:
+                    self.selected_item = None
+                await asyncio.to_thread(self._build_components)
+                content = f"Added **{display_name}** to your offer." if added_ok else f"**{display_name}** is no longer available to offer."
+                await interaction.response.edit_message(content=content, view=self)
+                await self.trade_window.refresh()
+                return
+
+            if selected and selected.startswith(GU_PET_VALUE_PREFIX):
+                pet_id = int(selected[len(GU_PET_VALUE_PREFIX):])
+                pet = await asyncio.to_thread(self.game.get_gu_pet, pet_id)
+                display_name = gu_pet.pet_display_name(pet) if pet else "that Gu Pet"
+                added_ok = await asyncio.to_thread(self.game.add_trade_gu_pet, self.trade_id, self.user_id, interaction.user.display_name, pet_id)
                 if added_ok:
                     self.selected_item = None
                 await asyncio.to_thread(self._build_components)

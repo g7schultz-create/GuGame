@@ -771,6 +771,24 @@ class GameManager:
         self.db.reset_trade_confirmations(trade_id)
         return True
 
+    def add_trade_gu_pet(self, trade_id: int, user_id: int, name: str, pet_id: int) -> bool:
+        """Offers a unique Gu Pet — same one-of-a-kind shape as add_trade_manual/add_trade_
+        accessory (a pet_id can only ever be offered once). Unlike those, a Gu Pet currently
+        set as this player's active companion is NOT blocked from being offered — there's no
+        UI path to deactivate a pet without activating a different one first (see
+        gu_pet_view.py's Status tab), so blocking would strand a single-pet owner.
+        GameDatabase.execute_trade/execute_gamble instead clear the sender's active_gu_pet_id
+        automatically if the traded pet turns out to be it."""
+        self.db.get_or_create_player(user_id, name)
+        pet = self.db.get_gu_pet(pet_id)
+        if pet is None or pet["owner_id"] != user_id:
+            return False
+        if pet_id in self.db.get_trade_offer(trade_id, user_id)["gu_pets"]:
+            return False
+        self.db.add_trade_gu_pet(trade_id, user_id, pet_id, gu_pet.pet_display_name(pet))
+        self.db.reset_trade_confirmations(trade_id)
+        return True
+
     def clear_trade_offer(self, trade_id: int, user_id: int):
         self.db.clear_trade_offer(trade_id, user_id)
         self.db.reset_trade_confirmations(trade_id)

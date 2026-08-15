@@ -663,3 +663,20 @@ PET_NAME_CORE_WORDS = [
 
 def generate_pet_name(rng: random.Random) -> str:
     return f"{rng.choice(PET_NAME_PREFIXES)} {rng.choice(PET_NAME_CORE_WORDS)}"
+
+
+def pet_display_name(pet: dict) -> str:
+    """Compact, context-free display name for a Gu Pet -- used anywhere outside /gu_pet's own
+    Status tab (which has its own richer growth-day/mode-annotated label), e.g. trade offers
+    (2026-08-14, see trading.py's TradeAddItemView)."""
+    if pet["stage"] == STAGE_GROWTH:
+        return f"Rank {pet['rank']} Gu Pet #{pet['pet_id']} (still growing)"
+    species = SPECIES[pet["species"]]
+    name_part = f"'{pet['name']}' " if pet.get("name") else ""
+    return f"{name_part}Rank {pet['rank']} {species.name} #{pet['pet_id']}"
+
+
+def pet_display_emoji(pet: dict) -> str:
+    if pet["stage"] == STAGE_GROWTH:
+        return "🥚"
+    return SPECIES[pet["species"]].emoji
