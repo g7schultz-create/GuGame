@@ -290,9 +290,30 @@ class TradeCurrencyModal(discord.ui.Modal, title="Offer Currency"):
             await interaction.followup.send("You didn't have enough for some of that — " + "; ".join(clamp_notes) + ".", ephemeral=True)
 
 
-class TradeAddItemView(GameView):
-    ADD_BATCH_COUNT = 10
+class TradeAddQuantityModal(discord.ui.Modal, title="Add Custom Amount"):
+    quantity_input = discord.ui.TextInput(label="How many?", placeholder="e.g. 25", max_length=12)
 
+    def __init__(self, trade_add_view: "TradeAddItemView", max_quantity: int):
+        super().__init__()
+        self.trade_add_view = trade_add_view
+        self.max_quantity = max_quantity
+        self.quantity_input.placeholder = f"1-{max_quantity}"
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw = self.quantity_input.value.strip()
+        try:
+            quantity = int(raw)
+        except ValueError:
+            await interaction.response.send_message(f"'{raw}' isn't a whole number.", ephemeral=True)
+            return
+        if quantity < 1:
+            await interaction.response.send_message("Enter at least 1.", ephemeral=True)
+            return
+        quantity = min(quantity, self.max_quantity)
+        await self.trade_add_view._perform_add(interaction, quantity)
+
+
+class TradeAddItemView(GameView):
     def __init__(self, game, trade_id: int, user_id: int, trade_window: "TradeWindowView"):
         super().__init__(timeout=120)
         self.game = game
@@ -410,11 +431,9 @@ class TradeAddItemView(GameView):
         add1.callback = self._make_add_callback(1)
         self.add_item(add1)
 
-        add10 = discord.ui.Button(
-            label=f"Add {self.ADD_BATCH_COUNT}", emoji="⏩", style=discord.ButtonStyle.primary, row=add_row, disabled=remaining < 1,
-        )
-        add10.callback = self._make_add_callback(self.ADD_BATCH_COUNT)
-        self.add_item(add10)
+        add_custom = discord.ui.Button(label="Add X", emoji="🔢", style=discord.ButtonStyle.primary, row=add_row, disabled=remaining < 1)
+        add_custom.callback = self._make_add_custom_callback(remaining)
+        self.add_item(add_custom)
 
         add_all = discord.ui.Button(label=f"Add All ({remaining})", emoji="⏭️", style=discord.ButtonStyle.success, row=add_row, disabled=remaining < 1)
         add_all.callback = self._make_add_callback(remaining)
@@ -660,87 +679,96 @@ class TradeAddItemView(GameView):
 
     def _make_add_callback(self, quantity: int):
         async def callback(interaction: discord.Interaction):
-            selected = self.selected_item
-            if selected and selected.startswith(INSTANCE_VALUE_PREFIX):
-                # A unique instance is all-or-nothing (1 or 0) regardless of whether Add
-                # 1/10/All was clicked — there's only ever one of it to offer.
-                gear_id = int(selected[len(INSTANCE_VALUE_PREFIX):])
-                gear = await asyncio.to_thread(self.game.db.get_crafted_gear, gear_id)
-                display_name = blacksmith.crafted_gear_display_name(gear["base_type"], gear["tier"], gear["gear_id"]) if gear else "that piece"
-                added_ok = await asyncio.to_thread(self.game.add_trade_crafted_gear, self.trade_id, self.user_id, interaction.user.display_name, gear_id)
-                if added_ok:
-                    self.selected_item = None
-                await asyncio.to_thread(self._build_components)
-                content = f"Added **{display_name}** to your offer." if added_ok else f"**{display_name}** is no longer available to offer."
-                await interaction.response.edit_message(content=content, view=self)
-                await self.trade_window.refresh()
-                return
-
-            if selected and selected.startswith(MANUAL_VALUE_PREFIX):
-                manual_id = int(selected[len(MANUAL_VALUE_PREFIX):])
-                manual = await asyncio.to_thread(self.game.db.get_manual, manual_id)
-                display_name = f"{manual['name']} (R{manual['rank']} {manual['rarity']})" if manual else "that manual"
-                added_ok = await asyncio.to_thread(self.game.add_trade_manual, self.trade_id, self.user_id, interaction.user.display_name, manual_id)
-                if added_ok:
-                    self.selected_item = None
-                await asyncio.to_thread(self._build_components)
-                content = f"Added **{display_name}** to your offer." if added_ok else f"**{display_name}** is no longer available to offer."
-                await interaction.response.edit_message(content=content, view=self)
-                await self.trade_window.refresh()
-                return
-
-            if selected and selected.startswith(ACCESSORY_VALUE_PREFIX):
-                instance_id = int(selected[len(ACCESSORY_VALUE_PREFIX):])
-                instance = await asyncio.to_thread(self.game.db.get_accessory_instance, instance_id)
-                affix = accessories_data.ITEMS.get(instance["item_id"]) if instance else None
-                display_name = f"{affix.name} #{instance_id}" if affix else "that piece"
-                added_ok = await asyncio.to_thread(self.game.add_trade_accessory, self.trade_id, self.user_id, interaction.user.display_name, instance_id)
-                if added_ok:
-                    self.selected_item = None
-                await asyncio.to_thread(self._build_components)
-                content = f"Added **{display_name}** to your offer." if added_ok else f"**{display_name}** is no longer available to offer."
-                await interaction.response.edit_message(content=content, view=self)
-                await self.trade_window.refresh()
-                return
-
-            if selected and selected.startswith(GU_PET_VALUE_PREFIX):
-                pet_id = int(selected[len(GU_PET_VALUE_PREFIX):])
-                pet = await asyncio.to_thread(self.game.get_gu_pet, pet_id)
-                display_name = gu_pet.pet_display_name(pet) if pet else "that Gu Pet"
-                added_ok = await asyncio.to_thread(self.game.add_trade_gu_pet, self.trade_id, self.user_id, interaction.user.display_name, pet_id)
-                if added_ok:
-                    self.selected_item = None
-                await asyncio.to_thread(self._build_components)
-                content = f"Added **{display_name}** to your offer." if added_ok else f"**{display_name}** is no longer available to offer."
-                await interaction.response.edit_message(content=content, view=self)
-                await self.trade_window.refresh()
-                return
-
-            if selected and selected.startswith(PAGE_VALUE_PREFIX):
-                # Unlike the three instance branches above, a page stack IS quantity-based
-                # (like plain items) — Add 1/10/All all apply here.
-                page_id = selected[len(PAGE_VALUE_PREFIX):]
-                page = manual_data.PAGES.get(page_id)
-                display_name = page.name if page else page_id
-                added = await asyncio.to_thread(self.game.add_trade_page, self.trade_id, self.user_id, interaction.user.display_name, page_id, quantity)
-                if added and await asyncio.to_thread(self._remaining, selected) == 0:
-                    self.selected_item = None
-                await asyncio.to_thread(self._build_components)
-                content = f"Added {added}x **{display_name}** to your offer." if added else f"You have no more **{display_name}** left to offer."
-                await interaction.response.edit_message(content=content, view=self)
-                await self.trade_window.refresh()
-                return
-
-            item_name = selected
-            added = await asyncio.to_thread(self.game.add_trade_item, self.trade_id, self.user_id, interaction.user.display_name, item_name, quantity)
-            if added and await asyncio.to_thread(self._remaining, item_name) == 0:
-                self.selected_item = None  # nothing left of this item to keep targeting
-            await asyncio.to_thread(self._build_components)
-            content = f"Added {added}x **{item_name}** to your offer." if added else f"You have no more **{item_name}** left to offer."
-            await interaction.response.edit_message(content=content, view=self)
-            await self.trade_window.refresh()
+            await self._perform_add(interaction, quantity)
 
         return callback
+
+    def _make_add_custom_callback(self, max_quantity: int):
+        async def callback(interaction: discord.Interaction):
+            await interaction.response.send_modal(TradeAddQuantityModal(self, max_quantity))
+
+        return callback
+
+    async def _perform_add(self, interaction: discord.Interaction, quantity: int):
+        selected = self.selected_item
+        if selected and selected.startswith(INSTANCE_VALUE_PREFIX):
+            # A unique instance is all-or-nothing (1 or 0) regardless of whether Add
+            # 1/10/All was clicked — there's only ever one of it to offer.
+            gear_id = int(selected[len(INSTANCE_VALUE_PREFIX):])
+            gear = await asyncio.to_thread(self.game.db.get_crafted_gear, gear_id)
+            display_name = blacksmith.crafted_gear_display_name(gear["base_type"], gear["tier"], gear["gear_id"]) if gear else "that piece"
+            added_ok = await asyncio.to_thread(self.game.add_trade_crafted_gear, self.trade_id, self.user_id, interaction.user.display_name, gear_id)
+            if added_ok:
+                self.selected_item = None
+            await asyncio.to_thread(self._build_components)
+            content = f"Added **{display_name}** to your offer." if added_ok else f"**{display_name}** is no longer available to offer."
+            await interaction.response.edit_message(content=content, view=self)
+            await self.trade_window.refresh()
+            return
+
+        if selected and selected.startswith(MANUAL_VALUE_PREFIX):
+            manual_id = int(selected[len(MANUAL_VALUE_PREFIX):])
+            manual = await asyncio.to_thread(self.game.db.get_manual, manual_id)
+            display_name = f"{manual['name']} (R{manual['rank']} {manual['rarity']})" if manual else "that manual"
+            added_ok = await asyncio.to_thread(self.game.add_trade_manual, self.trade_id, self.user_id, interaction.user.display_name, manual_id)
+            if added_ok:
+                self.selected_item = None
+            await asyncio.to_thread(self._build_components)
+            content = f"Added **{display_name}** to your offer." if added_ok else f"**{display_name}** is no longer available to offer."
+            await interaction.response.edit_message(content=content, view=self)
+            await self.trade_window.refresh()
+            return
+
+        if selected and selected.startswith(ACCESSORY_VALUE_PREFIX):
+            instance_id = int(selected[len(ACCESSORY_VALUE_PREFIX):])
+            instance = await asyncio.to_thread(self.game.db.get_accessory_instance, instance_id)
+            affix = accessories_data.ITEMS.get(instance["item_id"]) if instance else None
+            display_name = f"{affix.name} #{instance_id}" if affix else "that piece"
+            added_ok = await asyncio.to_thread(self.game.add_trade_accessory, self.trade_id, self.user_id, interaction.user.display_name, instance_id)
+            if added_ok:
+                self.selected_item = None
+            await asyncio.to_thread(self._build_components)
+            content = f"Added **{display_name}** to your offer." if added_ok else f"**{display_name}** is no longer available to offer."
+            await interaction.response.edit_message(content=content, view=self)
+            await self.trade_window.refresh()
+            return
+
+        if selected and selected.startswith(GU_PET_VALUE_PREFIX):
+            pet_id = int(selected[len(GU_PET_VALUE_PREFIX):])
+            pet = await asyncio.to_thread(self.game.get_gu_pet, pet_id)
+            display_name = gu_pet.pet_display_name(pet) if pet else "that Gu Pet"
+            added_ok = await asyncio.to_thread(self.game.add_trade_gu_pet, self.trade_id, self.user_id, interaction.user.display_name, pet_id)
+            if added_ok:
+                self.selected_item = None
+            await asyncio.to_thread(self._build_components)
+            content = f"Added **{display_name}** to your offer." if added_ok else f"**{display_name}** is no longer available to offer."
+            await interaction.response.edit_message(content=content, view=self)
+            await self.trade_window.refresh()
+            return
+
+        if selected and selected.startswith(PAGE_VALUE_PREFIX):
+            # Unlike the three instance branches above, a page stack IS quantity-based
+            # (like plain items) — Add 1/10/All all apply here.
+            page_id = selected[len(PAGE_VALUE_PREFIX):]
+            page = manual_data.PAGES.get(page_id)
+            display_name = page.name if page else page_id
+            added = await asyncio.to_thread(self.game.add_trade_page, self.trade_id, self.user_id, interaction.user.display_name, page_id, quantity)
+            if added and await asyncio.to_thread(self._remaining, selected) == 0:
+                self.selected_item = None
+            await asyncio.to_thread(self._build_components)
+            content = f"Added {added}x **{display_name}** to your offer." if added else f"You have no more **{display_name}** left to offer."
+            await interaction.response.edit_message(content=content, view=self)
+            await self.trade_window.refresh()
+            return
+
+        item_name = selected
+        added = await asyncio.to_thread(self.game.add_trade_item, self.trade_id, self.user_id, interaction.user.display_name, item_name, quantity)
+        if added and await asyncio.to_thread(self._remaining, item_name) == 0:
+            self.selected_item = None  # nothing left of this item to keep targeting
+        await asyncio.to_thread(self._build_components)
+        content = f"Added {added}x **{item_name}** to your offer." if added else f"You have no more **{item_name}** left to offer."
+        await interaction.response.edit_message(content=content, view=self)
+        await self.trade_window.refresh()
 
 
 class TradeWindowView(GameView):
