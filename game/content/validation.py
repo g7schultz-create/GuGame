@@ -408,8 +408,9 @@ KNOWN_ACCESSORY_EFFECT_KEYS = {
     "raid_party_bonus", "salvage_bonus", "unique_signature",
     # Nine-Deaths Black Pearl only (see GameManager.check_and_consume_flee_ward) -- a killing
     # blow resolves as a full flee/withdraw instead of a defeat, distinct from
-    # defeat_ward_daily's own "still recorded as a defeat, just no Qi lost" shape.
-    "flee_on_defeat_weekly",
+    # defeat_ward_daily's own "still recorded as a defeat, just no Qi lost" shape. No
+    # cooldown at all (fires unlimited times, by explicit request).
+    "flee_on_defeat_unlimited",
 }
 
 

@@ -516,11 +516,18 @@ class GuPetView(GameView):
         owned_sacrifice = dict(candidates).get(self.selected_sacrifice_item, 0)
         preview_quantity = min(gu_pet.REFINE_MAX_SACRIFICE, max(gu_pet.REFINE_MIN_SACRIFICE, owned_sacrifice))
         race_success_bonus = self.game.gu_pet_refine_race_bonus_pct(player, "gu_refiner_success_pct")
-        estimated_chance = gu_pet.refine_success_chance(player["gu_refiner_rank"], qualified_rank, preview_quantity, race_success_bonus)
+        # Since the ritual can land on ANY of the 7 ranks (see gu_pet.roll_target_rank), show
+        # the real success chance for every one of them, not just the most-likely outcome --
+        # the star marks your own natively-qualified rank (the one the roll favors most).
+        chance_lines = [
+            f"Rank {rank} ({gu_pet.rank_to_rarity(rank)}): **{gu_pet.refine_success_chance(player['gu_refiner_rank'], rank, preview_quantity, race_success_bonus) * 100:.0f}%**"
+            + (" ⭐" if rank == qualified_rank else "")
+            for rank in range(gu_pet.MIN_RANK, gu_pet.MAX_RANK + 1)
+        ]
         embed.add_field(
-            name="Estimated Success Chance",
-            value=f"**~{estimated_chance * 100:.0f}%** if the roll lands on your own Rank {qualified_rank} (sacrificing {preview_quantity}) — a higher roll costs more, a lower one costs less.",
-            inline=True,
+            name=f"Success Chance by Rank (sacrificing {preview_quantity})",
+            value="\n".join(chance_lines) + f"\n⭐ = your own natively-qualified rank, the roll's most likely outcome",
+            inline=False,
         )
         owned_pets = self.game.get_player_gu_pets(self.user_id)
         if owned_pets:

@@ -4506,24 +4506,24 @@ class GameManager:
         self._drain_active_gu_pet_combat_dispatch(user_id)
 
     def check_and_consume_flee_ward(self, user_id: int) -> Optional[str]:
-        """Nine-Deaths Black Pearl only (see accessories_data.py's flee_on_defeat_weekly
+        """Nine-Deaths Black Pearl only (see accessories_data.py's flee_on_defeat_unlimited
         effect) -- checked BEFORE check_and_consume_defeat_ward wherever a killing blow would
         apply (see hunt.py/battlefield_view.py). Unlike defeat_ward_daily (still records a
         defeat, just negates the Qi loss), this resolves the whole encounter as a successful
         flee/withdraw instead -- no defeat, no Qi loss, same "bank what you'd earned so far"
         outcome a manual Flee/Withdraw already produces. Returns the ward's name if it fired,
-        else None. Scoped to solo-player encounters (hunt/battlefield) only -- in a team
-        battle or the backstab duel, a knocked-out participant already stops taking further
-        damage while the fight continues for the rest of the team, which is the closest real
-        equivalent "escape" already available there."""
+        else None. No cooldown at all -- fires every single time it's needed (by explicit
+        request, superseding the item's original once-every-seven-days limit), so there's
+        nothing to check against last_activation_ts and nothing to record here either. Scoped
+        to solo-player encounters (hunt/battlefield) only -- in a team battle or the backstab
+        duel, a knocked-out participant already stops taking further damage while the fight
+        continues for the rest of the team, which is the closest real equivalent "escape"
+        already available there."""
         for instance_id in self.db.get_equipped_accessory_ids(user_id).values():
             instance = self.db.get_accessory_instance(instance_id)
             affix = self._affix_for_instance(instance)
-            if affix is None or affix.effect_key != "flee_on_defeat_weekly":
+            if affix is None or affix.effect_key != "flee_on_defeat_unlimited":
                 continue
-            if self._accessory_cooldown_ready(instance, weekly=True) > 0:
-                continue
-            self.db.set_accessory_instance_activation(instance_id, int(time.time()))
             return affix.name
         return None
 

@@ -290,7 +290,7 @@ _reg("acc_golden_thread_karma_necklace", "Golden Thread Karma Necklace", "Access
      "One thread per player per day; no self-trading loops.", "stat", stat_bonuses={"loot_chance_bonus_pct": 0.06})
 _reg("acc_nine_deaths_black_pearl", "Nine-Deaths Black Pearl", "Accessory", "Necklace", "Necklace", 5, "Mythic",
      "Soul, Dark", "On what would be a killing blow, the pearl flares and you flee the fight entirely instead of falling -- no Qi lost, no defeat recorded.",
-     "Once every seven days; you still bank only what you'd earned before fleeing, same as a normal escape.", "flee_on_defeat_weekly", {"weekly": True})
+     "No cooldown -- fires every single time it's needed; you still bank only what you'd earned before fleeing, same as a normal escape.", "flee_on_defeat_unlimited")
 _reg("acc_aperture_stabilizing_chain", "Aperture-Stabilizing Chain", "Accessory", "Necklace", "Necklace", 6, "Mythic",
      "Rule, Qi", "Reduces deviation chance during high-risk cultivation by 20% and converts the first severe deviation each week into a moderate one.",
      "Cannot affect tribulation outcomes or scripted story failures.", "stat", stat_bonuses={"cultivation_speed_pct": 0.03})
