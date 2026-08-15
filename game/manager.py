@@ -93,6 +93,13 @@ class GameManager:
                     f"Your dantian resists — you've already used **{status['max_uses']}** Tier {tier} Qi "
                     f"Ascension Pills, the lifetime limit for this tier. It wasn't consumed."
                 )
+        # Immortal Notes (see items._use_immortal_notes): same "don't consume a doomed use"
+        # reasoning as the Qi Ascension Pill check above -- nothing to accelerate if the
+        # player isn't currently studying a profession.
+        if item_name == "Immortal Notes":
+            check_player = self.db.get_or_create_player(user_id, name)
+            if not check_player["studying_profession"]:
+                return False, "You aren't studying anything right now — the notes have nothing to accelerate. They weren't consumed."
         # Food Dao Path: a scaled chance the Pill isn't actually consumed by this use. Rolled
         # before removal so a "saved" pill never even leaves the inventory (item.use's effect
         # still fires normally either way) -- but ownership still has to be checked either way,
@@ -1001,13 +1008,15 @@ class GameManager:
     # Every non-"battle", non-"treasure" bubble independently rolls one of these -- a dud
     # ("nothing") most of the time, sometimes a guaranteed Qi Ascension Pill (see
     # grant_inheritance_ground_pill_reward), Primeval Essence Crystals (see
-    # grant_inheritance_ground_essence_crystal_reward), or an Essence Restoration Pill (see
-    # grant_inheritance_ground_essence_pill_reward). "treasure" is deliberately NOT in this
-    # weighted pool -- it's a single guaranteed bubble instead (see
+    # grant_inheritance_ground_essence_crystal_reward), an Essence Restoration Pill (see
+    # grant_inheritance_ground_essence_pill_reward), Tier 8 Herb (see
+    # grant_inheritance_ground_material_reward), or Immortal Notes (see
+    # grant_inheritance_ground_immortal_notes_reward, 2026-08-14). "treasure" is deliberately
+    # NOT in this weighted pool -- it's a single guaranteed bubble instead (see
     # generate_inheritance_ground_board), same "exactly one guaranteed tile, everything else
     # weighted" split treasure_hunt.TILE_CATEGORY_WEIGHTS/roll_board uses. First-pass weights,
     # easy to retune.
-    BUBBLE_OUTCOME_WEIGHT = {"nothing": 25, "ascension_pill": 15, "essence_crystal": 15, "essence_pill": 15, "materials": 15}
+    BUBBLE_OUTCOME_WEIGHT = {"nothing": 20, "ascension_pill": 15, "essence_crystal": 15, "essence_pill": 15, "materials": 15, "immortal_notes": 5}
     ESSENCE_CRYSTAL_QUANTITY_RANGE = (20, 100)
     ESSENCE_PILL_MIN_TIER = 4
     ESSENCE_PILL_MAX_TIER = 7
@@ -1193,6 +1202,17 @@ class GameManager:
             qty = random.randint(2, 5)
             self.db.add_item(user_id, "Tier 8 Herb", qty)
             results.append((name, f"{qty}x **Tier 8 Herb**"))
+        return results
+
+    def grant_inheritance_ground_immortal_notes_reward(self, team: list) -> list:
+        """An "immortal_notes" bubble (2026-08-14, see generate_inheritance_ground_board) --
+        guaranteed 1x Immortal Notes per team member, same "whole team shares the bubble's
+        find" shape every other bubble-grant function here uses. Returns
+        [(name, reward_str), ...]."""
+        results = []
+        for user_id, name in team:
+            self.db.add_item(user_id, "Immortal Notes", 1)
+            results.append((name, "1x **Immortal Notes**"))
         return results
 
     def grant_inheritance_ground_share_reward(self, ground_key: str, user_id: int, name: str) -> str:
@@ -1750,7 +1770,7 @@ class GameManager:
         # Every other manual page effect (breakthrough_success_pct, dodge_chance_pct,
         # technique/physical_damage_pct, insight_gain_pct, cooldown_reduction_pct,
         # deviation_resistance_pct, essence_recovery/purity_pct, hp_pct — see
-        # manual_view.EFFECT_LABELS) — weighted primary 100%/auxiliary 35%, same as
+        # manual_view.EFFECT_LABELS) — weighted primary 100%/auxiliary 100%, same as
         # cultivation, but NOT put through the cultivation-only soft/hard cap above.
         manual_effects = qi_status.get("manual_effect_bonuses", {})
         for key, value in manual_effects.items():
@@ -3181,15 +3201,15 @@ class GameManager:
     # -- Search Black Heaven's own bubble board -- same "fixed 20-bubble board, team_size only
     # affects how many the team gets to POP" shape generate_inheritance_ground_board uses, just
     # with Black Heaven's own category set per explicit request: nothing/ascension_pill/
-    # essence_crystal/essence_pill/materials as the weighted filler (ascension_pill added
-    # 2026-08-14, mirroring Inheritance Ground's own bubble), one guaranteed "gu" bubble
-    # (instead of Inheritance Ground's "treasure") and BLACK_HEAVEN_MIN_BATTLE_BUBBLES (3, not
-    # 2) guaranteed "battle" bubbles -- "very very strong mobs" gets more encounters, not just
-    # scarier ones.
+    # essence_crystal/essence_pill/materials/immortal_notes as the weighted filler
+    # (ascension_pill added 2026-08-14, immortal_notes added same day, both mirroring
+    # Inheritance Ground's own bubble set), one guaranteed "gu" bubble (instead of Inheritance
+    # Ground's "treasure") and BLACK_HEAVEN_MIN_BATTLE_BUBBLES (3, not 2) guaranteed "battle"
+    # bubbles -- "very very strong mobs" gets more encounters, not just scarier ones.
     BLACK_HEAVEN_BOARD_SIZE = 20
     BLACK_HEAVEN_BUBBLES_PER_TEAM_MEMBER = 2
     BLACK_HEAVEN_MIN_BATTLE_BUBBLES = 3
-    BLACK_HEAVEN_BUBBLE_OUTCOME_WEIGHT = {"nothing": 30, "ascension_pill": 20, "essence_crystal": 15, "essence_pill": 15, "materials": 20}
+    BLACK_HEAVEN_BUBBLE_OUTCOME_WEIGHT = {"nothing": 25, "ascension_pill": 20, "essence_crystal": 15, "essence_pill": 15, "materials": 20, "immortal_notes": 5}
     BLACK_HEAVEN_ESSENCE_CRYSTAL_QUANTITY_RANGE = (40, 150)
     BLACK_HEAVEN_ESSENCE_PILL_MIN_TIER = 5
     BLACK_HEAVEN_ESSENCE_PILL_MAX_TIER = 7
@@ -3306,6 +3326,16 @@ class GameManager:
                 self.db.add_item(user_id, item_name, qty)
             parts = [f"{qty}x {item_name}" for item_name, qty in granted.items()]
             results.append((name, ", ".join(parts)))
+        return results
+
+    def grant_black_heaven_immortal_notes_reward(self, team: list) -> list:
+        """An "immortal_notes" bubble (2026-08-14, see generate_black_heaven_board) --
+        direct mirror of grant_inheritance_ground_immortal_notes_reward's own shape:
+        guaranteed 1x Immortal Notes per team member. Returns [(name, reward_str), ...]."""
+        results = []
+        for user_id, name in team:
+            self.db.add_item(user_id, "Immortal Notes", 1)
+            results.append((name, "1x **Immortal Notes**"))
         return results
 
     # -- Gathering: /mine, /gather, /explore -----------------------------------
@@ -4653,10 +4683,10 @@ class GameManager:
     MANUAL_ASSEMBLE_INK_COST_PER_SLOT = 3
     MANUAL_STUDY_DUST_COST = 2
     # Design doc section 5 originally called for 1 hour at the lowest realm scaling to 12
-    # hours at the highest -- cut to a sixth of that (10 minutes to 2 hours) since the full
-    # curve felt far too punishing in practice for how often experimenting with manual
-    # loadouts should be possible; same relative shape across ranks, just much shorter.
-    MANUAL_CHANGE_COOLDOWN_BY_RANK = {1: 600, 2: 600, 3: 1200, 4: 2400, 5: 3600, 6: 5400, 7: 7200}
+    # hours at the highest, later cut to a sixth of that (10 minutes to 2 hours) for still
+    # feeling too punishing, and cut again (flat, no more per-rank scaling) since experimenting
+    # with manual loadouts should be near-frictionless, not gated behind a growing timer.
+    MANUAL_CHANGE_COOLDOWN_SECONDS = 60
 
     def _effective_search_recharge_seconds(self, user_id: int) -> int:
         """search_recharge_reduction_pct (see accessories_data.py's clue_chance-effect items
@@ -5321,9 +5351,7 @@ class GameManager:
         other_slot_id = player["equipped_auxiliary_manual_id"] if slot == "primary" else player["equipped_primary_manual_id"]
         if other_slot_id == manual_id:
             return False, "That manual is already equipped in your other slot."
-        great_realm_index = realms.STAGES[player["realm_index"]].great_realm_index
-        cooldown = self.MANUAL_CHANGE_COOLDOWN_BY_RANK.get(great_realm_index + 1, 600)
-        remaining = self._check_cooldown(player, "last_manual_change_ts", cooldown)
+        remaining = self._check_cooldown(player, "last_manual_change_ts", self.MANUAL_CHANGE_COOLDOWN_SECONDS)
         if remaining > 0:
             from .ui_utils import format_duration
             return False, f"Manuals are still settling from your last change — try again in {format_duration(remaining)}."
@@ -5424,9 +5452,7 @@ class GameManager:
             if manual is None or manual["owner_id"] != user_id:
                 return "Manual preset skipped — you no longer own one of the saved manuals."
 
-        great_realm_index = realms.STAGES[player["realm_index"]].great_realm_index
-        cooldown = self.MANUAL_CHANGE_COOLDOWN_BY_RANK.get(great_realm_index + 1, 600)
-        remaining = self._check_cooldown(player, "last_manual_change_ts", cooldown)
+        remaining = self._check_cooldown(player, "last_manual_change_ts", self.MANUAL_CHANGE_COOLDOWN_SECONDS)
         if remaining > 0:
             from .ui_utils import format_duration
             return f"Manuals are still settling from your last change — try again in {format_duration(remaining)} to also restore your saved manuals."

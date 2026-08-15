@@ -31,7 +31,10 @@ DECENT_SUB_WEIGHTS = {"manual_page": 30, "beast_core": 30, "essence_stone": 20, 
 # own DECENT_SUB_WEIGHTS deliberately doesn't get (Tier N Herb has no equivalent base-game
 # drop gap to fill; this closes White Heaven's own one, per explicit request).
 WHITE_HEAVEN_DECENT_SUB_WEIGHTS = {"manual_page": 25, "beast_core": 25, "herb": 20, "essence_stone": 15, "essence_pill": 15}
-RARE_SUB_WEIGHTS = {"accessory": 40, "gu": 30, "essence_pill": 30}
+# 2026-08-14: "immortal_notes" added -- a rare drop of Immortal Notes (see
+# items._use_immortal_notes), the same "rare within rare" treatment Search Black Heaven and
+# Inheritance Ground both give it on their own bubble tables.
+RARE_SUB_WEIGHTS = {"accessory": 35, "gu": 25, "essence_pill": 25, "immortal_notes": 15}
 
 SMALL_MATERIAL_NAME = "Tier 1 Beast Material"
 SMALL_STONE_RANGE = (50, 200)
@@ -157,6 +160,9 @@ def _roll_base_tile_reward(game, user_id: int, name: str, category: str, rng: ra
             gu_name = rng.choice(_gu_names_by_quality(quality))
             db.add_item(user_id, gu_name, 1)
             return "🐛", gu_name
+        if sub == "immortal_notes":
+            db.add_item(user_id, "Immortal Notes", 1)
+            return "📜", "Immortal Notes"
         tier = _essence_pill_tier(4, 7, rng)
         item_name = f"Essence Restoration Pill (T{tier})"
         db.add_item(user_id, item_name, 1)

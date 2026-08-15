@@ -345,7 +345,10 @@ class ProfileView(GameView):
         embed.set_thumbnail(url=self.avatar_url)
 
         if realms.is_max_realm(p["realm_index"]):
-            embed.description = f"**{current_realm}** — you've reached the peak of known cultivation... for now."
+            embed.description = (
+                f"**{current_realm}** — you've reached the peak of known cultivation... for now.\n"
+                f"💠 **Qi Banked:** {p['qi']:,.2f} — still accruing, ready to carry over the moment a realm above this one exists."
+            )
             return embed
 
         next_realm = realms.realm_name(p["realm_index"] + 1)
@@ -381,12 +384,12 @@ class ProfileView(GameView):
     def _manual_bonuses_text(self) -> str:
         """What your equipped manual(s) are actually granting right now — the permanent,
         no-expiry counterpart to the Active Buffs list below (see database._qi_rate_
-        components for how the underlying numbers are weighted primary 100%/auxiliary 35%
-        and cultivation-capped)."""
+        components for how the underlying numbers are weighted -- both slots equally -- and
+        cultivation-capped)."""
         p = self.player
         qi_status = self.db.get_qi_status(self.user_id)
         lines = []
-        for manual_id, tag in ((p["equipped_primary_manual_id"], "Primary"), (p["equipped_auxiliary_manual_id"], "Auxiliary (35% weight)")):
+        for manual_id, tag in ((p["equipped_primary_manual_id"], "Primary"), (p["equipped_auxiliary_manual_id"], "Auxiliary")):
             if not manual_id:
                 continue
             manual = self.db.get_manual(manual_id)

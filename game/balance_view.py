@@ -152,7 +152,11 @@ class BalanceView(GameView):
         )
 
         if status["at_max_realm"]:
-            embed.add_field(name="⚡ Qi to Next Realm", value="🏔️ Peak realm reached", inline=False)
+            embed.add_field(
+                name="⚡ Qi to Next Realm",
+                value=f"🏔️ Peak realm reached — {p['qi']:,.2f} banked, ready to carry over once a realm above this one exists",
+                inline=False,
+            )
         else:
             percent = min(100, p["qi"] / status["qi_required"] * 100)
             embed.add_field(

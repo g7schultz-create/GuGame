@@ -74,6 +74,26 @@ def _use_primeval_essence_crystal(db: GameDatabase, user_id: int) -> str:
     return f"The crystal dissolves into primeval essence: **+{restored}** ({essence}/{max_essence})."
 
 
+# A rare drop from Search Black Heaven / Inheritance Ground / /sfbl (2026-08-14) -- rewinds
+# studying_started_ts by a flat block of real time, letting a profession's study clock
+# (game/professions.py's STUDY_HOURS_PER_STEP, 1-336 hours per rank) skip ahead instantly.
+# Refuses (unused, not consumed) if nothing is currently being studied -- see
+# GameManager.use_item's own pre-check and GameDatabase.speed_up_study's docstring for why
+# the actual completion still only ever happens through study()/check_and_complete_ready_
+# studies() the normal way, never granted directly here.
+IMMORTAL_NOTES_STUDY_HOURS_REDUCED = 24
+
+
+def _use_immortal_notes(db: GameDatabase, user_id: int) -> str:
+    result = db.speed_up_study(user_id, IMMORTAL_NOTES_STUDY_HOURS_REDUCED)
+    if not result["used"]:
+        return "You aren't studying anything right now — the notes have nothing to accelerate."
+    return (
+        f"You pore over the Immortal Notes, absorbing a lifetime of insight in moments — your "
+        f"**{result['profession']}** study advances by **{IMMORTAL_NOTES_STUDY_HOURS_REDUCED} hours**!"
+    )
+
+
 ITEMS: dict[str, Item] = {
     "Minor Recovery Pill": Item(
         name="Minor Recovery Pill",
@@ -127,6 +147,17 @@ ITEMS: dict[str, Item] = {
         description="A small crystallized shard of primeval essence, waiting to be absorbed.",
         use=_use_primeval_essence_crystal,
         subcategory="Essence",
+    ),
+    "Immortal Notes": Item(
+        name="Immortal Notes",
+        category="Materials",
+        description=(
+            f"Study notes left behind by an actual Immortal — dense with shortcuts a mortal lifetime "
+            f"couldn't otherwise find. Advances your current profession study by "
+            f"{IMMORTAL_NOTES_STUDY_HOURS_REDUCED} hours."
+        ),
+        use=_use_immortal_notes,
+        subcategory="Insight",
     ),
 }
 
@@ -511,7 +542,11 @@ PILL_SUBCATEGORIES = ["Cultivation Boost", "Qi Multiplier", "Aptitude Enhancing"
 # splitting the same way Pills did. Beast Trophy/Alchemy Root were added later via
 # game/content/materials*.py and never got added here -- without them, /inventory, /profile,
 # and /trade all silently strand those 23 items with no subcategory button to reach them.
-MATERIAL_SUBCATEGORIES = ["Ore", "Herb", "Beast Material", "Beast Trophy", "Alchemy Root", "Essence", "Avatar"]
+# "Insight" added 2026-08-14 for Immortal Notes -- adding an 8th subcategory doesn't grow the
+# row count _build_subcategory_buttons needs (7 already wraps to 2 rows at 5-per-row, and so
+# does 8), so this is safe against the row-budget trap PILL_SUBCATEGORIES/this list have
+# already hit before (see feedback_shared_category_lists_row_budget.md).
+MATERIAL_SUBCATEGORIES = ["Ore", "Herb", "Beast Material", "Beast Trophy", "Alchemy Root", "Essence", "Avatar", "Insight"]
 
 
 def items_in_category(category: str, subcategory: Optional[str] = None):
@@ -543,7 +578,7 @@ CATEGORY_EMOJI = {"Healing": "🩹", "Pills": "💊", "Materials": "📦"}
 SUBCATEGORY_EMOJI = {
     "Cultivation Boost": "⚡", "Qi Multiplier": "✨", "Aptitude Enhancing": "🧠", "Essence Restoration": "💧",
     "Healing": "🩹", "Ore": "⛏️", "Herb": "🌿", "Beast Material": "🐗", "Essence": "💎", "Avatar": "👻",
-    "Beast Trophy": "🏆", "Alchemy Root": "🌱",
+    "Beast Trophy": "🏆", "Alchemy Root": "🌱", "Insight": "📜",
 }
 
 

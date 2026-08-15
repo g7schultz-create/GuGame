@@ -46,8 +46,8 @@ ACCESSORY_SLOT_TYPES = {"Ring", "Earring", "Necklace", "Bracelet", "Artifact"}
 # equip_manual writes straight to players.equipped_primary_manual_id/
 # equipped_auxiliary_manual_id instead, and (unlike every catalog/crafted_gear slot) a
 # manual can be equipped in ONE of two independent slots that both feed the same
-# cultivation bonus at different weights (primary 100%, auxiliary 35% — see
-# GameDatabase._qi_rate_components). So these two are handled as local virtual slots
+# cultivation bonus, both at full (100%) weight (see GameDatabase._qi_rate_components).
+# So these two are handled as local virtual slots
 # rather than added to the shared equipment.SLOTS list, which would ripple into every
 # other consumer of that list (compute_equipment_bonuses, unequip_all, starter equipment,
 # ...) for something that was never really "one more slot_key" the same way Head/Body/

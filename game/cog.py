@@ -792,7 +792,10 @@ class GameCog(commands.Cog):
         embed.add_field(name="✨ Qi Multiplier", value=f"x{player['qi_multiplier']:.2f}", inline=True)
 
         if realms.is_max_realm(player["realm_index"]):
-            progress_text = f"`{render_bar(1, 1)}` 100% — peak realm reached"
+            progress_text = (
+                f"`{render_bar(1, 1)}` Peak realm reached — qi keeps banking anyway "
+                f"(**{player['qi']:,.2f}** stored), ready to carry over the moment a realm above this one exists."
+            )
         else:
             qi_required = realms.qi_required_for_next(player["realm_index"])
             percent = min(100, player["qi"] / qi_required * 100)
@@ -817,7 +820,7 @@ class GameCog(commands.Cog):
         p = status["player"]
 
         if status["at_max_realm"]:
-            subtitle = "🏔️ Peak realm reached"
+            subtitle = "🏔️ Peak realm reached — qi still banks for whenever a realm above this one exists"
         elif status["ready"]:
             subtitle = "✨ Ready for breakthrough!"
         else:
@@ -908,7 +911,11 @@ class GameCog(commands.Cog):
         status = await asyncio.to_thread(self.game.breakthrough_status, interaction.user.id, interaction.user.display_name)
 
         if status["at_max_realm"]:
-            await interaction.response.send_message("You've reached the peak of known cultivation... for now.", ephemeral=True)
+            await interaction.response.send_message(
+                "You've reached the peak of known cultivation... for now. Your qi keeps banking anyway — "
+                f"**{status['player']['qi']:,.2f}** stored, ready the moment a realm above this one exists.",
+                ephemeral=True,
+            )
             return
         if status["player"]["qi"] < status["qi_required"]:
             await interaction.response.send_message(

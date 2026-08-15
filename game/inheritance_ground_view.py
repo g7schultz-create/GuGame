@@ -42,7 +42,7 @@ SHARER_SIDE = "sharers"  # the one shared duel "side" every Share-choosing membe
 
 BUBBLE_ICON = {
     "treasure": "💰", "battle": "⚔️", "nothing": "💨", "ascension_pill": "💊",
-    "essence_crystal": "💎", "essence_pill": "🧪", "materials": "🌿",
+    "essence_crystal": "💎", "essence_pill": "🧪", "materials": "🌿", "immortal_notes": "📜",
 }
 
 
@@ -536,6 +536,10 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
                 results = await asyncio.to_thread(self.game.grant_inheritance_ground_material_reward, self.team)
                 summary = "\n".join(f"**{name}**: {reward}" for name, reward in results)
                 self.last_bubble_notice = f"🌿 The bubble held a cache of rare herbs!\n{summary}"
+            elif category == "immortal_notes":
+                results = await asyncio.to_thread(self.game.grant_inheritance_ground_immortal_notes_reward, self.team)
+                summary = "\n".join(f"**{name}**: {reward}" for name, reward in results)
+                self.last_bubble_notice = f"📜 The bubble held a bundle of Immortal Notes!\n{summary}"
             else:  # "nothing" -- a dud, matching BUBBLE_OUTCOME_WEIGHT's own possible outcomes
                 self.last_bubble_notice = "💨 Just an empty bubble. Nothing here."
             if sum(self.actually_clicked) >= self._max_bubble_pops():

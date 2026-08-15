@@ -1244,15 +1244,14 @@ class GameDatabase:
 
     def _essence_capacity_multiplier(self, cur, user_id: int, player) -> float:
         """1 + this player's total essence_capacity_pct from their equipped primary/auxiliary
-        manuals (same primary-100%/auxiliary-35% weighting _qi_rate_components uses for every
-        other manual effect). Self-contained here — reading manuals directly off `player`
-        rather than being threaded down from a manager.py compute_equipment_bonuses call, the
-        way essence_purity_pct is — so it's automatically picked up by every essence-cap site
-        below, INCLUDING items.py's Primeval Essence Crystal restore, which only ever calls
-        into this file as restore_essence_percent(db, user_id) with no equipment-bonus context
-        of its own."""
+        manuals (both slots weighted equally -- see _qi_rate_components). Self-contained here
+        — reading manuals directly off `player` rather than being threaded down from a
+        manager.py compute_equipment_bonuses call, the way essence_purity_pct is — so it's
+        automatically picked up by every essence-cap site below, INCLUDING items.py's Primeval
+        Essence Crystal restore, which only ever calls into this file as
+        restore_essence_percent(db, user_id) with no equipment-bonus context of its own."""
         total_pct = 0.0
-        for manual_id, weight in ((player["equipped_primary_manual_id"], 1.0), (player["equipped_auxiliary_manual_id"], 0.35)):
+        for manual_id, weight in ((player["equipped_primary_manual_id"], 1.0), (player["equipped_auxiliary_manual_id"], 1.0)):
             if not manual_id:
                 continue
             row = cur.execute("SELECT effects FROM manuals WHERE manual_id = ? AND owner_id = ?", (manual_id, user_id)).fetchone()
@@ -1335,10 +1334,12 @@ class GameDatabase:
         # with the old single-item equipped "manual" slot above rather than replacing it,
         # but the soft/hard cap safeguard (design doc section 18) has to bound the COMBINED
         # cultivation bonus from every manual source, old and new alike, or the old slot's
-        # small uncapped 2% would just be an unbounded side door around the cap. Primary
-        # manual contributes 100% of its cultivation effects, auxiliary 35% (section 5).
-        # Effects are stored as percent numbers (5.0 == +5%, matching the design doc), so
-        # /100 converts to the same fraction units this whole function works in.
+        # small uncapped 2% would just be an unbounded side door around the cap. Primary and
+        # auxiliary manuals both contribute 100% of their cultivation effects (2026-08-14 --
+        # auxiliary used to be weighted down to 35%, section 5's original design; raised to
+        # match primary per explicit request). Effects are stored as percent numbers (5.0 ==
+        # +5%, matching the design doc), so /100 converts to the same fraction units this
+        # whole function works in.
         from . import realms as _realms
         from . import search_data as _search_data
 
@@ -1346,11 +1347,11 @@ class GameDatabase:
         # Every OTHER effect a manual can roll (breakthrough_success_pct, hp_pct,
         # dodge_chance_pct, technique/physical_damage_pct, insight_gain_pct,
         # cooldown_reduction_pct, deviation_resistance_pct, essence_recovery/purity_pct —
-        # see manual_view.EFFECT_LABELS) — weighted the same as cultivation (primary 100%,
-        # auxiliary 35%) but summed separately, since the soft/hard cultivation cap below
-        # only ever applied to the two cultivation keys and has no business touching these.
+        # see manual_view.EFFECT_LABELS) — weighted the same as cultivation (both slots at
+        # 100%) but summed separately, since the soft/hard cultivation cap below only ever
+        # applied to the two cultivation keys and has no business touching these.
         other_effect_totals: Dict[str, float] = {}
-        for manual_id, weight in ((player["equipped_primary_manual_id"], 1.0), (player["equipped_auxiliary_manual_id"], 0.35)):
+        for manual_id, weight in ((player["equipped_primary_manual_id"], 1.0), (player["equipped_auxiliary_manual_id"], 1.0)):
             if not manual_id:
                 continue
             row = cur.execute("SELECT name, effects FROM manuals WHERE manual_id = ? AND owner_id = ?", (manual_id, user_id)).fetchone()
@@ -4352,6 +4353,28 @@ class GameDatabase:
         con.commit()
         con.close()
         return True
+
+    def speed_up_study(self, user_id: int, hours: float) -> dict:
+        """Immortal Notes (see items._use_immortal_notes) -- rewinds studying_started_ts by
+        `hours` of real time, the same effect as that much study having already elapsed.
+        Refuses (returns used=False, nothing written) if no profession is currently being
+        studied -- see GameManager.use_item's own pre-check, which relies on this same
+        studying_profession read to avoid consuming the item for nothing. Doesn't grant the
+        rank itself even if this pushes elapsed time past the requirement -- the next /study
+        call or check_and_complete_ready_studies sweep picks that up normally, same as any
+        other elapsed time would."""
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute("SELECT studying_profession, studying_started_ts FROM players WHERE user_id = ?", (user_id,))
+        row = cur.fetchone()
+        if not row or not row["studying_profession"]:
+            con.close()
+            return {"used": False}
+        new_ts = row["studying_started_ts"] - int(hours * 3600)
+        cur.execute("UPDATE players SET studying_started_ts = ? WHERE user_id = ?", (new_ts, user_id))
+        con.commit()
+        con.close()
+        return {"used": True, "profession": row["studying_profession"]}
 
     def set_timestamp_column(self, user_id: int, column: str, ts: int):
         """Sets an arbitrary INTEGER timestamp column (e.g. last_mine_ts) — column must come
