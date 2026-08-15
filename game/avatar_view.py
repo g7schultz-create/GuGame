@@ -9,6 +9,7 @@ import discord
 
 from . import avatar, avatar_gear
 from .base_view import GameView
+from .ui_utils import format_number
 
 
 class AvatarView(GameView):
@@ -215,20 +216,20 @@ class AvatarView(GameView):
             return
         embed.description = (
             f"{soul.emoji} **{soul.name}** — Level **{avatar.level_name(status['level'])}** • "
-            f"Avatar Power **{status['power']:.1f}**\n{soul.tagline}"
+            f"Avatar Power **{format_number(status['power'], decimals=1)}**\n{soul.tagline}"
         )
         embed.add_field(name=f"Passive — {soul.passive_name}", value=soul.passive_text, inline=False)
         embed.add_field(
             name=f"🌀 {avatar.SOUL_PROJECTION_NAME}",
             value=(
                 f"{soul.ability_text}\n"
-                f"*{avatar.SOUL_PROJECTION_QI_COST:,} battle Qi • {avatar.SOUL_PROJECTION_DURATION_TURNS} turns "
+                f"*{format_number(avatar.SOUL_PROJECTION_QI_COST)} battle Qi • {avatar.SOUL_PROJECTION_DURATION_TURNS} turns "
                 f"— strikes immediately with the buff already active, usable in /hunt, /battlefield, and /raid "
                 f"(passive-only in /raidboss_attack).*"
             ),
             inline=False,
         )
-        embed.set_footer(text=f"Rerolling your soul costs {self.game.AVATAR_SOUL_REROLL_COST:,} spirit stones.")
+        embed.set_footer(text=f"Rerolling your soul costs {format_number(self.game.AVATAR_SOUL_REROLL_COST)} spirit stones.")
 
     def _fill_gear_embed(self, embed: discord.Embed, status: dict):
         if status["soul"] is None:
@@ -253,7 +254,7 @@ class AvatarView(GameView):
             else:
                 lines.append(f"{emoji} **{label}**: *empty*")
         embed.description = "\n".join(lines)
-        embed.add_field(name="Avatar Power", value=f"**{status['power']:.1f}**", inline=False)
+        embed.add_field(name="Avatar Power", value=f"**{format_number(status['power'], decimals=1)}**", inline=False)
         embed.set_footer(
             text=f"Selected slot: {avatar_gear.SLOT_LABEL_BY_KEY[self.selected_slot]} — pick a slot, then an item, below. "
             "New gear drops from /rba (commonly) and raid bosses (rarely) once you've reached Nascent Soul."
@@ -264,7 +265,7 @@ class AvatarView(GameView):
             embed.description = "Choose a soul first (Soul tab) — your avatar needs a soul before it can level up."
             return
         level = status["level"]
-        embed.description = f"Level **{avatar.level_name(level)}** (Avatar Power **{status['power']:.1f}**)"
+        embed.description = f"Level **{avatar.level_name(level)}** (Avatar Power **{format_number(status['power'], decimals=1)}**)"
         recipe = status["next_recipe"]
         if recipe is None:
             embed.add_field(name="Max Level", value="Your avatar has reached its peak — Level X.", inline=False)

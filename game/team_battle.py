@@ -31,6 +31,7 @@ from . import avatar, chargen, combat, dao_paths
 from .equipment import EQUIPMENT
 from .items import ITEMS
 from .base_view import GameView
+from .ui_utils import format_number
 
 GUARD_DAMAGE_REDUCTION = 0.5
 EMPOWER_QI_COST = 15
@@ -415,7 +416,7 @@ class TeamBattleEngine:
         if restored > 0:
             p["qi"] = min(p["max_qi"], p["qi"] + restored)
             self._persist_qi(user_id, p)
-            self._log(f"💧 **{p['name']}**'s physique restores {restored} battle Qi.")
+            self._log(f"💧 **{p['name']}**'s physique restores {format_number(restored)} battle Qi.")
 
     # -- optional hooks (defaults = /inheritance_ground's narrower scope) -----------------
 
@@ -610,7 +611,7 @@ class TeamBattleEngine:
                             if refund > 0:
                                 p["qi"] = min(p["max_qi"], p["qi"] + refund)
                                 self._persist_qi(user_id, p)
-                                self._log(f"🌙 **{p['name']}**'s miss wasn't a total loss — {refund} Qi flows back.")
+                                self._log(f"🌙 **{p['name']}**'s miss wasn't a total loss — {format_number(refund)} Qi flows back.")
                 elif result.dodged:
                     self._log(f"💨 {target.monster.name} dodges **{p['name']}**'s {label}!")
                 else:
@@ -628,8 +629,8 @@ class TeamBattleEngine:
                     if result.heal:
                         p["hp"] = min(p["max_hp"], p["hp"] + result.heal)
                         self._persist_hp(user_id, p)
-                        heal_text = f" 💚 +{result.heal} HP"
-                    self._log(f"⚔️ **{p['name']}** hits {target.monster.name} for {result.damage} damage{crit}.{heal_text}")
+                        heal_text = f" 💚 +{format_number(result.heal)} HP"
+                    self._log(f"⚔️ **{p['name']}** hits {target.monster.name} for {format_number(result.damage)} damage{crit}.{heal_text}")
                     # Fire Dao Path: refreshes (doesn't stack) on every landed hit from ANY
                     # Fire-path participant -- see the Phase 1.5 tick loop below for where this
                     # actually deals damage, once per round.
@@ -671,7 +672,7 @@ class TeamBattleEngine:
                             if restored > 0:
                                 p["qi"] = min(p["max_qi"], p["qi"] + restored)
                                 self._persist_qi(user_id, p)
-                                self._log(f"🔥 **{p['name']}**'s kill rekindles {restored} battle Qi.")
+                                self._log(f"🔥 **{p['name']}**'s kill rekindles {format_number(restored)} battle Qi.")
                     elif is_freeze and random.random() < FREEZE_PROC_CHANCE:
                         target.frozen_rounds = max(target.frozen_rounds, 1)
                         self._log(f"❄️ {target.monster.name} is frozen solid and will miss its next attack!")
@@ -701,7 +702,7 @@ class TeamBattleEngine:
             burn_damage = min(enemy.hp, enemy.burn_damage_per_tick)
             enemy.hp -= burn_damage
             enemy.burn_ticks_remaining -= 1
-            self._log(f"🔥 {enemy.monster.name} burns for {burn_damage} damage!")
+            self._log(f"🔥 {enemy.monster.name} burns for {format_number(burn_damage)} damage!")
             if enemy.hp <= 0:
                 self._log(f"💥 {enemy.monster.name} is defeated!")
                 self._on_enemy_defeated(enemy)
@@ -714,7 +715,7 @@ class TeamBattleEngine:
             burn_damage = min(enemy.hp, enemy.sunfire_burn_damage_per_tick)
             enemy.hp -= burn_damage
             enemy.sunfire_burn_ticks_remaining -= 1
-            self._log(f"☀️ {enemy.monster.name} burns in sunfire for {burn_damage} damage!")
+            self._log(f"☀️ {enemy.monster.name} burns in sunfire for {format_number(burn_damage)} damage!")
             if enemy.hp <= 0:
                 self._log(f"💥 {enemy.monster.name} is defeated!")
                 self._on_enemy_defeated(enemy)
@@ -727,7 +728,7 @@ class TeamBattleEngine:
             bleed_damage = min(enemy.hp, enemy.gu_pet_bleed_damage_per_tick)
             enemy.hp -= bleed_damage
             enemy.gu_pet_bleed_ticks_remaining -= 1
-            self._log(f"🩸 {enemy.monster.name} bleeds for {bleed_damage} damage!")
+            self._log(f"🩸 {enemy.monster.name} bleeds for {format_number(bleed_damage)} damage!")
             if enemy.hp <= 0:
                 self._log(f"💥 {enemy.monster.name} is defeated!")
                 self._on_enemy_defeated(enemy)
@@ -745,7 +746,7 @@ class TeamBattleEngine:
             p["hp"] -= bleed_damage
             p["bleed_ticks_remaining"] -= 1
             self._persist_hp(user_id, p)
-            self._log(f"🩸 **{p['name']}** bleeds for {bleed_damage} damage!")
+            self._log(f"🩸 **{p['name']}** bleeds for {format_number(bleed_damage)} damage!")
             if p["hp"] <= 0:
                 p["down"] = True
                 self.game.db.set_hp(user_id, 1)
@@ -760,7 +761,7 @@ class TeamBattleEngine:
                     reduction = bonuses.get("death_qi_loss_reduction_pct", 0)
                     qi_lost, _ = self.game.db.apply_death_penalty(user_id, reduction_pct=reduction)
                     p["qi_lost_on_death"] = qi_lost
-                    self._log(f"💀 **{p['name']}** is knocked out, losing {qi_lost:,.2f} qi!")
+                    self._log(f"💀 **{p['name']}** is knocked out, losing {format_number(qi_lost)} qi!")
 
         # Phase 2: flee attempts (RaidView-only — see _resolve_flee_phase's default no-op).
         self._resolve_flee_phase()
@@ -822,7 +823,7 @@ class TeamBattleEngine:
             reduction = self.game.compute_equipment_bonuses(target_id).get("death_qi_loss_reduction_pct", 0)
             qi_lost, _ = self.game.db.apply_death_penalty(target_id, reduction_pct=reduction)
             p["qi_lost_on_death"] = qi_lost
-            self._log(f"💀 **{p['name']}** is knocked out, losing {qi_lost:,.2f} qi!")
+            self._log(f"💀 **{p['name']}** is knocked out, losing {format_number(qi_lost)} qi!")
             enemy.dps_check_interval += enemy.monster.dps_check_interval_growth
             enemy.dps_check_next_kill_round += enemy.dps_check_interval
 
@@ -936,10 +937,10 @@ class TeamBattleEngine:
             heal_text = ""
             if result.heal:
                 enemy.hp = min(enemy.max_hp, enemy.hp + result.heal)
-                heal_text = f" It recovers {result.heal} HP."
+                heal_text = f" It recovers {format_number(result.heal)} HP."
             self._log(
-                (f"🩸 {enemy.monster.name} hits **{p['name']}** for {result.damage} damage{crit} with {ability_label}.{heal_text}" if label
-                 else f"🩸 {enemy.monster.name} hits **{p['name']}** for {result.damage} damage{crit}.{heal_text}")
+                (f"🩸 {enemy.monster.name} hits **{p['name']}** for {format_number(result.damage)} damage{crit} with {ability_label}.{heal_text}" if label
+                 else f"🩸 {enemy.monster.name} hits **{p['name']}** for {format_number(result.damage)} damage{crit}.{heal_text}")
             )
             if bleed_pct > 0 and p["hp"] > 0:
                 p["bleed_damage_per_tick"] = max(1, round(result.damage * bleed_pct))
@@ -965,7 +966,7 @@ class TeamBattleEngine:
                     reduction = bonuses.get("death_qi_loss_reduction_pct", 0)
                     qi_lost, _ = self.game.db.apply_death_penalty(target_id, reduction_pct=reduction)
                     p["qi_lost_on_death"] = qi_lost
-                    self._log(f"💀 **{p['name']}** is knocked out, losing {qi_lost:,.2f} qi!")
+                    self._log(f"💀 **{p['name']}** is knocked out, losing {format_number(qi_lost)} qi!")
             # Immovable Mountain Physique: surviving a landed hit reflects a portion of the
             # damage taken straight back at the attacker -- guaranteed (no separate hit/dodge/
             # crit roll of its own), mirrors hunt.py's identical _monster_turn handling. A
@@ -976,7 +977,7 @@ class TeamBattleEngine:
                 if retaliation_pct > 0:
                     retaliation_damage = max(1, round(result.damage * retaliation_pct))
                     enemy.hp = max(0, enemy.hp - retaliation_damage)
-                    self._log(f"🪨 **{p['name']}** retaliates for {retaliation_damage} damage!")
+                    self._log(f"🪨 **{p['name']}** retaliates for {format_number(retaliation_damage)} damage!")
                     if enemy.hp <= 0:
                         self._log(f"💥 {enemy.monster.name} is defeated!")
                         self._on_enemy_defeated(enemy)
@@ -1074,7 +1075,7 @@ class TeamBattleEngine:
             return
         qi_cost = await asyncio.to_thread(self.game.killer_move_qi_cost, player_row, move)
         if p["qi"] < qi_cost:
-            await interaction.response.send_message(f"Not enough Qi to use {move['name']} (needs {qi_cost:,}).", ephemeral=True)
+            await interaction.response.send_message(f"Not enough Qi to use {move['name']} (needs {format_number(qi_cost)}).", ephemeral=True)
             return
         p["qi"] -= qi_cost
         await asyncio.to_thread(self._persist_qi, interaction.user.id, p)
@@ -1136,7 +1137,7 @@ class TeamBattleEngine:
             return
         if p["qi"] < avatar.SOUL_PROJECTION_QI_COST:
             await interaction.response.send_message(
-                f"Not enough battle Qi for Soul Projection (needs {avatar.SOUL_PROJECTION_QI_COST:,}).", ephemeral=True,
+                f"Not enough battle Qi for Soul Projection (needs {format_number(avatar.SOUL_PROJECTION_QI_COST)}).", ephemeral=True,
             )
             return
         p["qi"] -= avatar.SOUL_PROJECTION_QI_COST

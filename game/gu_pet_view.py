@@ -23,6 +23,7 @@ import discord
 
 from . import equipment, gu_pet, professions
 from .base_view import GameView
+from .ui_utils import format_number
 
 
 class GuPetView(GameView):
@@ -282,7 +283,7 @@ class GuPetView(GameView):
         self.add_item(switch_button)
 
         pay_button = discord.ui.Button(
-            label=f"Pay {gu_pet.MODE_SWITCH_FEE_SPIRIT_STONES:,} Stones to Switch Now", emoji="💰",
+            label=f"Pay {format_number(gu_pet.MODE_SWITCH_FEE_SPIRIT_STONES)} Stones to Switch Now", emoji="💰",
             style=discord.ButtonStyle.secondary, row=1,
             disabled=not can_toggle or now_remaining <= 0,
         )
@@ -630,4 +631,4 @@ class GuPetView(GameView):
         remaining = gu_pet.MODE_SWITCH_COOLDOWN_SECONDS - (int(time.time()) - last_switch)
         if remaining > 0:
             from .ui_utils import format_duration
-            embed.set_footer(text=f"Mode can be switched freely again in {format_duration(remaining)}, or pay {gu_pet.MODE_SWITCH_FEE_SPIRIT_STONES:,} spirit stones now.")
+            embed.set_footer(text=f"Mode can be switched freely again in {format_duration(remaining)}, or pay {format_number(gu_pet.MODE_SWITCH_FEE_SPIRIT_STONES)} spirit stones now.")

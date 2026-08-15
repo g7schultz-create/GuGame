@@ -119,10 +119,26 @@ def promotable_target_ranks(actor_rank: str) -> list:
     return []
 
 
+def demotable_target_ranks(actor_rank: str) -> list:
+    """Which ranks actor_rank is allowed to DEMOTE a member FROM (the target's current rank
+    before the demotion). Sect Leader can demote anyone below Leader (Vice Leader, Elder,
+    Inner Disciple); Vice Leader can demote an Elder or Inner Disciple (2026-08-15, explicit
+    request to extend past the design doc's original Leader-only reading, mirroring
+    promotable_target_ranks' own Vice-Leader cap at Elder -- a Vice Leader can create an
+    Elder via promote, so it's symmetric that they can also undo one, but they can't touch a
+    fellow Vice Leader or the Sect Leader, avoiding a peer power struggle). Nothing below
+    Vice Leader has demote power at all."""
+    if actor_rank == SECT_LEADER:
+        return [VICE_LEADER, ELDER, INNER_DISCIPLE]
+    if actor_rank == VICE_LEADER:
+        return [ELDER, INNER_DISCIPLE]
+    return []
+
+
 def can_demote(actor_rank: str) -> bool:
-    """Demotion isn't explicitly granted to anyone but the Leader in the doc (Vice Leader's
-    list has no demote power, matching its missing kick power) -- Leader only."""
-    return actor_rank == SECT_LEADER
+    """Whether actor_rank has ANY demote power at all -- see demotable_target_ranks for the
+    actual per-target-rank cap."""
+    return bool(demotable_target_ranks(actor_rank))
 
 
 # -- Mentor/disciple (design doc section "Mentor / Disciple System") -------------------------

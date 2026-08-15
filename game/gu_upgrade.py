@@ -3,6 +3,7 @@ import asyncio
 import discord
 
 from .base_view import GameView
+from .ui_utils import format_number
 
 
 class GuUpgradeView(GameView):
@@ -65,7 +66,7 @@ class GuUpgradeView(GameView):
         breakdown_options = [
             discord.SelectOption(
                 label=f"{name} (own {qty})"[:100], value=name,
-                description=f"Breaks down for {stones:,} 🪙 each"[:100],
+                description=f"Breaks down for {format_number(stones)} 🪙 each"[:100],
                 default=(name == self.selected_breakdown_item),
             )
             for name, qty, stones in breakdown_candidates
@@ -180,7 +181,7 @@ class GuUpgradeView(GameView):
 
         breakdown_candidates = self._breakdown_candidates()
         if breakdown_candidates:
-            lines = [f"**{name}** x{qty} — {stones:,} 🪙 each" for name, qty, stones in breakdown_candidates]
+            lines = [f"**{name}** x{qty} — {format_number(stones)} 🪙 each" for name, qty, stones in breakdown_candidates]
             embed.add_field(name="Break Down Value", value="\n".join(lines)[:1024], inline=False)
         else:
             embed.add_field(name="Break Down Value", value="You have no Gu to break down.", inline=False)

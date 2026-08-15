@@ -11,6 +11,7 @@ import discord
 
 from . import chargen
 from .base_view import GameView
+from .ui_utils import format_number
 
 
 def build_breakthrough_result_embed(display_name: str, result: dict, game) -> discord.Embed:
@@ -35,7 +36,7 @@ def build_breakthrough_result_embed(display_name: str, result: dict, game) -> di
             title="💠 Not Enough Qi",
             description=(
                 f"{display_name} no longer has enough Qi for this breakthrough — "
-                f"needs **{result['qi_required']:,.2f}**, has **{result['player']['qi']:,.2f}**."
+                f"needs **{format_number(result['qi_required'])}**, has **{format_number(result['player']['qi'])}**."
             ),
             color=discord.Color.dark_red(),
         )
@@ -63,20 +64,20 @@ def build_breakthrough_result_embed(display_name: str, result: dict, game) -> di
         color=discord.Color.gold() if success else discord.Color.dark_red(),
     )
     embed.add_field(name="🎲 Chance", value=f"{result['chance'] * 100:.1f}%", inline=True)
-    embed.add_field(name="💠 Qi Spent", value=f"{result['qi_cost']:,.2f}", inline=True)
+    embed.add_field(name="💠 Qi Spent", value=format_number(result['qi_cost']), inline=True)
     if success:
         growth_text = " • ".join(
-            f"{chargen.STAT_LABELS[key]} +{amount:,}" for key, amount in result["power_growth"].items()
+            f"{chargen.STAT_LABELS[key]} +{format_number(amount)}" for key, amount in result["power_growth"].items()
         )
         embed.add_field(name="💪 Power Growth", value=growth_text, inline=False)
     if success and result["comprehension_proc"]:
-        embed.add_field(name="📚 Dao Comprehension", value=f"Bonus insight refunded +{result['bonus_qi']:,.2f} qi!", inline=False)
+        embed.add_field(name="📚 Dao Comprehension", value=f"Bonus insight refunded +{format_number(result['bonus_qi'])} qi!", inline=False)
     if success and result["stat_grown"]:
         embed.add_field(name="✨ Bonus Stat Growth", value=f"+1 {chargen.STAT_LABELS[result['stat_grown']]}!", inline=False)
     if success and result.get("godly_stat_grown"):
         embed.add_field(
             name="👑 Godly Growth",
-            value=f"+{result['godly_stat_bonus']:,} {chargen.STAT_LABELS[result['godly_stat_grown']]} (2% of current)!",
+            value=f"+{format_number(result['godly_stat_bonus'])} {chargen.STAT_LABELS[result['godly_stat_grown']]} (2% of current)!",
             inline=False,
         )
     if success and result.get("epic_vigor_granted"):
@@ -89,7 +90,7 @@ def build_breakthrough_result_embed(display_name: str, result: dict, game) -> di
     if success and result.get("dao_marks_granted"):
         embed.add_field(
             name="🌀 Dao Marks",
-            value=f"Sundering deeper into Spirit Severing grants **{result['dao_marks_granted']:,}** Dao Marks! Allocate them with `/dao_path`.",
+            value=f"Sundering deeper into Spirit Severing grants **{format_number(result['dao_marks_granted'])}** Dao Marks! Allocate them with `/dao_path`.",
             inline=False,
         )
     return embed
@@ -164,6 +165,6 @@ class BreakthroughConfirmView(GameView):
             color=discord.Color.dark_gold(),
         )
         embed.add_field(name="🎲 Success Chance", value=f"{s['chance'] * 100:.1f}%", inline=True)
-        embed.add_field(name="💠 Qi Cost", value=f"{s['qi_required']:,.2f}", inline=True)
+        embed.add_field(name="💠 Qi Cost", value=format_number(s['qi_required']), inline=True)
         embed.set_footer(text="Failure still costs Qi (reduced by any deviation resistance) — this can't be undone once confirmed.")
         return embed

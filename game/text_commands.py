@@ -114,6 +114,7 @@ ALIASES = {
     "raidboss": ["rb", "wb"], "raidboss_attack": ["rba"], "raidboss_spawn": ["rbs"], "balance": ["bal"],
     "preset_save": ["ps"], "preset_load": ["pl"], "preset_list": ["plist"], "preset_delete": ["pd"],
     "sect": ["sc"], "sect_list": ["scl"], "sect_join": ["scj"],
+    "companion": ["dc"],
     "avatar": ["av"], "split_body": ["sb"], "tournament": ["tn"],
     "master": ["mst"], "sect_master": ["scmst"], "dao_path": ["dp"], "transmute": ["tm"],
     "killer_move": ["km"], "use_support_move": ["usm"], "verify": ["v"],

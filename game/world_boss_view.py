@@ -17,7 +17,7 @@ import discord
 
 from . import world_boss
 from .base_view import GameView
-from .ui_utils import render_bar
+from .ui_utils import format_number, render_bar
 
 MAX_LOG_LINES = 5
 
@@ -94,9 +94,9 @@ class WorldBossView(GameView):
             self._log_line(f"💨 **{self.roster['name']}** shrugs off the blow before it lands!")
         else:
             crit = " (Critical!)" if result["crit"] else ""
-            line = f"⚔️ **{result['damage']:,}** damage{crit}!"
+            line = f"⚔️ **{format_number(result['damage'])}** damage{crit}!"
             if result["bonus_damage"]:
-                line += f" 🗡️ Flying Sword Gu strikes again for **{result['bonus_damage']:,}**!"
+                line += f" 🗡️ Flying Sword Gu strikes again for **{format_number(result['bonus_damage'])}**!"
             self._log_line(line)
 
         if result["defeated"]:
@@ -148,16 +148,16 @@ class WorldBossView(GameView):
         embed.set_thumbnail(url=self.avatar_url)
         embed.add_field(
             name="❤️ World Boss HP",
-            value=f"`{max(0, self.boss_hp):,} / {self.boss_max_hp:,}` ({pct:.2f}%)\n`{render_bar(self.boss_hp, self.boss_max_hp)}`",
+            value=f"`{format_number(max(0, self.boss_hp))} / {format_number(self.boss_max_hp)}` ({pct:.2f}%)\n`{render_bar(self.boss_hp, self.boss_max_hp)}`",
             inline=False,
         )
-        embed.add_field(name="🗡️ Your Session Damage", value=f"{self.session_damage:,} ({self.swings_used}/{self.max_swings} strikes used)", inline=True)
+        embed.add_field(name="🗡️ Your Session Damage", value=f"{format_number(self.session_damage)} ({self.swings_used}/{self.max_swings} strikes used)", inline=True)
         if self.log:
             embed.add_field(name="📜 Recent Strikes", value="\n".join(self.log), inline=False)
 
         if self.status == "defeated" and self.end_summary:
             s = self.end_summary
-            lines = [f"**{s['total_damage']:,}** total damage from **{len(s['contributors'])}** cultivator(s)."]
+            lines = [f"**{format_number(s['total_damage'])}** total damage from **{len(s['contributors'])}** cultivator(s)."]
             for winner in s["lottery_winners"]:
                 lines.append(f"🎁 Lottery drop: **{winner['name']}** wins {winner['reward_text']}!")
             embed.add_field(name="🎉 The World Boss Has Fallen!", value="\n".join(lines), inline=False)

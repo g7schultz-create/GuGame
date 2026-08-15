@@ -33,7 +33,7 @@ from .team_battle import (
     FREEZE_STR_MULTIPLIER, GUARD_DAMAGE_REDUCTION, INSPIRE_DEF_BONUS_PCT, INSPIRE_DURATION_ROUNDS,
     INSPIRE_STR_BONUS_PCT, RaidEnemy, TeamBattleEngine,
 )
-from .ui_utils import render_bar
+from .ui_utils import format_number, render_bar
 
 BETRAYAL_DECISION_SECONDS = 60
 BATTLE_ROUND_TIMEOUT_SECONDS = 30  # matches raid.ROUND_TIMEOUT_SECONDS's own pacing
@@ -358,7 +358,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             if len(self.enemies) > 1:
                 target_options = [
                     discord.SelectOption(
-                        label=f"{e.monster.name} — {max(0, e.hp):,.0f}/{e.max_hp:,.0f} HP", value=str(idx),
+                        label=f"{e.monster.name} — {format_number(max(0, e.hp), decimals=0)}/{format_number(e.max_hp, decimals=0)} HP", value=str(idx),
                         emoji="🛡️" if idx == 0 else "🔺",
                     )
                     for idx, e in enumerate(self.enemies) if e.alive
@@ -392,7 +392,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             killer_move_button.callback = self._on_killer_move
             self.add_item(killer_move_button)
             soul_projection_button = discord.ui.Button(
-                label=f"Soul Projection ({avatar.SOUL_PROJECTION_QI_COST:,})", emoji="🌀",
+                label=f"Soul Projection ({format_number(avatar.SOUL_PROJECTION_QI_COST)})", emoji="🌀",
                 style=discord.ButtonStyle.success, row=1,
             )
             soul_projection_button.callback = self._on_soul_projection
@@ -418,7 +418,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             # picking WHO to fight is the whole point in a multi-way duel.
             target_options = [
                 discord.SelectOption(
-                    label=f"{p['name']} — {max(0, p['hp']):,.0f}/{p['max_hp']:,.0f} HP", value=str(uid),
+                    label=f"{p['name']} — {format_number(max(0, p['hp']), decimals=0)}/{format_number(p['max_hp'], decimals=0)} HP", value=str(uid),
                     emoji="🤝" if p["side"] == SHARER_SIDE else "🗡️",
                 )
                 for uid, p in self.participants.items() if not p["down"]
@@ -452,7 +452,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             killer_move_button.callback = self._on_duel_killer_move
             self.add_item(killer_move_button)
             soul_projection_button = discord.ui.Button(
-                label=f"Soul Projection ({avatar.SOUL_PROJECTION_QI_COST:,})", emoji="🌀",
+                label=f"Soul Projection ({format_number(avatar.SOUL_PROJECTION_QI_COST)})", emoji="🌀",
                 style=discord.ButtonStyle.success, row=1,
             )
             soul_projection_button.callback = self._on_duel_soul_projection
@@ -1052,7 +1052,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         reduction = self.game.compute_equipment_bonuses(user_id).get("death_qi_loss_reduction_pct", 0)
         qi_lost, _ = self.game.db.apply_death_penalty(user_id, reduction_pct=reduction)
         p["qi_lost_on_death"] = qi_lost
-        self._log(f"💀 **{p['name']}** is knocked out, losing {qi_lost:,.2f} qi!")
+        self._log(f"💀 **{p['name']}** is knocked out, losing {format_number(qi_lost)} qi!")
 
     def _resolve_duel_hit(
         self, attacker_uid: int, attacker_p: dict, attacker_stats: dict, bonuses: dict, sp: dict,
@@ -1290,7 +1290,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             return
         qi_cost = await asyncio.to_thread(self.game.killer_move_qi_cost, player_row, move)
         if p["qi"] < qi_cost:
-            await interaction.response.send_message(f"Not enough Qi to use {move['name']} (needs {qi_cost:,}).", ephemeral=True)
+            await interaction.response.send_message(f"Not enough Qi to use {move['name']} (needs {format_number(qi_cost)}).", ephemeral=True)
             return
         p["qi"] -= qi_cost
         await asyncio.to_thread(self._persist_qi, interaction.user.id, p)
@@ -1313,7 +1313,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             await interaction.response.send_message("Your avatar hasn't chosen a soul yet — run `/avatar` to awaken it.", ephemeral=True)
             return
         if p["qi"] < avatar.SOUL_PROJECTION_QI_COST:
-            await interaction.response.send_message(f"Not enough battle Qi for Soul Projection (needs {avatar.SOUL_PROJECTION_QI_COST:,}).", ephemeral=True)
+            await interaction.response.send_message(f"Not enough battle Qi for Soul Projection (needs {format_number(avatar.SOUL_PROJECTION_QI_COST)}).", ephemeral=True)
             return
         p["qi"] -= avatar.SOUL_PROJECTION_QI_COST
         await asyncio.to_thread(self._persist_qi, interaction.user.id, p)
@@ -1417,7 +1417,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
                 pct = int(100 * max(0, e.hp) / e.max_hp) if e.max_hp else 0
                 submerged_note = " 🌊 *Submerged*" if e.submerged_rounds_remaining > 0 else ""
                 enemy_lines.append(
-                    f"{'🛡️' if idx == 0 else '🔺'} **{e.monster.name}**{submerged_note} — {max(0, e.hp):,.0f}/{e.max_hp:,.0f} HP ({pct}%)\n`{render_bar(e.hp, e.max_hp)}`"
+                    f"{'🛡️' if idx == 0 else '🔺'} **{e.monster.name}**{submerged_note} — {format_number(max(0, e.hp), decimals=0)}/{format_number(e.max_hp, decimals=0)} HP ({pct}%)\n`{render_bar(e.hp, e.max_hp)}`"
                 )
             description = "\n".join(enemy_lines)
             if self.inspire_rounds_remaining > 0:
@@ -1445,7 +1445,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
                     if p.get("soul_projection_rounds_remaining", 0) > 0 else ""
                 )
                 lines.append(
-                    f"**{name}** — {max(0, p['hp']):,.0f}/{p['max_hp']:,.0f} HP ({pct}%) • {status}{empower_note}{soul_projection_note}\n"
+                    f"**{name}** — {format_number(max(0, p['hp']), decimals=0)}/{format_number(p['max_hp'], decimals=0)} HP ({pct}%) • {status}{empower_note}{soul_projection_note}\n"
                     f"`{render_bar(p['hp'], p['max_hp'])}`"
                 )
             embed.add_field(name=f"🧍 Team — Round {self.round}", value="\n".join(lines)[:1024], inline=False)
@@ -1504,7 +1504,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
                 frozen_note = f" • 🥶 Frozen ({p['frozen_rounds']})" if p.get("frozen_rounds", 0) > 0 else ""
                 inspired_note = " • 💪 Inspired" if self.duel_inspire_rounds_remaining.get(p["side"], 0) > 0 else ""
                 lines.append(
-                    f"{side_badge} **{p['name']}** — {max(0, p['hp']):,.0f}/{p['max_hp']:,.0f} HP ({pct}%) • {status}{empower_note}{soul_projection_note}{frozen_note}{inspired_note}\n"
+                    f"{side_badge} **{p['name']}** — {format_number(max(0, p['hp']), decimals=0)}/{format_number(p['max_hp'], decimals=0)} HP ({pct}%) • {status}{empower_note}{soul_projection_note}{frozen_note}{inspired_note}\n"
                     f"`{render_bar(p['hp'], p['max_hp'])}`"
                 )
             embed = discord.Embed(
@@ -1530,7 +1530,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             # the shared "Recent Combat" log already says this too, but it can scroll out of
             # MAX_LOG_LINES well before a longer fight actually ends, so it's worth a clear,
             # permanent callout here per explicit request.
-            qi_lines = [f"**{p['name']}**: {p.get('qi_lost_on_death', 0):,.2f} qi lost" for p in self.participants.values()]
+            qi_lines = [f"**{p['name']}**: {format_number(p.get('qi_lost_on_death', 0))} qi lost" for p in self.participants.values()]
             if qi_lines:
                 embed.add_field(name="💀 Qi Lost", value="\n".join(qi_lines)[:1024], inline=False)
             return embed
@@ -1569,7 +1569,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             # Only a defeated BACKSTABBER ever has qi_lost_on_death > 0 here (see
             # _apply_duel_knockout -- a defending sharer never loses any), so this list is
             # naturally just the losing backstabber(s), never the sharers.
-            qi_lines = [f"💀 **{p['name']}**: {p['qi_lost_on_death']:,.2f} qi lost" for p in self.participants.values() if p.get("qi_lost_on_death", 0) > 0]
+            qi_lines = [f"💀 **{p['name']}**: {format_number(p['qi_lost_on_death'])} qi lost" for p in self.participants.values() if p.get("qi_lost_on_death", 0) > 0]
             if qi_lines:
                 embed.add_field(name="Qi Lost", value="\n".join(qi_lines)[:1024], inline=False)
             events = self.betrayal_result["duel"]["events"]

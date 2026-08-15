@@ -244,6 +244,12 @@ BLOOD_SEA_ANCESTORS_BLOOD_WILL = Monster(
         DropEntry(chance=1.00, item_name="Tier 4 Beast Core", quantity=5),
         DropEntry(chance=1.00, item_name="Tier 5 Beast Material", quantity=4),
         DropEntry(chance=1.00, item_name="Primeval Essence Crystal", quantity=30),
+        # Guaranteed (2026-08-15, explicit request) -- the whole point of the 1/100 True Boss
+        # roll is a jackpot worth chasing, so this doesn't get its own sub-chance on top of
+        # already being gated behind BLOOD_SEA_ANCESTORS_BLOOD_WILL_CHANCE. See items.py's
+        # "Blood Skull Gu" -- a one-time consumable that raises aptitude to 120, past the 100
+        # cap every normal aptitude pill hits.
+        DropEntry(chance=1.00, item_name="Blood Skull Gu", quantity=1),
     ],
     hp=50_000_000, atk_stat=38000, str_stat=72000, def_stat=64000, spd_stat=27000, luck_stat=1, qi_stat=38000,
     gu_rank=4,

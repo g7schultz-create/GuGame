@@ -7,7 +7,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from config import GUILD_ID, TOURNAMENT_ANNOUNCE_CHANNEL_ID, WORLD_BOSS_ANNOUNCE_CHANNEL_ID, WORLD_BOSS_DAMAGE_RANKING_CHANNEL_ID
-from . import blacksmith, chargen, equipment, manual_data, professions, realms, sects, tournament, world_boss
+from . import blacksmith, chargen, equipment, manual_data, professions, realms, sects, split_body, tournament, world_boss
 from .character_class import CLASSES
 from .character_data import PATHS
 from .database import GameDatabase
@@ -67,7 +67,7 @@ from .sect_view import SectView
 from .balance_view import BalanceView
 from .breakthrough_view import BreakthroughConfirmView
 from .text_commands import REALM_NAMES, register_text_commands
-from .ui_utils import format_duration, path_footer, render_bar
+from .ui_utils import format_duration, format_number, path_footer, render_bar
 
 GUILD = discord.Object(id=GUILD_ID)
 NOT_CONFIRMED_MESSAGE = "You haven't created a character yet — run `/join` first!"
@@ -203,7 +203,7 @@ class GameCog(commands.Cog):
             description=f"**{roster['name']}** ({roster['theme']})\n_{roster['description']}_",
             color=discord.Color.dark_red(),
         )
-        embed.add_field(name="HP", value=f"{boss['max_hp']:,} / {boss['max_hp']:,}", inline=True)
+        embed.add_field(name="HP", value=f"{format_number(boss['max_hp'])} / {format_number(boss['max_hp'])}", inline=True)
         embed.add_field(name="Time Limit", value=format_duration(world_boss.WORLD_BOSS_LIFETIME_SECONDS), inline=True)
         embed.set_footer(text="Use /raidboss to join the fight!")
         try:
@@ -215,7 +215,7 @@ class GameCog(commands.Cog):
         roster = world_boss.WORLD_BOSSES[end_summary["boss"]["boss_key"]]
         await self._dm_world_boss_loot(end_summary, roster)
 
-        lines = [f"**{end_summary['total_damage']:,}** total damage from **{len(end_summary['contributors'])}** cultivator(s)."]
+        lines = [f"**{format_number(end_summary['total_damage'])}** total damage from **{len(end_summary['contributors'])}** cultivator(s)."]
         for winner in end_summary["lottery_winners"]:
             lines.append(f"🎁 Lottery drop goes to **{winner['name']}**: {winner['reward_text']}!")
         pill_finders = [c["name"] for c in end_summary["contributors"] if c.get("essence_pill")]
@@ -239,7 +239,7 @@ class GameCog(commands.Cog):
         if contributors:
             medals = ["🥇", "🥈", "🥉"]
             ranking_lines = [
-                f"{medals[i] if i < 3 else f'{i + 1}.'} **{c['name']}** — {c['damage_dealt']:,} damage"
+                f"{medals[i] if i < 3 else f'{i + 1}.'} **{c['name']}** — {format_number(c['damage_dealt'])} damage"
                 for i, c in enumerate(contributors[:10])
             ]
             if len(contributors) > 10:
@@ -266,9 +266,9 @@ class GameCog(commands.Cog):
         and a player with DMs closed or who's blocked the bot just silently doesn't get one —
         one failed DM must never stop the rest of the loop or the channel announcement after it."""
         for c in end_summary["contributors"]:
-            lines = [f"⚔️ You dealt **{c['damage_dealt']:,}** damage to **{roster['name']}** before it fell."]
+            lines = [f"⚔️ You dealt **{format_number(c['damage_dealt'])}** damage to **{roster['name']}** before it fell."]
             if c["stones"] > 0:
-                lines.append(f"🪙 You received **{c['stones']:,}** spirit stones.")
+                lines.append(f"🪙 You received **{format_number(c['stones'])}** spirit stones.")
             if c.get("essence_pill"):
                 qty = c.get("essence_pill_quantity", 1)
                 lines.append(f"💧 You also found {qty}x rare **{c['essence_pill']}**!")
@@ -787,21 +787,21 @@ class GameCog(commands.Cog):
             description="You circulate your qi, drawing in the ambient energy around you.",
             color=discord.Color.dark_purple(),
         )
-        embed.add_field(name="⚡ Qi Gained", value=f"+{gained:,.2f}", inline=True)
-        embed.add_field(name="💠 Total Qi", value=f"{player['qi']:,.2f}", inline=True)
+        embed.add_field(name="⚡ Qi Gained", value=f"+{format_number(gained)}", inline=True)
+        embed.add_field(name="💠 Total Qi", value=f"{format_number(player['qi'])}", inline=True)
         embed.add_field(name="✨ Qi Multiplier", value=f"x{player['qi_multiplier']:.2f}", inline=True)
 
         if realms.is_max_realm(player["realm_index"]):
             progress_text = (
                 f"`{render_bar(1, 1)}` Peak realm reached — qi keeps banking anyway "
-                f"(**{player['qi']:,.2f}** stored), ready to carry over the moment a realm above this one exists."
+                f"(**{format_number(player['qi'])}** stored), ready to carry over the moment a realm above this one exists."
             )
         else:
             qi_required = realms.qi_required_for_next(player["realm_index"])
             percent = min(100, player["qi"] / qi_required * 100)
             progress_text = (
                 f"`{render_bar(player['qi'], qi_required)}` {percent:.1f}%\n"
-                f"{player['qi']:,.2f} / {qi_required:,.2f} qi toward **{realms.realm_name(player['realm_index'] + 1)}**"
+                f"{format_number(player['qi'])} / {format_number(qi_required)} qi toward **{realms.realm_name(player['realm_index'] + 1)}**"
             )
         embed.add_field(name="🌟 Next Realm Progress", value=progress_text, inline=False)
 
@@ -833,23 +833,23 @@ class GameCog(commands.Cog):
         )
 
         if status["at_max_realm"]:
-            embed.add_field(name="🔮 Current Qi", value=f"{p['qi']:,.2f}", inline=True)
+            embed.add_field(name="🔮 Current Qi", value=f"{format_number(p['qi'])}", inline=True)
         else:
             percent = min(100, p["qi"] / status["qi_required"] * 100)
-            embed.add_field(name="🔮 Current Qi", value=f"{p['qi']:,.2f}", inline=True)
-            embed.add_field(name="🎯 Required", value=f"{status['qi_required']:,.2f}", inline=True)
+            embed.add_field(name="🔮 Current Qi", value=f"{format_number(p['qi'])}", inline=True)
+            embed.add_field(name="🎯 Required", value=f"{format_number(status['qi_required'])}", inline=True)
             embed.add_field(name="📊 Progress", value=f"{percent:.1f}%", inline=True)
 
             time_text = "Ready!" if status["ready"] else (
                 format_duration(status["seconds_remaining"]) if status["seconds_remaining"] is not None else "∞ (no qi rate)"
             )
-            embed.add_field(name="⚡ Qi Rate", value=f"{status['effective_rate_per_minute']:,.2f}/min", inline=True)
+            embed.add_field(name="⚡ Qi Rate", value=f"{format_number(status['effective_rate_per_minute'])}/min", inline=True)
             embed.add_field(name="⏱️ Time to Breakthrough", value=time_text, inline=True)
             embed.add_field(name="📶 Status", value="✅ Ready" if status["ready"] else "⏳ Cultivating", inline=True)
             embed.add_field(name="📈 Progress Bar", value=f"`{render_bar(p['qi'], status['qi_required'])}` {percent:.1f}%", inline=False)
 
         multiplier_lines = [
-            f"Base Rate: {p['aptitude']} aptitude × {self.db.BASE_QI_PER_MINUTE_PER_APTITUDE}/min = **{status['base_rate_per_minute']:,.2f}/min**",
+            f"Base Rate: {p['aptitude']} aptitude × {self.db.BASE_QI_PER_MINUTE_PER_APTITUDE}/min = **{format_number(status['base_rate_per_minute'])}/min**",
             f"Qi Multiplier (elixirs/pellets): **x{p['qi_multiplier']:.2f}**",
         ]
         if status["character_bonus"]:
@@ -913,13 +913,13 @@ class GameCog(commands.Cog):
         if status["at_max_realm"]:
             await interaction.response.send_message(
                 "You've reached the peak of known cultivation... for now. Your qi keeps banking anyway — "
-                f"**{status['player']['qi']:,.2f}** stored, ready the moment a realm above this one exists.",
+                f"**{format_number(status['player']['qi'])}** stored, ready the moment a realm above this one exists.",
                 ephemeral=True,
             )
             return
         if status["player"]["qi"] < status["qi_required"]:
             await interaction.response.send_message(
-                f"Not enough Qi to attempt this breakthrough. Need **{status['qi_required']:,.2f}**, have **{status['player']['qi']:,.2f}**.",
+                f"Not enough Qi to attempt this breakthrough. Need **{format_number(status['qi_required'])}**, have **{format_number(status['player']['qi'])}**.",
                 ephemeral=True,
             )
             return
@@ -1216,7 +1216,7 @@ class GameCog(commands.Cog):
         embed.description = (
             f"You settle into stillness, healing **{result['healed']:.0f}** HP ({result['hp']:.0f}/{result['max_hp']:.0f}), "
             f"restoring **{result['essence_restored']:.0f}** primeval essence ({result['essence']:.0f}/{result['max_essence']:.0f}), "
-            f"and banking **{result['qi_gained']:,.2f}** qi."
+            f"and banking **{format_number(result['qi_gained'])}** qi."
         )
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
@@ -1778,6 +1778,22 @@ class GameCog(commands.Cog):
             study_text = "📖 Not studying anything — try `/study`."
         embed.add_field(name="Profession Study", value=study_text, inline=False)
 
+        # Only meaningful once the avatar has actually chosen a soul (see /split_body's own
+        # gate in cog.py's split_body command) -- same "only show gated features once
+        # relevant" convention as treasure_hunt_eligible/black_heaven_search_eligible above.
+        if p["avatar_soul"]:
+            if p["split_body_started_ts"] == 0:
+                split_body_text = "🌀 Your avatar isn't out searching — try `/split_body`."
+            else:
+                elapsed = time.time() - p["split_body_started_ts"]
+                if elapsed >= split_body.SPLIT_BODY_DURATION_SECONDS:
+                    split_body_text = "🌀 **Split Body**: ✅ Ready to claim — run `/split_body`!"
+                else:
+                    remaining = split_body.SPLIT_BODY_DURATION_SECONDS - elapsed
+                    pct = min(100, elapsed / split_body.SPLIT_BODY_DURATION_SECONDS * 100)
+                    split_body_text = f"🌀 **Split Body**: ⏳ {format_duration(remaining)} ({pct:.0f}%)"
+            embed.add_field(name="Split Body", value=split_body_text, inline=False)
+
         # Summarized by state rather than one line per plot — with up to 13 plots unlocked
         # at the highest realms, a full per-plot listing would badly clutter this embed.
         # What actually matters at a glance is whether anything needs attention right now.
@@ -2080,7 +2096,7 @@ class GameCog(commands.Cog):
         )
         embed.add_field(
             name="❤️ HP",
-            value=f"`{boss['current_hp']:,} / {boss['max_hp']:,}` ({pct:.2f}%)\n`{render_bar(boss['current_hp'], boss['max_hp'])}`",
+            value=f"`{format_number(boss['current_hp'])} / {format_number(boss['max_hp'])}` ({pct:.2f}%)\n`{render_bar(boss['current_hp'], boss['max_hp'])}`",
             inline=False,
         )
         remaining = max(0, boss["expires_ts"] - int(time.time()))
@@ -2088,7 +2104,7 @@ class GameCog(commands.Cog):
 
         mine = self.db.get_world_boss_damage(boss["boss_instance_id"], user_id)
         if mine:
-            embed.add_field(name="🗡️ Your Contribution", value=f"{mine['damage_dealt']:,} damage ({mine['attacks']} attacks)", inline=True)
+            embed.add_field(name="🗡️ Your Contribution", value=f"{format_number(mine['damage_dealt'])} damage ({mine['attacks']} attacks)", inline=True)
         embed.set_footer(
             text=f"Use /raidboss_attack to join the fight! {world_boss.WORLD_BOSS_ATTACKS_PER_COOLDOWN} strikes every "
                  f"{format_duration(world_boss.WORLD_BOSS_ATTACK_COOLDOWN_SECONDS)}."
@@ -2236,10 +2252,10 @@ class GameCog(commands.Cog):
 
         embed = discord.Embed(
             title="💠 Essence Gathered",
-            description=f"Spent **{stones_spent:,}** spirit stones to gain **{essence_gained:,}** primeval essence.",
+            description=f"Spent **{format_number(stones_spent)}** spirit stones to gain **{format_number(essence_gained)}** primeval essence.",
             color=discord.Color.dark_purple(),
         )
-        embed.add_field(name="🪙 Spirit Stones", value=f"{new_stones:,}", inline=True)
+        embed.add_field(name="🪙 Spirit Stones", value=f"{format_number(new_stones)}", inline=True)
         embed.add_field(name="💠 Primeval Essence", value=f"{new_essence}/{max_essence}", inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
@@ -2264,11 +2280,11 @@ class GameCog(commands.Cog):
 
         embed = discord.Embed(
             title="🌀 Essence Absorbed",
-            description=f"Consumed **{essence_spent:,.0f}** primeval essence to gain **{qi_gained:,.0f}** qi.",
+            description=f"Consumed **{format_number(essence_spent, decimals=0)}** primeval essence to gain **{format_number(qi_gained, decimals=0)}** qi.",
             color=discord.Color.dark_purple(),
         )
-        embed.add_field(name="💠 Primeval Essence", value=f"{new_essence:,.0f}", inline=True)
-        embed.add_field(name="⚡ Total Qi", value=f"{new_qi:,.0f}", inline=True)
+        embed.add_field(name="💠 Primeval Essence", value=f"{format_number(new_essence, decimals=0)}", inline=True)
+        embed.add_field(name="⚡ Total Qi", value=f"{format_number(new_qi, decimals=0)}", inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
     async def _item_name_autocomplete(self, interaction: discord.Interaction, current: str):
@@ -2376,12 +2392,12 @@ class GameCog(commands.Cog):
             self.db.log_admin_action(
                 interaction.user.id, interaction.user.display_name,
                 target.id, target.display_name,
-                "grant_stones", f"{amount:,} spirit stones",
+                "grant_stones", f"{format_number(amount)} spirit stones",
             )
 
         await asyncio.to_thread(_do_grant)
         await interaction.response.send_message(
-            f"Granted **{amount:,}** spirit stones to {target.display_name}.", ephemeral=True
+            f"Granted **{format_number(amount)}** spirit stones to {target.display_name}.", ephemeral=True
         )
 
     @app_commands.command(name="reset_cooldowns", description="[Admin] Reset all of a player's action cooldowns")
@@ -2503,7 +2519,7 @@ class GameCog(commands.Cog):
         self.db.log_admin_action(
             interaction.user.id, interaction.user.display_name,
             interaction.user.id, "everyone",
-            "backfill_dao_marks", f"{len(granted)} players granted, {total_marks:,} total marks",
+            "backfill_dao_marks", f"{len(granted)} players granted, {format_number(total_marks)} total marks",
         )
 
         if not granted:
@@ -2511,10 +2527,10 @@ class GameCog(commands.Cog):
             return
 
         top = sorted(granted, key=lambda g: -g["marks_granted"])[:10]
-        top_lines = [f"**{g['name']}**: {g['marks_granted']:,} marks" for g in top]
+        top_lines = [f"**{g['name']}**: {format_number(g['marks_granted'])} marks" for g in top]
         more_note = f"\n...and {len(granted) - 10} more." if len(granted) > 10 else ""
         await interaction.followup.send(
-            f"Backfilled **{len(granted)}** player(s), **{total_marks:,}** total Dao Marks granted.\n"
+            f"Backfilled **{len(granted)}** player(s), **{format_number(total_marks)}** total Dao Marks granted.\n"
             f"Top recipients:\n" + "\n".join(top_lines) + more_note,
             ephemeral=True,
         )
@@ -2576,7 +2592,7 @@ class GameCog(commands.Cog):
             return
         lines = [
             f"{sect['banner']} **{sect['name']}** — {sect['member_count']}/{sects.MAX_MEMBERS} members, "
-            f"🪙 {sect['treasury_spirit_stones']:,} treasury"
+            f"🪙 {format_number(sect['treasury_spirit_stones'])} treasury"
             for sect in all_sects
         ]
         embed = discord.Embed(title="🏯 Sects", description="\n".join(lines)[:4096], color=discord.Color.dark_teal())
@@ -2653,9 +2669,9 @@ class GameCog(commands.Cog):
             else:
                 taught, beyond = sect["taught"], sect["beyond_instruction"]
                 if taught:
-                    lines = [f"**{t['name']}**: +{t['qi_granted']:,.1f} Qi" for t in taught]
+                    lines = [f"**{t['name']}**: +{format_number(t['qi_granted'], decimals=1)} Qi" for t in taught]
                     total_bonus = sum(t["master_bonus"] for t in taught)
-                    lines.append(f"_You gain **{total_bonus:,.1f}** Qi of your own from the lessons._")
+                    lines.append(f"_You gain **{format_number(total_bonus, decimals=1)}** Qi of your own from the lessons._")
                 else:
                     lines = ["_No one could be taught this time._"]
                 embed.add_field(name=f"⚔️ Sect — Taught ({len(taught)})", value="\n".join(lines)[:1024], inline=False)
@@ -2670,9 +2686,9 @@ class GameCog(commands.Cog):
         if personal is not None:
             taught, on_cooldown, beyond = personal["taught"], personal["on_cooldown"], personal["beyond_instruction"]
             if taught:
-                lines = [f"**{t['name']}**: +{t['qi_granted']:,.1f} Qi" for t in taught]
+                lines = [f"**{t['name']}**: +{format_number(t['qi_granted'], decimals=1)} Qi" for t in taught]
                 total_bonus = sum(t["master_bonus"] for t in taught)
-                lines.append(f"_You gain **{total_bonus:,.1f}** Qi of your own from the lessons._")
+                lines.append(f"_You gain **{format_number(total_bonus, decimals=1)}** Qi of your own from the lessons._")
             else:
                 lines = ["_No one was ready this time._"]
             embed.add_field(name=f"🎓 Personal — Taught ({len(taught)})", value="\n".join(lines)[:1024], inline=False)

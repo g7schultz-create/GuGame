@@ -11,7 +11,7 @@ from .equipment import EQUIPMENT, describe_stat_bonuses, gear_power_score
 from .items import CATEGORY_EMOJI as _ITEM_CATEGORY_EMOJI
 from .items import SUBCATEGORY_EMOJI as _ITEM_SUBCATEGORY_EMOJI
 from .items import ITEM_CATEGORIES, item_emoji, items_in_category, subcategories_in_category
-from .ui_utils import NAV_NEXT_VALUE, NAV_PREV_VALUE, paginate_select_options
+from .ui_utils import NAV_NEXT_VALUE, NAV_PREV_VALUE, format_number, paginate_select_options
 from .views import _default_subcategory
 
 # Weapons/armor/Gu/etc live in a separate catalog from ITEMS (see equipment.py's own
@@ -187,7 +187,7 @@ def _format_trade_offer_lines(game, offer: dict) -> list:
     lines = []
     for currency, (emoji, label) in CURRENCY_LABELS.items():
         if offer[currency]:
-            lines.append(f"{emoji} {offer[currency]:,} {label}")
+            lines.append(f"{emoji} {format_number(offer[currency])} {label}")
     for item_name, qty in offer["items"].items():
         lines.append(f"{_item_emoji(item_name)} {item_name} x{qty}")
     for page_id, qty in offer["pages"].items():

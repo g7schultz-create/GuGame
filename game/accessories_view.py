@@ -4,6 +4,7 @@ import discord
 from . import accessories_data
 from .base_view import GameView
 from .equipment import SLOT_TYPE_EMOJI, describe_stat_bonuses
+from .ui_utils import format_number
 
 SLOT_TYPE_ORDER = ["Ring", "Earring", "Necklace", "Bracelet", "Artifact"]
 PAGE_SIZE = 10  # keeps both the Select (Discord's 25-option cap) and the embed text well clear of any limit
@@ -219,7 +220,7 @@ class AccessoriesView(GameView):
         result = await asyncio.to_thread(self.game.salvage_all_accessory_artifact_duplicates, self.user_id, self.display_name, item_id)
         if result["ok"]:
             note = f" ({result['skipped_equipped']} equipped copy skipped)" if result["skipped_equipped"] else ""
-            self.last_result = f"Salvaged {result['count']}x **{result['name']}** for {result['stones']:,} 🪙 spirit stones total.{note}"
+            self.last_result = f"Salvaged {result['count']}x **{result['name']}** for {format_number(result['stones'])} 🪙 spirit stones total.{note}"
             self.selected_instance_id = None
         else:
             self.last_result = result["reason"]

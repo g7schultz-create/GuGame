@@ -6,6 +6,7 @@ import discord
 from . import dao_paths
 from .base_view import GameView
 from .equipment import SPECIAL_STAT_TEXT
+from .ui_utils import format_number
 
 PATH_EMOJI = {
     "Strength": "💪", "Sword": "⚔️", "Fire": "🔥", "Blood": "🩸", "Soul": "👻",
@@ -104,7 +105,7 @@ class DaoPathView(GameView):
         embed = discord.Embed(
             title=f"🌀 {self.display_name}'s Dao Paths",
             description=(
-                f"**Banked Dao Marks:** {banked:,}\n\n"
+                f"**Banked Dao Marks:** {format_number(banked)}\n\n"
                 "Allocate marks into any Dao Path below — once spent, they can never be reclaimed "
                 "or moved to a different path, but you're free to invest in as many paths as you like."
             ),
@@ -112,7 +113,7 @@ class DaoPathView(GameView):
         )
         embed.add_field(
             name=f"{PATH_EMOJI.get(self.selected_path, '')} {self.selected_path} — {spec.tagline}",
-            value=f"{spec.description}\n**Invested:** {invested:,} / {dao_paths.DAO_MARKS_CAP_PER_PATH:,}",
+            value=f"{spec.description}\n**Invested:** {format_number(invested)} / {format_number(dao_paths.DAO_MARKS_CAP_PER_PATH)}",
             inline=False,
         )
         if self.selected_path == "Transformation":

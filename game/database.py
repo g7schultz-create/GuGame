@@ -2078,6 +2078,24 @@ class GameDatabase:
         con.close()
         return gained, new_aptitude
 
+    def raise_aptitude_floor(self, user_id: int, floor: int) -> dict:
+        """Blood Skull Gu (see items._use_blood_skull_gu) -- every normal aptitude-gain path
+        (maybe_gain_aptitude above) hard-caps at 100, so this is the only way past it: a
+        one-time SET-to-at-least-`floor`, never a decrease, and a genuine no-op (raised=False,
+        nothing written) if the player is already there -- same "don't silently waste a rare
+        drop on nothing" guarding items.py's other one-time consumables already get."""
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute("SELECT aptitude FROM players WHERE user_id = ?", (user_id,))
+        current = cur.fetchone()["aptitude"]
+        if current >= floor:
+            con.close()
+            return {"raised": False, "new_aptitude": current}
+        cur.execute("UPDATE players SET aptitude = ? WHERE user_id = ?", (floor, user_id))
+        con.commit()
+        con.close()
+        return {"raised": True, "new_aptitude": floor}
+
     def add_spirit_stones(self, user_id: int, amount: int):
         con = self.connect()
         con.execute("UPDATE players SET spirit_stones = spirit_stones + ? WHERE user_id = ?", (amount, user_id))

@@ -7,6 +7,7 @@ from . import chargen
 from .base_view import GameView
 from .character_data import PHYSIQUE_TIER_ORDER, PHYSIQUE_TIERS, RACES, ROOT_TIER_ORDER, ROOT_TIERS
 from .shop import _best_roll, _format_current
+from .ui_utils import format_number
 
 KIND_LABELS = {"root": ("🌱", "Root"), "physique": ("💪", "Physique"), "race": ("🧬", "Race")}
 
@@ -222,7 +223,7 @@ class PremiumView(GameView):
         player = self.game.get_player_stats(self.user_id, self.display_name)
 
         embed = discord.Embed(title="💎 Premium", color=discord.Color.purple())
-        embed.add_field(name="🪙 Spirit Stones", value=f"{player['spirit_stones']:,}", inline=False)
+        embed.add_field(name="🪙 Spirit Stones", value=format_number(player['spirit_stones']), inline=False)
 
         if self.selected_kind == "race":
             embed.description = "Pick a race from the dropdown, then **Change Race** to switch to it immediately — no roll, no luck involved."

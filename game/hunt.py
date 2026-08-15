@@ -18,7 +18,7 @@ from .raid import (
     INSPIRE_STR_BONUS_PCT,
 )
 from .raid import DEFEND_ALLY_DAMAGE_REDUCTION as _BRACE_EXTRA_REDUCTION
-from .ui_utils import render_bar
+from .ui_utils import format_number, render_bar
 
 FLEE_BASE_CHANCE = 0.5
 FLEE_CHANCE_PER_SPD_DIFF = 0.02
@@ -497,7 +497,7 @@ class HuntView(GameView):
                 # SPECIAL_BONUS_KEYS.
                 reduction = bonuses.get("death_qi_loss_reduction_pct", 0)
                 self.qi_lost_on_death, _ = self.game.db.apply_death_penalty(self.user_id, reduction_pct=reduction)
-                self._log_line(f"💀 You are struck down and forced to retreat, losing {self.qi_lost_on_death:,.2f} qi.")
+                self._log_line(f"💀 You are struck down and forced to retreat, losing {format_number(self.qi_lost_on_death)} qi.")
 
     def _do_attack(self, str_multiplier: float = 1.0, label: str = "Attack", guaranteed_hit: bool = False, freeze_chance: float = 0.0, is_technique: bool = False):
         bonuses = self._equipment_bonuses()
@@ -855,7 +855,7 @@ class HuntView(GameView):
             return
         qi_cost = await asyncio.to_thread(self.game.killer_move_qi_cost, self.player, move)
         if self.player_qi < qi_cost:
-            await interaction.response.send_message(f"Not enough Qi to use {move['name']} (needs {qi_cost:,}).", ephemeral=True)
+            await interaction.response.send_message(f"Not enough Qi to use {move['name']} (needs {format_number(qi_cost)}).", ephemeral=True)
             return
 
         def _resolve():
@@ -916,7 +916,7 @@ class HuntView(GameView):
             return
         if self.player_qi < avatar.SOUL_PROJECTION_QI_COST:
             await interaction.response.send_message(
-                f"Not enough battle Qi for Soul Projection (needs {avatar.SOUL_PROJECTION_QI_COST:,}).", ephemeral=True,
+                f"Not enough battle Qi for Soul Projection (needs {format_number(avatar.SOUL_PROJECTION_QI_COST)}).", ephemeral=True,
             )
             return
 
@@ -1058,7 +1058,7 @@ class HuntView(GameView):
         # Nascent Soul Avatar's Soul Projection (see avatar.py) -- this row used to be a
         # permanently-disabled "No realm ability unlocked" stub, scaffolded for exactly this.
         soul_projection_button = discord.ui.Button(
-            label=f"Soul Projection ({avatar.SOUL_PROJECTION_QI_COST:,})", emoji="🌀",
+            label=f"Soul Projection ({format_number(avatar.SOUL_PROJECTION_QI_COST)})", emoji="🌀",
             style=discord.ButtonStyle.success, row=3,
             disabled=not active or not self.player["avatar_soul"] or self.player_qi < avatar.SOUL_PROJECTION_QI_COST,
         )
@@ -1127,8 +1127,8 @@ class HuntView(GameView):
             embed.add_field(
                 name="👁️ Heavenly Sight",
                 value=(
-                    f"🎯 ATK `{m.atk_stat:,}` ⚔️ STR `{m.str_stat:,}` 🛡️ DEF `{m.def_stat:,}`\n"
-                    f"🏃 SPD `{m.spd_stat:,}` 🍀 LCK `{m.luck_stat:,}`{heal_note}"
+                    f"🎯 ATK `{format_number(m.atk_stat)}` ⚔️ STR `{format_number(m.str_stat)}` 🛡️ DEF `{format_number(m.def_stat)}`\n"
+                    f"🏃 SPD `{format_number(m.spd_stat)}` 🍀 LCK `{format_number(m.luck_stat)}`{heal_note}"
                 ),
                 inline=False,
             )
@@ -1154,7 +1154,7 @@ class HuntView(GameView):
         elif self.status == "defeat":
             embed.add_field(
                 name="💀 Outcome",
-                value=f"You were beaten down and forced to retreat, losing **{self.qi_lost_on_death:,.2f} qi**. No loot.",
+                value=f"You were beaten down and forced to retreat, losing **{format_number(self.qi_lost_on_death)} qi**. No loot.",
                 inline=False,
             )
         elif self.status == "fled":

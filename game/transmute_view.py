@@ -5,6 +5,7 @@ import discord
 
 from . import items as items_module
 from .base_view import GameView
+from .ui_utils import format_number
 from .views import _build_category_buttons, _build_subcategory_buttons, _default_subcategory
 
 # Only Pills/Materials ever carry a tier (item.rank, or -- for Materials -- the tier baked
@@ -127,7 +128,7 @@ class TransmuteView(GameView):
         )
         embed.add_field(
             name="Daily Charges",
-            value=f"**{status['remaining']} / {status['max_charges']}** remaining today (Transformation: {status['marks_invested']:,} marks invested)",
+            value=f"**{status['remaining']} / {status['max_charges']}** remaining today (Transformation: {format_number(status['marks_invested'])} marks invested)",
             inline=False,
         )
         if status["marks_invested"] <= 0:

@@ -10,6 +10,7 @@ from .gathering import TIER_EMOJI, item_tier
 from .items import CATEGORY_EMOJI as _ITEM_CATEGORY_EMOJI
 from .items import SUBCATEGORY_EMOJI as _ITEM_SUBCATEGORY_EMOJI
 from .items import item_emoji, items_in_category, sell_value, subcategories_in_category
+from .ui_utils import format_number
 
 # /sell: a single NPC vendor spanning every domain that has no liquidation path of its own
 # (plain stackable Materials/Pills/Healing, catalog Gu) PLUS a thin front end onto the three
@@ -132,7 +133,7 @@ class SellView(GameView):
                 if qty <= 0:
                     continue
                 price = sell_value(item.name)
-                results.append((-price, item.name, item.name, _item_emoji(item.name), f"{price:,} 🪙 each", qty))
+                results.append((-price, item.name, item.name, _item_emoji(item.name), f"{format_number(price)} 🪙 each", qty))
         elif self.category == "Equipment" and self.subcategory == "Gu":
             inventory = self.game.get_inventory(self.user_id)
             for name, gear in EQUIPMENT.items():
@@ -142,7 +143,7 @@ class SellView(GameView):
                 if qty <= 0:
                     continue
                 price = equipment_module.gu_breakdown_value(name)
-                results.append((-gear_power_score(gear), name, name, _item_emoji(name), f"{price:,} 🪙 each", qty))
+                results.append((-gear_power_score(gear), name, name, _item_emoji(name), f"{format_number(price)} 🪙 each", qty))
         elif self.category == "Equipment" and self.subcategory in ("Weapon", "Head", "Body"):
             equipped_ids = set(self.game.db.get_equipped_gear_ids(self.user_id).values())
             for gear in self.game.get_player_crafted_gear(self.user_id):
@@ -152,7 +153,7 @@ class SellView(GameView):
                 stones = blacksmith.dismantle_stones(gear["tier"])
                 value = f"{GEAR_INSTANCE_PREFIX}{gear['gear_id']}"
                 emoji = SLOT_TYPE_EMOJI.get(gear["slot_type"], "🎒")
-                results.append((-gear["power_score"], value, display_name, emoji, f"materials + {stones:,} 🪙", None))
+                results.append((-gear["power_score"], value, display_name, emoji, f"materials + {format_number(stones)} 🪙", None))
         elif self.category == "Equipment" and self.subcategory in ("Ring", "Earring", "Necklace", "Bracelet", "Artifact"):
             equipped_ids = set(self.game.db.get_equipped_accessory_ids(self.user_id).values())
             for entry in self.game.get_player_accessories_artifacts(self.user_id):
@@ -164,7 +165,7 @@ class SellView(GameView):
                 value = f"{ACCESSORY_INSTANCE_PREFIX}{entry['instance_id']}"
                 name = f"{affix.name} #{entry['instance_id']}"
                 emoji = SLOT_TYPE_EMOJI.get(affix.slot_type, "💍")
-                results.append((-affix.rank, value, name, emoji, f"{stones:,} 🪙", None))
+                results.append((-affix.rank, value, name, emoji, f"{format_number(stones)} 🪙", None))
         elif self.category == "Avatar Gear":
             equipped_ids = set(self.game.db.get_avatar_equipped_instance_ids(self.user_id).values())
             for inst in self.game.get_player_avatar_gear_instances(self.user_id):
@@ -174,7 +175,7 @@ class SellView(GameView):
                 stones = avatar_gear.sell_stones(inst["tier"])
                 value = f"{AVATAR_INSTANCE_PREFIX}{inst['instance_id']}"
                 emoji = AVATAR_GEAR_SLOT_TYPE_EMOJI.get(inst["slot_type"], "🔮")
-                results.append((-inst["power_score"], value, display_name, emoji, f"{stones:,} 🪙", None))
+                results.append((-inst["power_score"], value, display_name, emoji, f"{format_number(stones)} 🪙", None))
         results.sort(key=lambda c: c[0])
         return results
 
@@ -388,7 +389,7 @@ class SellView(GameView):
                         count += 1
                 stones = count * blacksmith.dismantle_stones(tier)
                 self.last_result = (
-                    f"Dismantled {count}x Tier {tier} {slot_type} pieces — recovered materials + {stones:,} 🪙 total."
+                    f"Dismantled {count}x Tier {tier} {slot_type} pieces — recovered materials + {format_number(stones)} 🪙 total."
                     if count else "Nothing left to sell at that tier."
                 )
         else:
@@ -405,7 +406,7 @@ class SellView(GameView):
                         count += 1
                 stones = count * avatar_gear.sell_stones(tier)
                 self.last_result = (
-                    f"Sold {count}x {avatar_gear.tier_name(tier)} {slot_type} pieces for {stones:,} 🪙 total."
+                    f"Sold {count}x {avatar_gear.tier_name(tier)} {slot_type} pieces for {format_number(stones)} 🪙 total."
                     if count else "Nothing left to sell at that tier."
                 )
         self.selected = None
@@ -434,7 +435,7 @@ class SellView(GameView):
             rarity_star = accessories_data.RARITY_ORDER.index(affix.rarity) + 1
             stones = count * affix.rank * rarity_star * self.game.SALVAGE_STONES_PER_RANK_RARITY_STAR
             self.last_result = (
-                f"Salvaged {count}x **{affix.name}** for {stones:,} 🪙 total."
+                f"Salvaged {count}x **{affix.name}** for {format_number(stones)} 🪙 total."
                 if count else "Nothing left to sell with that name."
             )
         self.selected = None
@@ -445,7 +446,7 @@ class SellView(GameView):
     def build_embed(self) -> discord.Embed:
         player = self.game.get_player_stats(self.user_id, self.display_name)
         embed = discord.Embed(title=f"🏪 {self.display_name}'s NPC Vendor", color=discord.Color.dark_gold())
-        embed.add_field(name="Spirit Stones", value=f"{player['spirit_stones']:,} 🪙", inline=False)
+        embed.add_field(name="Spirit Stones", value=f"{format_number(player['spirit_stones'])} 🪙", inline=False)
 
         label = f"{self.category} — {self.subcategory}" if self.subcategory else self.category
         lines = [

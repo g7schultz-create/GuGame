@@ -22,6 +22,7 @@ from .content import canon_gu_black_heaven
 from .character_data import PATHS, PHYSIQUE_TIER_ORDER, RACES, ROOT_TIER_ORDER
 from .database import GameDatabase
 from .items import ITEMS, roll_essence_restoration_pill_drop
+from .ui_utils import format_number
 
 # Granted once a character is confirmed via /join. Tunable.
 STARTER_INVENTORY = {
@@ -100,6 +101,15 @@ class GameManager:
             check_player = self.db.get_or_create_player(user_id, name)
             if not check_player["studying_profession"]:
                 return False, "You aren't studying anything right now — the notes have nothing to accelerate. They weren't consumed."
+        # Blood Skull Gu (see items._use_blood_skull_gu): same "don't consume a doomed use"
+        # reasoning -- a one-time floor-raise has nothing left to give once already there.
+        if item_name == "Blood Skull Gu":
+            check_player = self.db.get_or_create_player(user_id, name)
+            if check_player["aptitude"] >= items.BLOOD_SKULL_GU_APTITUDE_FLOOR:
+                return False, (
+                    f"Your comprehension is already at least **{items.BLOOD_SKULL_GU_APTITUDE_FLOOR}** — "
+                    f"the skull has nothing left to give you. It wasn't consumed."
+                )
         # Food Dao Path: a scaled chance the Pill isn't actually consumed by this use. Rolled
         # before removal so a "saved" pill never even leaves the inventory (item.use's effect
         # still fires normally either way) -- but ownership still has to be checked either way,
@@ -350,7 +360,7 @@ class GameManager:
         if player["race"] == race_name:
             return False, f"You're already **{race_name}**."
         if not self.db.spend_spirit_stones(user_id, self.PREMIUM_RACE_CHANGE_COST):
-            return False, f"Needs {self.PREMIUM_RACE_CHANGE_COST} spirit stones (you have {player['spirit_stones']:,})."
+            return False, f"Needs {self.PREMIUM_RACE_CHANGE_COST} spirit stones (you have {format_number(player['spirit_stones'])})."
         self.db.save_race(user_id, race_name)
         return True, f"You are now a **{race_name}**!"
 
@@ -376,7 +386,7 @@ class GameManager:
             self.db.add_qi(user_id, -qi_lost)
         self.db.spend_path_change(user_id)
         self.db.save_path(user_id, path_name)
-        penalty_text = "no settling cost — your root smooths the transition" if skip_penalty else f"losing {qi_lost:,.2f} qi as your foundation settles"
+        penalty_text = "no settling cost — your root smooths the transition" if skip_penalty else f"losing {format_number(qi_lost)} qi as your foundation settles"
         return True, f"You now walk the **{path_name}** path ({penalty_text})."
 
     def confirm_character(self, user_id: int, name: str, base_stats: dict):
@@ -1371,11 +1381,11 @@ class GameManager:
             return False, f"Your avatar's soul is already **{soul_name}**."
         first_time = player["avatar_soul"] is None
         if not first_time and not self.db.spend_spirit_stones(user_id, self.AVATAR_SOUL_REROLL_COST):
-            return False, f"Changing your avatar's soul costs **{self.AVATAR_SOUL_REROLL_COST:,}** spirit stones."
+            return False, f"Changing your avatar's soul costs **{format_number(self.AVATAR_SOUL_REROLL_COST)}** spirit stones."
         self.db.save_avatar_soul(user_id, soul_name)
         if first_time:
             self._grant_starter_avatar_gear(user_id)
-        cost_note = "free — your avatar's soul awakens" if first_time else f"{self.AVATAR_SOUL_REROLL_COST:,} spirit stones spent"
+        cost_note = "free — your avatar's soul awakens" if first_time else f"{format_number(self.AVATAR_SOUL_REROLL_COST)} spirit stones spent"
         return True, f"Your Nascent Soul avatar's soul is now **{soul_name}** ({cost_note})."
 
     def _grant_starter_avatar_gear(self, user_id: int):
@@ -1421,7 +1431,7 @@ class GameManager:
         self.db.add_spirit_stones(user_id, stones)
         self.db.delete_avatar_gear_instance(instance_id)
         display_name = f"{avatar_gear.tier_name(instance['tier'])} {instance['slot_type']} #{instance_id}"
-        return True, f"Sold **{display_name}** for {stones:,} 🪙 spirit stones."
+        return True, f"Sold **{display_name}** for {format_number(stones)} 🪙 spirit stones."
 
     def roll_and_grant_avatar_gear(self, user_id: int, name: str, source_key: str, source_tier: int, slot_type: Optional[str] = None) -> dict:
         """Rolls and grants one new avatar gear instance -- does NOT auto-equip (sits owned-
@@ -1964,7 +1974,7 @@ class GameManager:
             return False, "Enter a positive amount to allocate."
         if not self.db.allocate_dao_marks(user_id, path_name, amount):
             return False, "You don't have enough banked Dao Marks, or that would push the path over its 2,000 cap."
-        return True, f"Allocated **{amount:,}** Dao Marks into **{path_name}**."
+        return True, f"Allocated **{format_number(amount)}** Dao Marks into **{path_name}**."
 
     def get_transmute_status(self, user_id: int) -> dict:
         """Read-only -- for /transmute's view to show remaining charges without spending one."""
@@ -2079,7 +2089,7 @@ class GameManager:
         self.db.remove_item(user_id, item_name, quantity)
         stones = equipment.gu_breakdown_value(item_name) * quantity
         self.db.add_spirit_stones(user_id, stones)
-        return True, f"Broke down {quantity}x **{item_name}** for **{stones:,}** 🪙 spirit stones.", stones
+        return True, f"Broke down {quantity}x **{item_name}** for **{format_number(stones)}** 🪙 spirit stones.", stones
 
     # -- Gu Pet: the Gu Refiner profession's own crafting action (see game/gu_pet.py /
     # /gu_pet) -- sacrifice 1-3 Immortal-quality Gu (pure "energy mass," never carrying its
@@ -2467,11 +2477,11 @@ class GameManager:
                 from .ui_utils import format_duration
                 return {
                     "ok": False,
-                    "reason": f"Mode can be switched again in {format_duration(remaining)}, or pay **{gu_pet.MODE_SWITCH_FEE_SPIRIT_STONES:,}** spirit stones to switch now.",
+                    "reason": f"Mode can be switched again in {format_duration(remaining)}, or pay **{format_number(gu_pet.MODE_SWITCH_FEE_SPIRIT_STONES)}** spirit stones to switch now.",
                     "on_cooldown": True, "remaining": remaining,
                 }
             if not self.db.spend_spirit_stones(user_id, gu_pet.MODE_SWITCH_FEE_SPIRIT_STONES):
-                return {"ok": False, "reason": f"Switching early costs **{gu_pet.MODE_SWITCH_FEE_SPIRIT_STONES:,}** spirit stones (you have {player['spirit_stones']:,})."}
+                return {"ok": False, "reason": f"Switching early costs **{format_number(gu_pet.MODE_SWITCH_FEE_SPIRIT_STONES)}** spirit stones (you have {format_number(player['spirit_stones'])})."}
 
         pet = self._settle_gu_pet_satiety(pet)
         new_mode = gu_pet.MODE_CULTIVATION if pet["mode"] == gu_pet.MODE_COMBAT else gu_pet.MODE_COMBAT
@@ -2667,13 +2677,13 @@ class GameManager:
         qi_bonus = self.compute_equipment_bonuses(user_id)["stats"]["qi_stat"]
         current_qi = settled["battle_qi"] + qi_bonus
         if current_qi < qi_cost:
-            return False, f"Not enough Qi to use **{move['name']}** (needs {qi_cost:,}, you have {current_qi:,.0f})."
+            return False, f"Not enough Qi to use **{move['name']}** (needs {format_number(qi_cost)}, you have {format_number(current_qi, decimals=0)})."
         self.db.set_battle_qi(user_id, max(0.0, current_qi - qi_cost - qi_bonus))
 
         effects = move["effects"]
         if move["kind"] == "essence":
             gained = self._restore_essence_pct(user_id, effects["pct"], settled)
-            return True, f"**{move['name']}**: restored {gained:,.0f} primeval essence."
+            return True, f"**{move['name']}**: restored {format_number(gained, decimals=0)} primeval essence."
         if move["kind"] == "cultivation":
             self.db.add_buff(user_id, move["name"], effects["pct"], effects["duration_seconds"])
             return True, f"**{move['name']}**: cultivation speed surges by {effects['pct'] * 100:.0f}% for a while!"
@@ -2707,7 +2717,7 @@ class GameManager:
         self.db.remove_item(user_id, item_name, quantity)
         stones = items.sell_value(item_name) * quantity
         self.db.add_spirit_stones(user_id, stones)
-        return True, f"Sold {quantity}x **{item_name}** for **{stones:,}** 🪙 spirit stones.", stones
+        return True, f"Sold {quantity}x **{item_name}** for **{format_number(stones)}** 🪙 spirit stones.", stones
 
     # -- Professions: /study --------------------------------------------------
 
@@ -3803,6 +3813,13 @@ class GameManager:
 
     # -- Farming: /farm ---------------------------------------------------------
 
+    # Deliberately stops at 7 -- /farm tops out one tier below blacksmith.MAX_TIER/alchemy.
+    # MAX_TIER's own Tier 8 (explore/sfbl/Inheritance Ground/Search Black Heaven only, per
+    # explicit request that Tier 8 Herb NOT be farmable). farm_view.py's own tier Select
+    # already only ever offers range(1, 8), so this was never reachable through the UI, but
+    # plant_farm/plant_all_farm below now refuse it explicitly too rather than relying on
+    # that alone -- a bare `HERB_GROWTH_HOURS[tier]` KeyError for tier 8 would otherwise be a
+    # confusing crash instead of a clean refusal if this ever got called some other way.
     HERB_GROWTH_HOURS = {1: 0.5, 2: 1, 3: 2, 4: 4, 5: 8, 6: 16, 7: 24}
     FARM_BASE_YIELD_RANGE = (3, 6)
 
@@ -3840,6 +3857,8 @@ class GameManager:
 
     def plant_farm(self, user_id: int, name: str, slot_index: int, tier: int):
         player = self.db.get_or_create_player(user_id, name)
+        if tier not in self.HERB_GROWTH_HOURS:
+            return False, "Tier 8 Herb can't be farmed — /farm tops out at Tier 7. Explore, /sfbl, and other endgame sources are the only way to get it."
         if slot_index < 0 or slot_index >= self.farm_slot_count(player):
             return False, "That plot slot isn't unlocked yet — reach a higher realm to gain more."
         if slot_index in self.db.get_farm_plots(user_id):
@@ -3852,11 +3871,16 @@ class GameManager:
 
     def plant_all_farm(self, user_id: int, name: str, tier: int) -> dict:
         """Plants Tier `tier` Herb into every currently-EMPTY unlocked plot in one go — same
-        per-plot mechanics as plant_farm (one herb consumed per slot), just looped across
-        every empty slot until either they're all filled or the player runs out of that
-        tier's herb, whichever comes first. Returns {"planted": count, "item_name",
-        "empty_slots": how many empty slots existed before this call}."""
+        per-plot mechanics as plant_farm (one herb consumed per slot, same Tier 8 refusal),
+        just looped across every empty slot until either they're all filled or the player
+        runs out of that tier's herb, whichever comes first. Returns {"planted": count,
+        "item_name", "empty_slots": how many empty slots existed before this call}."""
         player = self.db.get_or_create_player(user_id, name)
+        if tier not in self.HERB_GROWTH_HOURS:
+            # Same refusal plant_farm gives, just shaped to match this method's own return
+            # contract -- "planted": 0 already reads correctly through farm_view.py's own
+            # existing "nothing to plant" fallback message with no caller changes needed.
+            return {"planted": 0, "item_name": f"Tier {tier} Herb", "empty_slots": 0}
         max_slots = self.farm_slot_count(player)
         occupied = self.db.get_farm_plots(user_id)
         empty_slots = [i for i in range(max_slots) if i not in occupied]
@@ -3947,10 +3971,14 @@ class GameManager:
         return gained
 
     def craft_pill(self, user_id: int, name: str, pill_type: str, tier: int) -> dict:
-        """Consumes the recipe's herbs regardless of outcome (that's the crafting risk,
-        unless a salvage_bonus item refunds one — see _alchemy_salvage_bonus_pct), then
-        rolls success against the player's Alchemist rank plus any equipped
-        alchemy_success_pct bonus. Returns a dict:
+        """Consumes the recipe's herbs (+ any bonus ingredients) regardless of outcome (that's
+        the crafting risk, unless a salvage_bonus item refunds one — see
+        _alchemy_salvage_bonus_pct), then rolls success against the player's Alchemist rank
+        plus any equipped alchemy_success_pct bonus. Tier 8's recipe is a real ladder now (1x
+        each of Tier 1-7 Herb plus 1x Tier 8 Herb — see alchemy.herb_requirements), not just a
+        pile of the top tier, so `needed` merges herb_requirements + bonus_ingredients into one
+        dict — same shape craft_gear's own multi-material recipe already uses — rather than
+        the old single herb+cost pair. Returns a dict:
           ok=False, reason=...                      — not enough herbs, nothing consumed.
           ok=True, success=True/False, ...           — attempted; success=False still cost the herbs."""
         player = self.db.get_or_create_player(user_id, name)
@@ -3961,29 +3989,30 @@ class GameManager:
                 "reason": f"Tier {tier} needs Alchemist rank **{professions.rank_name(required_rank)}** "
                           f"(you're **{professions.rank_name(player['alchemist_rank'])}**) — study Alchemist with /study to advance.",
             }
-        cost = alchemy.herb_cost(pill_type)
-        herb = alchemy.herb_name(tier)
+        needed = {**alchemy.herb_requirements(pill_type, tier), **alchemy.bonus_ingredients(tier)}
         inventory = self.db.get_inventory(user_id)
-        if inventory.get(herb, 0) < cost:
-            return {"ok": False, "reason": f"You need {cost}x **{herb}** to craft this (you have {inventory.get(herb, 0)})."}
-        bonus_ingredients = alchemy.bonus_ingredients(tier)
-        missing_bonus = {mat: qty for mat, qty in bonus_ingredients.items() if inventory.get(mat, 0) < qty}
-        if missing_bonus:
-            missing_text = ", ".join(f"{qty}x {mat} (have {inventory.get(mat, 0)})" for mat, qty in missing_bonus.items())
+        missing = {mat: qty for mat, qty in needed.items() if inventory.get(mat, 0) < qty}
+        if missing:
+            missing_text = ", ".join(f"{qty}x {mat} (have {inventory.get(mat, 0)})" for mat, qty in missing.items())
             return {"ok": False, "reason": f"Missing: {missing_text}."}
 
-        self.db.remove_item(user_id, herb, cost)
-        for mat, qty in bonus_ingredients.items():
+        for mat, qty in needed.items():
             self.db.remove_item(user_id, mat, qty)
         bonuses = self.compute_equipment_bonuses(user_id)
         chance = min(1.0, professions.craft_success_chance(player["alchemist_rank"]) + bonuses.get("alchemy_success_pct", 0))
         success = random.random() < chance
 
-        herb_refunded = 0
+        # Rolled independently per material -- same "hand back one unit" shape craft_gear's
+        # own salvage already uses, generalizing cleanly now that tier 8 has more than one
+        # herb in the recipe (used to be a single herb refund, back when there was only ever
+        # one herb to refund).
         salvage_pct = self._alchemy_salvage_bonus_pct(user_id, player)
-        if salvage_pct and random.random() < salvage_pct:
-            self.db.add_item(user_id, herb, 1)
-            herb_refunded = 1
+        materials_refunded = {}
+        if salvage_pct:
+            for mat in needed:
+                if random.random() < salvage_pct:
+                    self.db.add_item(user_id, mat, 1)
+                    materials_refunded[mat] = 1
 
         item_name = items.alchemy_pill_name(pill_type, tier)
         karma_qi = 0
@@ -4000,7 +4029,7 @@ class GameManager:
                 bonus_pill = True
         return {
             "ok": True, "success": success, "chance": chance,
-            "item_name": item_name, "herb_name": herb, "herb_cost": cost, "herb_refunded": herb_refunded,
+            "item_name": item_name, "materials": needed, "materials_refunded": materials_refunded,
             "karma_qi": karma_qi, "bonus_pill": bonus_pill,
         }
 
@@ -4166,7 +4195,7 @@ class GameManager:
         self.db.delete_crafted_gear(gear_id)
         display_name = blacksmith.crafted_gear_display_name(gear["base_type"], gear["tier"], gear["gear_id"])
         materials_text = ", ".join(f"{qty}x {mat}" for mat, qty in yield_materials.items())
-        return True, f"Dismantled **{display_name}** — recovered {materials_text} and {stones:,} spirit stones."
+        return True, f"Dismantled **{display_name}** — recovered {materials_text} and {format_number(stones)} spirit stones."
 
     # -- Accessories/artifacts (see accessories_data.py, the insanity accessories and
     # artifacts design doc) — equip/unequip/attune/salvage plus the "active" mechanics that
@@ -4333,7 +4362,7 @@ class GameManager:
         stones = affix.rank * rarity_star * self.SALVAGE_STONES_PER_RANK_RARITY_STAR
         self.db.add_spirit_stones(user_id, stones)
         self.db.delete_accessory_instance(instance_id)
-        return True, f"Salvaged **{affix.name}** for {stones:,} 🪙 spirit stones."
+        return True, f"Salvaged **{affix.name}** for {format_number(stones)} 🪙 spirit stones."
 
     def salvage_all_accessory_artifact_duplicates(self, user_id: int, name: str, item_id: str) -> dict:
         """/accessories' 'Salvage All' -- salvages every owned instance sharing the same
@@ -4400,7 +4429,7 @@ class GameManager:
                 return False, f"**{affix.name}** is out of charges for today."
             self.db.set_accessory_instance_charges(instance_id, charges_used + 1, now if charges_used == 0 else instance["charges_reset_ts"])
             gained = self._restore_essence_pct(user_id, params.get("pct", 0.1), player)
-            return True, f"**{affix.name}**: restored {gained:,.0f} primeval essence ({max_charges - charges_used - 1} charge(s) left today)."
+            return True, f"**{affix.name}**: restored {format_number(gained, decimals=0)} primeval essence ({max_charges - charges_used - 1} charge(s) left today)."
 
         if affix.effect_key == "search_reroll_daily":
             # Adaptation: rerolling a specific past roll's exact outcome has no clean hook
@@ -4446,7 +4475,7 @@ class GameManager:
                 self.db.set_hp(user_id, player["hp"] - hp_cost)
                 self.db.add_buff(user_id, affix.name, params["cultivation_pct"], 600)
                 self.db.set_accessory_instance_activation(instance_id, int(time.time()))
-                return True, f"**{affix.name}**: sacrificed {hp_cost:,} HP for +{params['cultivation_pct']*100:.0f}% cultivation gain for the next 10 minutes."
+                return True, f"**{affix.name}**: sacrificed {format_number(hp_cost)} HP for +{params['cultivation_pct']*100:.0f}% cultivation gain for the next 10 minutes."
             boost = {}
             if "chance_pct" in params:
                 boost["chance_pct"] = params["chance_pct"]
@@ -4799,7 +4828,7 @@ class GameManager:
         kind = reward["kind"]
         if kind == "stones":
             self.db.add_spirit_stones(user_id, reward["amount"])
-            return f"{reward['amount']:,} 🪙 spirit stones"
+            return f"{format_number(reward['amount'])} 🪙 spirit stones"
         if kind == "item":
             if not reward.get("item_name"):
                 self.db.add_spirit_stones(user_id, 20)
@@ -6245,7 +6274,7 @@ class GameManager:
         if not player["sect_id"]:
             return False, "You're not in a sect."
         if not sects.can_demote(player["sect_rank"]):
-            return False, "Only the Sect Leader can demote members."
+            return False, "Only the Sect Leader or a Vice Leader can demote members."
         target = self.db.get_or_create_player(target_id, target_name)
         if target["sect_id"] != player["sect_id"]:
             return False, f"{target_name} isn't a member of your sect."
@@ -6254,6 +6283,8 @@ class GameManager:
         current_idx = sects.rank_index(target["sect_rank"])
         if current_idx <= 0:
             return False, f"**{target_name}** is already an Outer Disciple — use the Kick button in `/sect` to remove them instead."
+        if target["sect_rank"] not in sects.demotable_target_ranks(player["sect_rank"]):
+            return False, f"Your rank ({player['sect_rank']}) can't demote a {target['sect_rank']}."
         prev_rank = sects.SECT_RANKS[current_idx - 1]
         self.db.set_sect_rank(target_id, prev_rank)
         return True, f"⬇️ **{target_name}** is demoted to {sects.RANK_EMOJI[prev_rank]} {prev_rank}."
@@ -6265,10 +6296,10 @@ class GameManager:
         if amount < 1:
             return False, "Donate at least 1 spirit stone."
         if not self.db.spend_spirit_stones(user_id, amount):
-            return False, f"You don't have {amount:,} spirit stones to donate."
+            return False, f"You don't have {format_number(amount)} spirit stones to donate."
         self.db.add_sect_treasury(player["sect_id"], amount)
         sect = self.db.get_sect(player["sect_id"])
-        return True, f"💰 You donate **{amount:,}** spirit stones — the treasury now holds {sect['treasury_spirit_stones']:,}."
+        return True, f"💰 You donate **{format_number(amount)}** spirit stones — the treasury now holds {format_number(sect['treasury_spirit_stones'])}."
 
     def sect_withdraw(self, user_id: int, name: str, amount: int):
         player = self.db.get_or_create_player(user_id, name)
@@ -6280,9 +6311,9 @@ class GameManager:
             return False, "Withdraw at least 1 spirit stone."
         if not self.db.spend_sect_treasury(player["sect_id"], amount):
             sect = self.db.get_sect(player["sect_id"])
-            return False, f"The treasury only holds {sect['treasury_spirit_stones']:,} spirit stones."
+            return False, f"The treasury only holds {format_number(sect['treasury_spirit_stones'])} spirit stones."
         self.db.add_spirit_stones(user_id, amount)
-        return True, f"💰 You withdraw **{amount:,}** spirit stones from the treasury."
+        return True, f"💰 You withdraw **{format_number(amount)}** spirit stones from the treasury."
 
     def sect_set_motto(self, user_id: int, name: str, motto: str):
         player = self.db.get_or_create_player(user_id, name)
@@ -6811,10 +6842,10 @@ class GameManager:
             self.db.add_spirit_stones(user_id, stones)
             crystal_qty = tournament.TOURNAMENT_PARTICIPATION_ESSENCE_CRYSTAL_QTY
             self.db.add_item(user_id, "Primeval Essence Crystal", crystal_qty)
-            return f"{stones:,} 🪙 + {crystal_qty}x Primeval Essence Crystal (rank {rank})"
+            return f"{format_number(stones)} 🪙 + {crystal_qty}x Primeval Essence Crystal (rank {rank})"
         parts = []
         self.db.add_spirit_stones(user_id, entry["stones"])
-        parts.append(f"{entry['stones']:,} 🪙")
+        parts.append(f"{format_number(entry['stones'])} 🪙")
         self.db.add_item(user_id, "Primeval Essence Crystal", entry["essence_crystal_qty"])
         parts.append(f"{entry['essence_crystal_qty']}x Primeval Essence Crystal")
         gu_family = random.choice([f for f, d in equipment.GU_FAMILIES.items() if entry["gu_quality"] in d["qualities"]])

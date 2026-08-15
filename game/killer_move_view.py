@@ -6,7 +6,7 @@ import discord
 
 from . import equipment, gu_types, killer_move_gen
 from .base_view import GameView
-from .ui_utils import NAV_NEXT_VALUE, NAV_PREV_VALUE, paginate_select_options
+from .ui_utils import NAV_NEXT_VALUE, NAV_PREV_VALUE, format_number, paginate_select_options
 
 TABS = [("assemble", "Assemble", "🧬"), ("moves", "My Killer Moves", "📖")]
 
@@ -416,7 +416,7 @@ class KillerMoveView(GameView):
                     qi_cost = self.game.killer_move_qi_cost(player, move)
                     value = (
                         f"**{move['name']}** ({move['move_tier']}, {KIND_LABEL[move['kind']]})\n"
-                        f"{self._effects_text(move['kind'], move['effects'])}\nQi cost: **{qi_cost:,}**"
+                        f"{self._effects_text(move['kind'], move['effects'])}\nQi cost: **{format_number(qi_cost)}**"
                     )
                 else:
                     value = "*(none equipped)*"

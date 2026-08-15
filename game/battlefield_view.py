@@ -30,7 +30,7 @@ from .raid import (
     INSPIRE_STR_BONUS_PCT,
 )
 from .raid import DEFEND_ALLY_DAMAGE_REDUCTION as _BRACE_EXTRA_REDUCTION
-from .ui_utils import render_bar
+from .ui_utils import format_number, render_bar
 
 GUARD_DAMAGE_REDUCTION = 0.5
 POTION_USE_CAP = 5  # a longer fight than a normal hunt, so a slightly higher cap
@@ -296,8 +296,8 @@ class BattlefieldView(GameView):
             heal_text = ""
             if result.heal:
                 self.monster_hp = min(self.monster_max_hp, self.monster_hp + result.heal)
-                heal_text = f" It recovers {result.heal} HP."
-            self._log_line(f"🩸 {self.monster.name} uses {self.monster.ability.name} for {result.damage} damage{crit}.{heal_text}")
+                heal_text = f" It recovers {format_number(result.heal)} HP."
+            self._log_line(f"🩸 {self.monster.name} uses {self.monster.ability.name} for {format_number(result.damage)} damage{crit}.{heal_text}")
         if self.player_hp <= 0:
             flee_ward_name = self.game.check_and_consume_flee_ward(self.user_id)
             if flee_ward_name:
@@ -323,7 +323,7 @@ class BattlefieldView(GameView):
                     # SPECIAL_BONUS_KEYS.
                     reduction = bonuses.get("death_qi_loss_reduction_pct", 0)
                     self.qi_lost_on_death, _ = self.game.db.apply_death_penalty(self.user_id, reduction_pct=reduction)
-                    self._log_line(f"💀 You are struck down, losing {self.qi_lost_on_death:,.2f} qi.")
+                    self._log_line(f"💀 You are struck down, losing {format_number(self.qi_lost_on_death)} qi.")
             self._end_run()
 
     def _do_attack(self, str_multiplier: float = 1.0, label: str = "Attack", guaranteed_hit: bool = False, freeze_chance: float = 0.0):
@@ -355,8 +355,8 @@ class BattlefieldView(GameView):
             if result.heal:
                 self.player_hp = min(self.player_max_hp, self.player_hp + result.heal)
                 self._persist_hp()
-                heal_text = f" 💚 +{result.heal} HP."
-            self._log_line(f"⚔️ You use {label} for {result.damage} damage{crit}.{heal_text}")
+                heal_text = f" 💚 +{format_number(result.heal)} HP."
+            self._log_line(f"⚔️ You use {label} for {format_number(result.damage)} damage{crit}.{heal_text}")
             if freeze_chance and self.monster_hp > 0 and random.random() < freeze_chance:
                 self.monster_frozen_rounds = max(self.monster_frozen_rounds, 1)
                 self._log_line(f"❄️ {self.monster.name} is frozen solid and will miss its next attack!")
@@ -491,7 +491,7 @@ class BattlefieldView(GameView):
             return
         if self.player_qi < avatar.SOUL_PROJECTION_QI_COST:
             await interaction.response.send_message(
-                f"Not enough battle Qi for Soul Projection (needs {avatar.SOUL_PROJECTION_QI_COST:,}).", ephemeral=True,
+                f"Not enough battle Qi for Soul Projection (needs {format_number(avatar.SOUL_PROJECTION_QI_COST)}).", ephemeral=True,
             )
             return
 
@@ -577,7 +577,7 @@ class BattlefieldView(GameView):
 
         # Nascent Soul Avatar's Soul Projection (see avatar.py).
         soul_projection_button = discord.ui.Button(
-            label=f"Soul Projection ({avatar.SOUL_PROJECTION_QI_COST:,})", emoji="🌀",
+            label=f"Soul Projection ({format_number(avatar.SOUL_PROJECTION_QI_COST)})", emoji="🌀",
             style=discord.ButtonStyle.success, row=1,
             disabled=not active or not self.player["avatar_soul"] or self.player_qi < avatar.SOUL_PROJECTION_QI_COST,
         )
@@ -625,7 +625,7 @@ class BattlefieldView(GameView):
         embed.add_field(
             name=f"🐗 {m.name}{frozen_note}",
             value=(
-                f"❤️ HP `{max(0, self.monster_hp):.0f} / {self.monster_max_hp:.0f}` • {monster_pct}%\n"
+                f"❤️ HP `{format_number(max(0, self.monster_hp), decimals=0)} / {format_number(self.monster_max_hp, decimals=0)}` • {monster_pct}%\n"
                 f"`{render_bar(self.monster_hp, self.monster_max_hp)}`\n"
                 f"🎯 Next: **{m.ability.name}** — {m.ability.description}"
             ),
@@ -635,9 +635,9 @@ class BattlefieldView(GameView):
         embed.add_field(
             name=f"🧍 {self.display_name}",
             value=(
-                f"❤️ HP `{max(0, self.player_hp):.0f} / {self.player_max_hp:.0f}` • {player_pct}%\n"
+                f"❤️ HP `{format_number(max(0, self.player_hp), decimals=0)} / {format_number(self.player_max_hp, decimals=0)}` • {player_pct}%\n"
                 f"`{render_bar(self.player_hp, self.player_max_hp)}`\n"
-                f"💧 Qi `{max(0, self.player_qi):.0f} / {self.player_max_qi:.0f}` • {qi_pct}%\n"
+                f"💧 Qi `{format_number(max(0, self.player_qi), decimals=0)} / {format_number(self.player_max_qi, decimals=0)}` • {qi_pct}%\n"
                 f"`{render_bar(self.player_qi, self.player_max_qi)}`\n"
                 f"Potions used: {self.potions_used}/{POTION_USE_CAP}{empower_note}"
             ),
@@ -651,7 +651,7 @@ class BattlefieldView(GameView):
             embed.add_field(
                 name="💀 Outcome",
                 value=(
-                    f"You were struck down after clearing **{self.waves_cleared}** wave(s), losing **{self.qi_lost_on_death:,.2f} qi**.\n"
+                    f"You were struck down after clearing **{self.waves_cleared}** wave(s), losing **{format_number(self.qi_lost_on_death)} qi**.\n"
                     f"🎁 Final reward: {self.final_reward_text}"
                 ),
                 inline=False,

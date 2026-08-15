@@ -13,6 +13,7 @@ import random
 from typing import Optional
 
 from . import avatar_gear, equipment, items, manual_data
+from .ui_utils import format_number
 
 BOARD_SIZE = 25
 MAX_CLICKS_PER_BOARD = 7  # the board still has 25 tiles (and still guarantees a treasure tile
@@ -116,7 +117,7 @@ def _roll_base_tile_reward(game, user_id: int, name: str, category: str, rng: ra
         db.add_item(user_id, material_name, 1)
         stones = rng.randint(*stone_range)
         db.add_spirit_stones(user_id, stones)
-        return "🪨", f"{material_name} + {stones:,} 🪙"
+        return "🪨", f"{material_name} + {format_number(stones)} 🪙"
 
     if category == "decent":
         sub = _weighted_choice(WHITE_HEAVEN_DECENT_SUB_WEIGHTS if white_heaven else DECENT_SUB_WEIGHTS, rng)

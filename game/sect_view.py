@@ -5,7 +5,7 @@ import discord
 
 from . import sects
 from .base_view import GameView
-from .ui_utils import NAV_NEXT_VALUE, NAV_PREV_VALUE, paginate_select_options
+from .ui_utils import NAV_NEXT_VALUE, NAV_PREV_VALUE, format_number, paginate_select_options
 
 # (label, emoji, verb) for the four member-target actions sharing the "pick a member from a
 # select" sub-screen (_build_manage_screen) — Promote/Demote/Kick/Transfer Leadership all take
@@ -440,7 +440,7 @@ class SectView(GameView):
         )
         embed.add_field(name="Your Rank", value=f"{sects.RANK_EMOJI[rank]} {rank}", inline=True)
         embed.add_field(name="Members", value=f"{len(status['members'])}/{sects.MAX_MEMBERS}", inline=True)
-        embed.add_field(name="Treasury", value=f"🪙 {sect_row['treasury_spirit_stones']:,} spirit stones", inline=True)
+        embed.add_field(name="Treasury", value=f"🪙 {format_number(sect_row['treasury_spirit_stones'])} spirit stones", inline=True)
         roster_lines = [f"{sects.RANK_EMOJI[m['sect_rank']]} **{m['name']}** — {m['sect_rank']}" for m in status["members"]]
         embed.add_field(name="Roster", value="\n".join(roster_lines)[:1024], inline=False)
 

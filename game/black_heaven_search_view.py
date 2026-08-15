@@ -32,7 +32,7 @@ from . import avatar, black_heaven
 from .black_heaven_view import build_black_heaven_image_file
 from .base_view import GameView
 from .team_battle import EMPOWER_QI_COST, RaidEnemy, TeamBattleEngine
-from .ui_utils import render_bar
+from .ui_utils import format_number, render_bar
 
 BATTLE_ROUND_TIMEOUT_SECONDS = 30  # matches raid.ROUND_TIMEOUT_SECONDS's own pacing
 
@@ -315,7 +315,7 @@ class BlackHeavenSearchView(TeamBattleEngine, GameView):
             killer_move_button.callback = self._on_killer_move
             self.add_item(killer_move_button)
             soul_projection_button = discord.ui.Button(
-                label=f"Soul Projection ({avatar.SOUL_PROJECTION_QI_COST:,})", emoji="🌀",
+                label=f"Soul Projection ({format_number(avatar.SOUL_PROJECTION_QI_COST)})", emoji="🌀",
                 style=discord.ButtonStyle.success, row=1,
             )
             soul_projection_button.callback = self._on_soul_projection
@@ -594,7 +594,7 @@ class BlackHeavenSearchView(TeamBattleEngine, GameView):
         if self.phase == "battle":
             enemy = self.enemies[0]
             pct = int(100 * max(0, enemy.hp) / enemy.max_hp) if enemy.max_hp else 0
-            description = f"⚔️ **{enemy.monster.name}** — {max(0, enemy.hp):,.0f}/{enemy.max_hp:,.0f} HP ({pct}%)\n`{render_bar(enemy.hp, enemy.max_hp)}`"
+            description = f"⚔️ **{enemy.monster.name}** — {format_number(max(0, enemy.hp), decimals=0)}/{format_number(enemy.max_hp, decimals=0)} HP ({pct}%)\n`{render_bar(enemy.hp, enemy.max_hp)}`"
             if self.inspire_rounds_remaining > 0:
                 description += f"\n✨ **Inspire active** — party STR/DEF boosted ({self.inspire_rounds_remaining} round(s) left)."
             embed = discord.Embed(
@@ -620,7 +620,7 @@ class BlackHeavenSearchView(TeamBattleEngine, GameView):
                     if p.get("soul_projection_rounds_remaining", 0) > 0 else ""
                 )
                 lines.append(
-                    f"**{name}** — {max(0, p['hp']):,.0f}/{p['max_hp']:,.0f} HP ({p_pct}%) • {status}{empower_note}{soul_projection_note}\n"
+                    f"**{name}** — {format_number(max(0, p['hp']), decimals=0)}/{format_number(p['max_hp'], decimals=0)} HP ({p_pct}%) • {status}{empower_note}{soul_projection_note}\n"
                     f"`{render_bar(p['hp'], p['max_hp'])}`"
                 )
             embed.add_field(name=f"🧍 Team — Round {self.round}", value="\n".join(lines)[:1024], inline=False)
@@ -637,7 +637,7 @@ class BlackHeavenSearchView(TeamBattleEngine, GameView):
                 description=f"{monster_name} proves too much — the team is beaten back and forced to retreat.",
                 color=discord.Color.dark_red(),
             )
-            qi_lines = [f"**{p['name']}**: {p.get('qi_lost_on_death', 0):,.2f} qi lost" for p in self.participants.values()]
+            qi_lines = [f"**{p['name']}**: {format_number(p.get('qi_lost_on_death', 0))} qi lost" for p in self.participants.values()]
             if qi_lines:
                 embed.add_field(name="💀 Qi Lost", value="\n".join(qi_lines)[:1024], inline=False)
             if self.gu_roll_result:

@@ -53,6 +53,29 @@ def format_duration(seconds: float) -> str:
     return f"{secs}s"
 
 
+NUMBER_SHORTHAND_THRESHOLD = 100_000_000
+NUMBER_SHORTHAND_SUFFIXES = ((10**12, "T"), (10**9, "B"), (10**6, "M"))
+
+
+def format_number(value, decimals: int = 2) -> str:
+    """Comma-formatted below 100,000,000 -- identical to every existing `:,`-style display
+    (ints stay plain, floats keep `decimals` digits, defaulting to 2 to match the codebase's
+    most common float display). At and above 100M, collapses to K/M/B/T shorthand (always 2
+    decimal places) instead of a wall of digits -- late-game numbers already reach into the
+    hundreds of billions (Ancient Realm's own qi requirements, see realms.py; the top realm's
+    qi keeps banking uncapped past Peak on top of that), so this is the single shared place
+    every large-number display should route through rather than each call site inventing its
+    own cutoff."""
+    if value < 0:
+        return f"-{format_number(-value, decimals)}"
+    if value < NUMBER_SHORTHAND_THRESHOLD:
+        return f"{value:,.{decimals}f}" if isinstance(value, float) else f"{value:,}"
+    for threshold, suffix in NUMBER_SHORTHAND_SUFFIXES:
+        if value >= threshold:
+            return f"{value / threshold:,.2f}{suffix}"
+    return f"{value:,}"
+
+
 PATH_EMOJI = {"Righteous": "☯️", "Demonic": "👹", "Rogue": "🗡️"}
 
 

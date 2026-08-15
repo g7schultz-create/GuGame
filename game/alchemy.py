@@ -50,6 +50,19 @@ def herb_name(tier: int) -> str:
     return f"Tier {tier} Herb"
 
 
+def herb_requirements(pill_type: str, tier: int) -> dict:
+    """{herb_item_name: quantity} -- the full herb-tier cost for this (pill_type, tier).
+    Every tier below 8 stays the simple flat herb_cost(pill_type) copies of that tier's own
+    herb, unchanged. Tier 8 (2026-08-15, explicit request) replaces that with a real ladder
+    instead: 1x each of Tier 1-7 Herb plus 1x Tier 8 Herb -- climbing every rung to brew the
+    peak pill, not just a bigger pile of the top tier alone. Doesn't scale with herb_cost
+    (e.g. Pure Aptitude's own 2x) -- the ladder itself IS the tier 8 cost, not a multiplier on
+    top of it."""
+    if tier == 8:
+        return {herb_name(t): 1 for t in range(1, 9)}
+    return {herb_name(tier): herb_cost(pill_type)}
+
+
 def bonus_ingredients(tier: int) -> dict:
     """Extra ingredients a tier's recipe needs on top of the normal herb cost -- empty for
     every tier except 8 (see BONUS_INGREDIENTS_TIER_8). A real dict copy each call so a
@@ -59,6 +72,6 @@ def bonus_ingredients(tier: int) -> dict:
 
 
 def recipe_description(pill_type: str, tier: int) -> str:
-    cost = herb_cost(pill_type)
-    parts = [f"{cost}x {herb_name(tier)}"] + [f"{qty}x {mat}" for mat, qty in bonus_ingredients(tier).items()]
+    parts = [f"{qty}x {herb}" for herb, qty in herb_requirements(pill_type, tier).items()]
+    parts += [f"{qty}x {mat}" for mat, qty in bonus_ingredients(tier).items()]
     return f"{' + '.join(parts)} → 1x {items.alchemy_pill_name(pill_type, tier)}"

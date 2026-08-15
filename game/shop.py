@@ -4,6 +4,7 @@ import discord
 from . import chargen
 from .base_view import GameView
 from .character_data import PHYSIQUE_TIER_ORDER, PHYSIQUE_TIERS, ROOT_TIER_ORDER, ROOT_TIERS
+from .ui_utils import format_number
 
 
 def _format_current(tier_name, item_name, tiers_catalog) -> str:
@@ -82,7 +83,7 @@ class ShopView(GameView):
 
         root_locked = self.pending_root is not None
         root_button = discord.ui.Button(
-            label=f"Reroll Root ({root_cost:,} 🪙)", emoji="🌱", style=discord.ButtonStyle.primary,
+            label=f"Reroll Root ({format_number(root_cost)} 🪙)", emoji="🌱", style=discord.ButtonStyle.primary,
             disabled=stones < root_cost or root_locked, row=1,
         )
         root_button.callback = self._on_buy_root
@@ -117,7 +118,7 @@ class ShopView(GameView):
 
         physique_locked = self.pending_physique is not None
         physique_button = discord.ui.Button(
-            label=f"Reroll Physique ({physique_cost:,} 🪙)", emoji="💪", style=discord.ButtonStyle.primary,
+            label=f"Reroll Physique ({format_number(physique_cost)} 🪙)", emoji="💪", style=discord.ButtonStyle.primary,
             disabled=stones < physique_cost or physique_locked, row=3,
         )
         physique_button.callback = self._on_buy_physique
@@ -244,7 +245,7 @@ class ShopView(GameView):
             "offered the best roll out of the batch, not just whichever one happened to land last.",
             color=discord.Color.gold(),
         )
-        embed.add_field(name="🪙 Spirit Stones", value=f"{player['spirit_stones']:,}", inline=False)
+        embed.add_field(name="🪙 Spirit Stones", value=format_number(player['spirit_stones']), inline=False)
         embed.add_field(name="🌱 Current Root", value=_format_current(player["root_tier"], player["root_name"], ROOT_TIERS), inline=False)
         if self.pending_root:
             tier, name = self.pending_root

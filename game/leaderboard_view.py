@@ -4,6 +4,7 @@ import discord
 
 from . import realms
 from .base_view import GameView
+from .ui_utils import format_number
 
 MEDALS = ["🥇", "🥈", "🥉"]
 
@@ -11,10 +12,10 @@ MEDALS = ["🥇", "🥈", "🥉"]
 # board_key indexes GameManager.get_leaderboard()'s returned dict.
 CATEGORIES = [
     ("realm", "by_realm", "Highest Realm", "🏔️", lambda e: realms.realm_name(e["realm_index"])),
-    ("stones", "by_stones", "Most Spirit Stones", "🪙", lambda e: f"{e['spirit_stones']:,}"),
-    ("power", "by_power", "Highest Combat Power", "⚔️", lambda e: f"{e['combat_power']:,}"),
-    ("speed", "by_speed", "Fastest Cultivation Speed", "⚡", lambda e: f"{e['qi_rate']:,.2f} qi/min"),
-    ("boss_damage", "by_boss_damage", "World Boss Damage", "🐉", lambda e: f"{e['damage_dealt']:,} damage ({e['attacks']} strikes)"),
+    ("stones", "by_stones", "Most Spirit Stones", "🪙", lambda e: format_number(e['spirit_stones'])),
+    ("power", "by_power", "Highest Combat Power", "⚔️", lambda e: format_number(e['combat_power'])),
+    ("speed", "by_speed", "Fastest Cultivation Speed", "⚡", lambda e: f"{format_number(e['qi_rate'])} qi/min"),
+    ("boss_damage", "by_boss_damage", "World Boss Damage", "🐉", lambda e: f"{format_number(e['damage_dealt'])} damage ({e['attacks']} strikes)"),
 ]
 
 
@@ -71,7 +72,7 @@ class LeaderboardView(GameView):
             if ctx["active"]:
                 pct = 100 * max(0, ctx["current_hp"]) / ctx["max_hp"]
                 embed.description = (
-                    f"{ctx['boss_emoji']} **{ctx['boss_name']}** — {ctx['current_hp']:,} / {ctx['max_hp']:,} HP ({pct:.1f}%)\n"
+                    f"{ctx['boss_emoji']} **{ctx['boss_name']}** — {format_number(ctx['current_hp'])} / {format_number(ctx['max_hp'])} HP ({pct:.1f}%)\n"
                     "_Resets automatically whenever a new World Boss spawns._\n\n"
                     + _format_entries(board[board_key], value_fn)
                 )

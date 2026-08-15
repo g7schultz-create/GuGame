@@ -30,16 +30,14 @@ class AlchemyView(GameView):
         return self._rank() < alchemy.rank_required_for_tier(self.selected_tier)
 
     def _max_affordable_batches(self, tier: int) -> int:
-        """How many pills at this tier can actually be made right now -- the herb cost AND
-        every bonus ingredient (see alchemy.bonus_ingredients, real for Tier 8 only) all have
-        to clear, so this is the MINIMUM across all of them, not just the herb."""
+        """How many pills at this tier can actually be made right now -- every required herb
+        (see alchemy.herb_requirements -- a full Tier 1-8 ladder at Tier 8, not just the top
+        tier) AND every bonus ingredient (see alchemy.bonus_ingredients, real for Tier 8 only)
+        all have to clear, so this is the MINIMUM across all of them."""
         inventory = self.game.get_inventory(self.user_id)
-        cost = alchemy.herb_cost(self.selected_type)
-        herb_owned = inventory.get(alchemy.herb_name(tier), 0)
-        limits = [herb_owned // cost if cost > 0 else 0]
-        for mat, qty in alchemy.bonus_ingredients(tier).items():
-            limits.append(inventory.get(mat, 0) // qty if qty > 0 else 0)
-        return min(limits)
+        needed = {**alchemy.herb_requirements(self.selected_type, tier), **alchemy.bonus_ingredients(tier)}
+        limits = [inventory.get(mat, 0) // qty if qty > 0 else 0 for mat, qty in needed.items()]
+        return min(limits) if limits else 0
 
     def _build_components(self):
         self.clear_items()
@@ -54,12 +52,20 @@ class AlchemyView(GameView):
         self.add_item(type_select)
 
         inventory = self.game.get_inventory(self.user_id)
-        cost = alchemy.herb_cost(self.selected_type)
         tier_options = []
         for tier in range(alchemy.MIN_TIER, alchemy.MAX_TIER + 1):
             required = alchemy.rank_required_for_tier(tier)
             locked = rank < required
-            label = f"Tier {tier} — needs {cost}x Tier {tier} Herb (have {inventory.get(alchemy.herb_name(tier), 0)})"
+            herb_needs = alchemy.herb_requirements(self.selected_type, tier)
+            if len(herb_needs) > 1:
+                # Tier 8's real ladder (1x each of Tier 1-7 Herb plus 1x Tier 8 Herb) is too
+                # long to spell out herb-by-herb and still fit Discord's 100-char option label
+                # alongside the bonus-ingredient/lock text below -- build_embed's own recipe
+                # lines (further down) list every herb individually instead.
+                label = f"Tier {tier} — needs 1x each of Tier 1-{tier} Herb"
+            else:
+                herb, cost = next(iter(herb_needs.items()))
+                label = f"Tier {tier} — needs {cost}x {herb} (have {inventory.get(herb, 0)})"
             bonus = alchemy.bonus_ingredients(tier)
             if bonus:
                 label += " + " + ", ".join(f"{qty}x {mat}" for mat, qty in bonus.items())
@@ -70,7 +76,6 @@ class AlchemyView(GameView):
         tier_select.callback = self._on_pick_tier
         self.add_item(tier_select)
 
-        owned = inventory.get(alchemy.herb_name(self.selected_tier), 0)
         max_batch = self._max_affordable_batches(self.selected_tier)
         locked = self._is_locked()
 
@@ -133,8 +138,12 @@ class AlchemyView(GameView):
         if attempted == 1:
             if successes:
                 return f"✅ Success! Crafted **{item_name}**."
-            refund_text = " (1 was salvaged back)" if last_result.get("herb_refunded") else ""
-            return f"💥 The brew failed — {last_result['herb_cost']}x **{last_result['herb_name']}** was lost in the attempt{refund_text}."
+            materials_text = ", ".join(f"{qty}x {mat}" for mat, qty in last_result["materials"].items())
+            message = f"💥 The brew failed — {materials_text} was lost in the attempt."
+            if last_result.get("materials_refunded"):
+                refund_text = ", ".join(f"{qty}x {mat}" for mat, qty in last_result["materials_refunded"].items())
+                message += f" ✨ Salvaged {refund_text} back."
+            return message
         failures = attempted - successes
         return f"Attempted {attempted}x **{item_name}** — ✅ {successes} succeeded, 💥 {failures} failed."
 
@@ -145,15 +154,17 @@ class AlchemyView(GameView):
         # craft attempt actually rolls against.
         bonus_pct = self.game.compute_equipment_bonuses(self.user_id).get("alchemy_success_pct", 0)
         chance = min(1.0, professions.craft_success_chance(player["alchemist_rank"]) + bonus_pct)
-        cost = alchemy.herb_cost(self.selected_type)
-        herb = alchemy.herb_name(self.selected_tier)
         item_name = items.alchemy_pill_name(self.selected_type, self.selected_tier)
-        owned = self.game.get_inventory(self.user_id).get(herb, 0)
+        inventory = self.game.get_inventory(self.user_id)
 
         effect = items.alchemy_pill_effect_text(self.selected_type, self.selected_tier)
 
-        recipe_lines = [f"🌿 Recipe: {cost}x {herb} (you have {owned})"]
-        inventory = self.game.get_inventory(self.user_id)
+        herb_needs = alchemy.herb_requirements(self.selected_type, self.selected_tier)
+        recipe_lines = [
+            f"🌿 Recipe: {qty}x {herb} (you have {inventory.get(herb, 0)})" if i == 0
+            else f"　+ {qty}x {herb} (you have {inventory.get(herb, 0)})"
+            for i, (herb, qty) in enumerate(herb_needs.items())
+        ]
         for mat, qty in alchemy.bonus_ingredients(self.selected_tier).items():
             recipe_lines.append(f"　+ {qty}x {mat} (you have {inventory.get(mat, 0)})")
 

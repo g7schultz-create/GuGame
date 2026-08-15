@@ -10,7 +10,7 @@ from .character_class import get_character_class
 from .character_data import PHYSIQUE_TIERS, ROOT_TIERS
 from .items import ITEM_CATEGORIES, item_emoji, items_in_category, subcategories_in_category
 from .manual_view import EFFECT_LABELS
-from .ui_utils import render_bar
+from .ui_utils import format_number, render_bar
 
 
 def _inventory_item_emoji(item_name: str) -> str:
@@ -251,9 +251,9 @@ class ProfileView(GameView):
             name="📊 Cultivation Stats",
             value=(
                 f"🏔️ **Realm Index:** {p['realm_index']}\n"
-                f"💠 **Primeval Essence:** {p['primeval_essence']}/{self.db.get_effective_max_essence(self.user_id)}\n"
-                f"🪙 **Spirit Stones:** {p['spirit_stones']}\n"
-                f"❤️ **HP:** {p['hp']}/{p['max_hp']}"
+                f"💠 **Primeval Essence:** {format_number(p['primeval_essence'])}/{format_number(self.db.get_effective_max_essence(self.user_id))}\n"
+                f"🪙 **Spirit Stones:** {format_number(p['spirit_stones'])}\n"
+                f"❤️ **HP:** {format_number(p['hp'])}/{format_number(p['max_hp'])}"
             ),
             inline=False,
         )
@@ -265,7 +265,7 @@ class ProfileView(GameView):
         race, root_tier, physique_tier, path = self._selection_objects()
         rate_bonus = chargen.effective_qi_rate_bonus(race, root_tier, physique_tier, path)
         description = (
-            f"⚡ **Total Qi:** {p['qi']:,.2f}\n"
+            f"⚡ **Total Qi:** {format_number(p['qi'])}\n"
             f"✨ **Qi Multiplier (elixirs/pellets):** x{p['qi_multiplier']:.2f}\n"
             f"🌿 **Cultivation Speed + Qi Recovery Bonus:** +{rate_bonus * 100:.1f}%\n"
             f"　　_(from race, root, physique, and cultivation path)_\n"
@@ -314,10 +314,10 @@ class ProfileView(GameView):
         embed.add_field(
             name="Stats (base + gear/Gu)",
             value=(
-                f"❤️ **HP** {hp:.0f}/{max_hp:.0f}\n"
-                f"🎯 **ATK** {atk:.0f} ⚔️ **STR** {str_:.0f}\n"
-                f"🏃 **SPD** {spd:.0f} 🛡️ **DEF** {def_:.0f}\n"
-                f"🍀 **LCK** {luck:.0f} 💧 **QI** {qi:.0f}"
+                f"❤️ **HP** {format_number(hp, decimals=0)}/{format_number(max_hp, decimals=0)}\n"
+                f"🎯 **ATK** {format_number(atk, decimals=0)} ⚔️ **STR** {format_number(str_, decimals=0)}\n"
+                f"🏃 **SPD** {format_number(spd, decimals=0)} 🛡️ **DEF** {format_number(def_, decimals=0)}\n"
+                f"🍀 **LCK** {format_number(luck, decimals=0)} 💧 **QI** {format_number(qi, decimals=0)}"
             ),
             inline=False,
         )
@@ -327,8 +327,8 @@ class ProfileView(GameView):
                 f"🎯 Hit Chance: **{combat.hit_chance(atk) * 100:.0f}%**\n"
                 f"🏃 Dodge Chance: **{combat.dodge_chance(spd) * 100:.0f}%**\n"
                 f"🍀 Crit Chance: **{combat.crit_chance(luck) * 100:.0f}%** (x{combat.CRIT_DAMAGE_MULTIPLIER:.1f} damage)\n"
-                f"⚔️ Damage: **~{str_ * combat.DAMAGE_PER_STR:.0f}** before enemy DEF\n"
-                f"🛡️ Damage Reduction: **{combat.damage_reduction(def_):.1f}** flat, off incoming hits"
+                f"⚔️ Damage: **~{format_number(str_ * combat.DAMAGE_PER_STR, decimals=0)}** before enemy DEF\n"
+                f"🛡️ Damage Reduction: **{format_number(combat.damage_reduction(def_), decimals=1)}** flat, off incoming hits"
             ),
             inline=False,
         )
@@ -347,7 +347,7 @@ class ProfileView(GameView):
         if realms.is_max_realm(p["realm_index"]):
             embed.description = (
                 f"**{current_realm}** — you've reached the peak of known cultivation... for now.\n"
-                f"💠 **Qi Banked:** {p['qi']:,.2f} — still accruing, ready to carry over the moment a realm above this one exists."
+                f"💠 **Qi Banked:** {format_number(p['qi'])} — still accruing, ready to carry over the moment a realm above this one exists."
             )
             return embed
 
@@ -357,13 +357,13 @@ class ProfileView(GameView):
         power_multiplier = realms.stat_multiplier_for_next(p["realm_index"])
         crossing_note = " — a Great Realm breakthrough!" if realms.is_great_realm_crossing(p["realm_index"]) else ""
         growth_preview = " • ".join(
-            f"{chargen.STAT_LABELS[key]} +{amount:,}" for key, amount in chargen.project_power_growth(p, power_multiplier).items()
+            f"{chargen.STAT_LABELS[key]} +{format_number(amount)}" for key, amount in chargen.project_power_growth(p, power_multiplier).items()
         )
         percent = min(100, p["qi"] / qi_required * 100)
         embed.description = (
             f"**{current_realm}** → **{next_realm}**{crossing_note}\n"
             f"_{next_description}_\n"
-            f"💠 **Qi:** {p['qi']:,.2f} / {qi_required:,.2f} required\n"
+            f"💠 **Qi:** {format_number(p['qi'])} / {format_number(qi_required)} required\n"
             f"`{render_bar(p['qi'], qi_required)}` {percent:.1f}%\n"
             f"💪 **Power Growth on Success:** {growth_preview}\n"
             "Use `/breakthrough` to attempt it!"
@@ -376,7 +376,7 @@ class ProfileView(GameView):
                 bonus_lines.append(f"{label}: +{bonus * 100:.0f}%")
         luck_bonus = p["luck_stat"] * chargen.LUCK_BREAKTHROUGH_CHANCE_PER_POINT
         if luck_bonus:
-            bonus_lines.append(f"Luck ({p['luck_stat']}): +{luck_bonus * 100:.1f}%")
+            bonus_lines.append(f"Luck ({format_number(p['luck_stat'])}): +{luck_bonus * 100:.1f}%")
         bonus_lines.append(f"**Total: {chance * 100:.1f}%**")
         embed.add_field(name="🎲 Breakthrough Chance Buffs", value="\n".join(bonus_lines), inline=False)
         return embed
@@ -532,7 +532,7 @@ class ProfileView(GameView):
         embed.add_field(name=f"Passive — {soul.passive_name}", value=soul.passive_text, inline=False)
         embed.add_field(
             name=f"🌀 {avatar.SOUL_PROJECTION_NAME}",
-            value=f"{soul.ability_text}\n*Costs {avatar.SOUL_PROJECTION_QI_COST:,} battle Qi, lasts {avatar.SOUL_PROJECTION_DURATION_TURNS} turns — not usable in combat yet, coming in a future update.*",
+            value=f"{soul.ability_text}\n*Costs {format_number(avatar.SOUL_PROJECTION_QI_COST)} battle Qi, lasts {avatar.SOUL_PROJECTION_DURATION_TURNS} turns — not usable in combat yet, coming in a future update.*",
             inline=False,
         )
         embed.set_footer(text="Run /avatar to manage gear, feeding, and your soul.")

@@ -58,7 +58,7 @@ from .team_battle import (
     RaidEnemy,
     TeamBattleEngine,
 )
-from .ui_utils import render_bar
+from .ui_utils import format_number, render_bar
 
 RAID_SPIRIT_STONE_MIN = 50
 RAID_SPIRIT_STONE_MAX = 100
@@ -651,7 +651,7 @@ class RaidView(TeamBattleEngine, GameView):
         # on the shared `active` flag here; the real soul-chosen/affordability checks happen
         # per-clicker inside _on_soul_projection itself.
         soul_projection_button = discord.ui.Button(
-            label=f"Soul Projection ({avatar.SOUL_PROJECTION_QI_COST:,})", emoji="🌀",
+            label=f"Soul Projection ({format_number(avatar.SOUL_PROJECTION_QI_COST)})", emoji="🌀",
             style=discord.ButtonStyle.success, row=3, disabled=not active,
         )
         soul_projection_button.callback = self._on_soul_projection
@@ -712,7 +712,7 @@ class RaidView(TeamBattleEngine, GameView):
 
         if any(_has_heavenly_sight(uid) for uid in self.participants):
             sight_lines = [
-                f"**{e.monster.name}** — 🎯 ATK `{e.monster.atk_stat:,}` ⚔️ STR `{e.monster.str_stat:,}` 🛡️ DEF `{e.monster.def_stat:,}` 🏃 SPD `{e.monster.spd_stat:,}`"
+                f"**{e.monster.name}** — 🎯 ATK `{format_number(e.monster.atk_stat)}` ⚔️ STR `{format_number(e.monster.str_stat)}` 🛡️ DEF `{format_number(e.monster.def_stat)}` 🏃 SPD `{format_number(e.monster.spd_stat)}`"
                 + (f" • 💉 heals {e.monster.ability.lifesteal_percent:.0%} of damage dealt" if e.monster.ability.lifesteal_percent > 0 else "")
                 for e in self.enemies if e.alive
             ]
@@ -768,7 +768,7 @@ class RaidView(TeamBattleEngine, GameView):
             # MAX_LOG_LINES well before a longer fight actually ends, so it's worth a clear,
             # permanent callout here per explicit request.
             qi_lines = [
-                f"**{p['name']}**: {p.get('qi_lost_on_death', 0):,.2f} qi lost" for p in self.participants.values()
+                f"**{p['name']}**: {format_number(p.get('qi_lost_on_death', 0))} qi lost" for p in self.participants.values()
             ]
             embed.add_field(
                 name="💀 Outcome",

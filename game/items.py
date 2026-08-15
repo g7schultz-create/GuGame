@@ -4,6 +4,7 @@ from typing import Callable, Optional, Tuple
 
 from . import gathering, realms
 from .database import GameDatabase
+from .ui_utils import format_number
 
 # Tunable numbers for rank 1 pills — expect these to be rebalanced as more ranks are added.
 HEALING_HERB_PERCENT = 0.05
@@ -27,18 +28,18 @@ class Item:
 
 def _use_healing_herb(db: GameDatabase, user_id: int) -> str:
     healed, hp, max_hp = db.heal_percent(user_id, HEALING_HERB_PERCENT)
-    return f"You feel rejuvenated, healing **{healed} HP** ({hp}/{max_hp})."
+    return f"You feel rejuvenated, healing **{format_number(healed)} HP** ({format_number(hp)}/{format_number(max_hp)})."
 
 
 def _use_essence_gathering_pill(db: GameDatabase, user_id: int) -> str:
     restored, essence, max_essence = db.restore_essence_percent(user_id, ESSENCE_GATHERING_PILL_PERCENT, allow_overflow=True)
-    return f"Your primeval essence is replenished by **{restored}** ({essence}/{max_essence})."
+    return f"Your primeval essence is replenished by **{format_number(restored)}** ({format_number(essence)}/{format_number(max_essence)})."
 
 
 def _use_green_leaf_qi_pill(db: GameDatabase, user_id: int) -> str:
     _, gained = db.settle_qi(user_id)
     gained_aptitude, new_aptitude = db.maybe_gain_aptitude(user_id, GREEN_LEAF_APTITUDE_CHANCE)
-    message = f"You cultivate furiously, banking **{gained:,.2f} qi**."
+    message = f"You cultivate furiously, banking **{format_number(gained)} qi**."
     if gained_aptitude:
         message += f" Your comprehension deepens — **aptitude increased to {new_aptitude}**!"
     return message
@@ -51,7 +52,7 @@ def _use_aperture_opening_pellet(db: GameDatabase, user_id: int) -> str:
 
 def _use_dew_spirit_pellet(db: GameDatabase, user_id: int) -> str:
     added, essence, max_essence = db.add_primeval_essence(user_id, DEW_SPIRIT_ESSENCE_AMOUNT, allow_overflow=True)
-    return f"Condensed spirit dew forms fresh primeval essence: **+{added}** ({essence}/{max_essence})."
+    return f"Condensed spirit dew forms fresh primeval essence: **+{format_number(added)}** ({format_number(essence)}/{format_number(max_essence)})."
 
 
 def _use_jade_spring_pill(db: GameDatabase, user_id: int) -> str:
@@ -71,7 +72,7 @@ PRIMEVAL_ESSENCE_CRYSTAL_PERCENT = 0.01
 
 def _use_primeval_essence_crystal(db: GameDatabase, user_id: int) -> str:
     restored, essence, max_essence = db.restore_essence_percent(user_id, PRIMEVAL_ESSENCE_CRYSTAL_PERCENT, allow_overflow=True)
-    return f"The crystal dissolves into primeval essence: **+{restored}** ({essence}/{max_essence})."
+    return f"The crystal dissolves into primeval essence: **+{format_number(restored)}** ({format_number(essence)}/{format_number(max_essence)})."
 
 
 # A rare drop from Search Black Heaven / Inheritance Ground / /sfbl (2026-08-14) -- rewinds
@@ -273,10 +274,24 @@ PURE_APTITUDE_PILL_AMOUNT_PER_TIER = 2
 # analogous "cheap pill drains a runaway-large cap" balance issue to guard against here.
 HEALING_PILL_PERCENT_PER_TIER = 0.05
 
+# Tier 8's own recipe (see alchemy.herb_requirements) costs dramatically more than a simple
+# pile of the top-tier herb -- 1x each of Tier 1-7 Herb plus 1x Tier 8 Herb, on top of the
+# existing Nine Heavens Lotus Petal/Cloud Sea Mist Vial bonus ingredients. 2026-08-15, explicit
+# request ("make it a stronger pill by a good amount so it's worth making"): every pill type
+# gets a flat +50% potency multiplier at tier 8, applied uniformly here (one shared helper)
+# rather than special-casing each pill type's own formula differently. alchemy_pill_effect_text
+# below routes through the exact same helper so the /alchemy preview never drifts from what a
+# craft actually grants.
+TIER_8_POTENCY_MULTIPLIER = 1.5
+
+
+def _potency_tier(tier: int) -> float:
+    return tier * TIER_8_POTENCY_MULTIPLIER if tier == 8 else tier
+
 
 def _use_cultivation_boost_pill(tier: int):
     def use(db: GameDatabase, user_id: int) -> str:
-        bonus = CULTIVATION_BOOST_PILL_MULTIPLIER_PER_TIER * tier
+        bonus = CULTIVATION_BOOST_PILL_MULTIPLIER_PER_TIER * _potency_tier(tier)
         duration = CULTIVATION_BOOST_PILL_DURATION_SECONDS_BASE + CULTIVATION_BOOST_PILL_DURATION_SECONDS_PER_TIER * tier
         total_bonus, total_remaining = db.add_or_extend_cultivation_boost_buff(
             user_id, alchemy_pill_name("Cultivation Boost", tier), bonus, duration,
@@ -296,7 +311,7 @@ def _use_cultivation_boost_pill(tier: int):
 
 def _use_qi_multiplier_pill(tier: int):
     def use(db: GameDatabase, user_id: int) -> str:
-        bonus = QI_MULTIPLIER_PILL_BONUS_PER_TIER * tier
+        bonus = QI_MULTIPLIER_PILL_BONUS_PER_TIER * _potency_tier(tier)
         new_multiplier = db.add_qi_multiplier(user_id, bonus)
         return f"Your aperture widens permanently — **+{bonus:.2f}** qi multiplier (now x{new_multiplier:.2f})."
     return use
@@ -332,13 +347,13 @@ def _use_essence_restoration_pill(tier: int):
     def use(db: GameDatabase, user_id: int) -> str:
         percent = ESSENCE_RESTORATION_PILL_PERCENT_PER_TIER * tier
         restored, essence, max_essence = db.restore_essence_percent(user_id, percent, allow_overflow=True)
-        return f"Your primeval essence is replenished by **{restored}** ({essence}/{max_essence})."
+        return f"Your primeval essence is replenished by **{format_number(restored)}** ({format_number(essence)}/{format_number(max_essence)})."
     return use
 
 
 def _use_aptitude_enhancing_pill(tier: int):
     def use(db: GameDatabase, user_id: int) -> str:
-        chance = min(APTITUDE_ENHANCING_PILL_MAX_CHANCE, APTITUDE_ENHANCING_PILL_CHANCE_PER_TIER * tier)
+        chance = min(APTITUDE_ENHANCING_PILL_MAX_CHANCE, APTITUDE_ENHANCING_PILL_CHANCE_PER_TIER * _potency_tier(tier))
         gained, new_aptitude = db.maybe_gain_aptitude(user_id, chance, amount=1)
         if gained:
             return f"Your comprehension deepens — **aptitude increased to {new_aptitude}**!"
@@ -348,38 +363,70 @@ def _use_aptitude_enhancing_pill(tier: int):
 
 def _use_pure_aptitude_pill(tier: int):
     def use(db: GameDatabase, user_id: int) -> str:
-        amount = PURE_APTITUDE_PILL_AMOUNT_PER_TIER * tier
+        amount = round(PURE_APTITUDE_PILL_AMOUNT_PER_TIER * _potency_tier(tier))
         _, new_aptitude = db.maybe_gain_aptitude(user_id, 1.0, amount=amount)
         return f"Pure insight floods your mind — **aptitude increased to {new_aptitude}**!"
     return use
 
 
+# A guaranteed drop from the Inheritance Ground "True Boss" (Blood Sea Ancestor's Blood Will,
+# a 1/100 roll for the Final Trial's own boss -- see content/monsters/blood_sea_ancestor.py's
+# BLOOD_SEA_ANCESTORS_BLOOD_WILL_CHANCE). Every normal aptitude-gain path (Aptitude Enhancing/
+# Pure Aptitude Pills, see maybe_gain_aptitude) hard-caps at 100 -- this is the only way past
+# it, a one-time SET-to-at-least-120 rather than another +N roll on top of the same ceiling.
+BLOOD_SKULL_GU_APTITUDE_FLOOR = 120
+
+
+def _use_blood_skull_gu(db: GameDatabase, user_id: int) -> str:
+    result = db.raise_aptitude_floor(user_id, BLOOD_SKULL_GU_APTITUDE_FLOOR)
+    if not result["raised"]:
+        return f"Your comprehension is already at least **{BLOOD_SKULL_GU_APTITUDE_FLOOR}** — the skull has nothing left to give you."
+    return (
+        f"The Blood Skull Gu dissolves into pure, undiluted comprehension — your aptitude "
+        f"surges past its old limit to **{result['new_aptitude']}**!"
+    )
+
+
+ITEMS["Blood Skull Gu"] = Item(
+    name="Blood Skull Gu",
+    category="Materials",
+    description=(
+        f"A skull-shaped Gu grown from the Blood Sea Ancestor's own undivided will, still faintly "
+        f"pulsing with its comprehension. Consuming it permanently raises your aptitude to at least "
+        f"{BLOOD_SKULL_GU_APTITUDE_FLOOR}, past the limit any pill alone can reach."
+    ),
+    use=_use_blood_skull_gu,
+    subcategory="Insight",
+)
+
+
 def _use_healing_pill(tier: int):
     def use(db: GameDatabase, user_id: int) -> str:
-        percent = HEALING_PILL_PERCENT_PER_TIER * tier
+        percent = HEALING_PILL_PERCENT_PER_TIER * _potency_tier(tier)
         healed, hp, max_hp = db.heal_percent(user_id, percent)
-        return f"Your wounds knit shut — healing **{healed} HP** ({hp}/{max_hp})."
+        return f"Your wounds knit shut — healing **{format_number(healed)} HP** ({format_number(hp)}/{format_number(max_hp)})."
     return use
 
 
 def alchemy_pill_effect_text(pill_type: str, tier: int) -> str:
     """Human-readable numeric effect of a craftable pill at a given tier — mirrors the exact
-    math each pill's `use` callback above applies, for display in /alchemy before crafting."""
+    math each pill's `use` callback above applies (including Tier 8's own potency multiplier,
+    via the same shared _potency_tier), for display in /alchemy before crafting."""
     if pill_type == "Cultivation Boost":
-        bonus = CULTIVATION_BOOST_PILL_MULTIPLIER_PER_TIER * tier
+        bonus = CULTIVATION_BOOST_PILL_MULTIPLIER_PER_TIER * _potency_tier(tier)
         duration = CULTIVATION_BOOST_PILL_DURATION_SECONDS_BASE + CULTIVATION_BOOST_PILL_DURATION_SECONDS_PER_TIER * tier
         return f"+{bonus:.2f} qi multiplier for {duration // 60} minutes."
     if pill_type == "Qi Multiplier":
-        bonus = QI_MULTIPLIER_PILL_BONUS_PER_TIER * tier
+        bonus = QI_MULTIPLIER_PILL_BONUS_PER_TIER * _potency_tier(tier)
         return f"Permanently +{bonus:.2f} qi multiplier."
     if pill_type == "Aptitude Enhancing":
-        chance = min(APTITUDE_ENHANCING_PILL_MAX_CHANCE, APTITUDE_ENHANCING_PILL_CHANCE_PER_TIER * tier)
+        chance = min(APTITUDE_ENHANCING_PILL_MAX_CHANCE, APTITUDE_ENHANCING_PILL_CHANCE_PER_TIER * _potency_tier(tier))
         return f"{chance * 100:.0f}% chance to gain 1 aptitude."
     if pill_type == "Pure Aptitude":
-        amount = PURE_APTITUDE_PILL_AMOUNT_PER_TIER * tier
+        amount = round(PURE_APTITUDE_PILL_AMOUNT_PER_TIER * _potency_tier(tier))
         return f"Guaranteed +{amount} aptitude."
     if pill_type == "Healing":
-        percent = HEALING_PILL_PERCENT_PER_TIER * tier
+        percent = HEALING_PILL_PERCENT_PER_TIER * _potency_tier(tier)
         return f"Restores {percent * 100:.0f}% of max HP."
     return ""
 

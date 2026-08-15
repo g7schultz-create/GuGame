@@ -5,7 +5,7 @@ import discord
 
 from . import equipment
 from .base_view import GameView
-from .ui_utils import format_duration
+from .ui_utils import format_duration, format_number
 
 
 class DaoCompanionRequestView(GameView):
@@ -117,10 +117,10 @@ class EssenceExchangeRequestView(GameView):
             embed = discord.Embed(
                 title="💧 Essence Exchange Accepted!",
                 description=(
-                    f"**{result['proposer_name']}**: +{result['proposer_restored']:,} essence "
-                    f"({result['proposer_essence']:,}/{result['proposer_max']:,})\n"
-                    f"**{result['partner_name']}**: +{result['partner_restored']:,} essence "
-                    f"({result['partner_essence']:,}/{result['partner_max']:,})"
+                    f"**{result['proposer_name']}**: +{format_number(result['proposer_restored'])} essence "
+                    f"({format_number(result['proposer_essence'])}/{format_number(result['proposer_max'])})\n"
+                    f"**{result['partner_name']}**: +{format_number(result['partner_restored'])} essence "
+                    f"({format_number(result['partner_essence'])}/{format_number(result['partner_max'])})"
                 ),
                 color=discord.Color.green(),
             )
@@ -158,12 +158,16 @@ class DaoCompanionView(GameView):
     Discord's 100-command-per-guild cap crash-looped the live bot on deploy (2026-08-14
     incident: adding /gu_pet as command #101 exceeded the cap outright). Same "one hub command
     with buttons" shape /gu_pet, /avatar, and every other multi-action feature in this codebase
-    already uses. /dc and /break_companion are retired entirely (including their own
-    "i dc"/"i break_companion" text aliases) in favor of buttons here, mirroring the earlier
-    /teach merge's own "old commands fully removed" precedent -- /offer_companion stays a
-    separate command since it's the entry point BEFORE any bond exists, not something this view
-    (which only ever has something to show once a bond is already active) can meaningfully
-    host."""
+    already uses. /dc and /break_companion (the SLASH commands) are retired entirely in favor
+    of buttons here, mirroring the earlier /teach merge's own "old commands fully removed"
+    precedent -- but "i dc" itself lives on as a text-command alias for /companion (2026-08-15,
+    explicit request), since text commands were never part of Discord's slash-command registry
+    and so were never actually part of the 100-command-cap problem this merge fixed. An
+    Essence Exchange button (2026-08-15) also lives here now, alongside the still-separate
+    /essence_exchange slash command -- both paths stay available, this button is purely an
+    added convenience, not a replacement. /offer_companion stays a separate command since it's
+    the entry point BEFORE any bond exists, not something this view (which only ever has
+    something to show once a bond is already active) can meaningfully host."""
 
     def __init__(self, user_id: int, game, display_name: str):
         super().__init__(timeout=180)
@@ -196,6 +200,12 @@ class DaoCompanionView(GameView):
         break_button.callback = self._on_break
         self.add_item(break_button)
 
+        exchange_button = discord.ui.Button(
+            label="Essence Exchange", emoji="💧", style=discord.ButtonStyle.primary, row=0, disabled=not has_companion,
+        )
+        exchange_button.callback = self._on_essence_exchange
+        self.add_item(exchange_button)
+
     def build_embed(self) -> discord.Embed:
         status = self.game.get_dao_companion_status(self.user_id, self.display_name)
         embed = discord.Embed(title="💞 Your Dao Companion", color=discord.Color.gold())
@@ -208,9 +218,9 @@ class DaoCompanionView(GameView):
         embed.add_field(name="Companion", value=status["partner_name"], inline=True)
         embed.add_field(name="Bonded For", value=format_duration(int(time.time()) - status["formed_ts"]), inline=True)
         embed.add_field(name="Times Used", value=str(status["times_used"]), inline=True)
-        embed.add_field(name="Total Qi Granted", value=f"{status['total_qi_granted']:,.1f}", inline=True)
+        embed.add_field(name="Total Qi Granted", value=format_number(status['total_qi_granted'], decimals=1), inline=True)
         bonus_lines = [
-            f"{equipment.FOUNDATION_STAT_LABELS.get(stat, stat)}: +{value:,.1f}"
+            f"{equipment.FOUNDATION_STAT_LABELS.get(stat, stat)}: +{format_number(value, decimals=1)}"
             for stat, value in status["stat_bonuses"].items() if value
         ]
         embed.add_field(
@@ -227,8 +237,8 @@ class DaoCompanionView(GameView):
         result = await asyncio.to_thread(self.game.dao_companion_burst, self.user_id, self.display_name)
         if result["ok"]:
             self.last_result = (
-                f"💥 You gain **{result['qi_to_caller']:,.1f}** Qi, and **{result['partner_name']}** "
-                f"gains **{result['qi_to_partner']:,.1f}** Qi from your bond!"
+                f"💥 You gain **{format_number(result['qi_to_caller'], decimals=1)}** Qi, and **{result['partner_name']}** "
+                f"gains **{format_number(result['qi_to_partner'], decimals=1)}** Qi from your bond!"
             )
         else:
             self.last_result = result["reason"]
@@ -242,3 +252,22 @@ class DaoCompanionView(GameView):
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _on_essence_exchange(self, interaction: discord.Interaction):
+        """Mirrors cog.py's own /essence_exchange command (propose -> fetch the partner ->
+        open EssenceExchangeRequestView as a fresh message the partner accepts/declines) so
+        this button doesn't need a separate slash command -- interaction.client stands in for
+        the Cog's self.bot, same object, just reached through the interaction instead of a
+        stored bot reference this View was never given."""
+        result = await asyncio.to_thread(self.game.essence_exchange_propose, self.user_id, self.display_name)
+        if not result["ok"]:
+            self.last_result = result["reason"]
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
+            return
+        partner = interaction.client.get_user(result["partner_id"]) or await interaction.client.fetch_user(result["partner_id"])
+        exchange_view = EssenceExchangeRequestView(self.game, result["request_id"], interaction.user, partner)
+        exchange_embed = await asyncio.to_thread(exchange_view.build_embed)
+        await interaction.response.send_message(embed=exchange_embed, view=exchange_view)
+        exchange_view.message = await interaction.original_response()

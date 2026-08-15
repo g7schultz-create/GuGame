@@ -7,7 +7,7 @@ from . import chargen, combat
 from .base_view import GameView
 from .equipment import EQUIPMENT
 from .items import ITEMS
-from .ui_utils import render_bar
+from .ui_utils import format_number, render_bar
 
 FLEE_BASE_CHANCE = 0.5
 FLEE_CHANCE_PER_SPD_DIFF = 0.02
@@ -203,7 +203,7 @@ class PvPView(GameView):
             self.player_hp = max(0, self.player_hp - result.damage)
             self._persist_hp()
             crit = " (Critical!)" if result.crit else ""
-            self._log_line(f"{self.opponent_name} hits you for {result.damage} damage{crit}.")
+            self._log_line(f"{self.opponent_name} hits you for {format_number(result.damage)} damage{crit}.")
         if self.player_hp <= 0:
             self.status = "defeat"
             self.player_hp = 1
@@ -234,8 +234,8 @@ class PvPView(GameView):
             if result.heal:
                 self.player_hp = min(self.player_max_hp, self.player_hp + result.heal)
                 self._persist_hp()
-                heal_text = f" You drain {result.heal} HP."
-            self._log_line(f"You use {label} for {result.damage} damage{crit}.{heal_text}")
+                heal_text = f" You drain {format_number(result.heal)} HP."
+            self._log_line(f"You use {label} for {format_number(result.damage)} damage{crit}.{heal_text}")
         if self.opponent_hp <= 0:
             self.status = "victory"
             self.stones_awarded = self.game.award_pvp_victory(self.user_id)
@@ -318,7 +318,7 @@ class PvPView(GameView):
             await interaction.response.send_message("You have no active Gu ability equipped.", ephemeral=True)
             return
         if self.player_qi < ability.qi_cost:
-            await interaction.response.send_message(f"Not enough Qi to use {ability.name} (needs {ability.qi_cost}).", ephemeral=True)
+            await interaction.response.send_message(f"Not enough Qi to use {ability.name} (needs {format_number(ability.qi_cost)}).", ephemeral=True)
             return
 
         def _resolve():
@@ -342,7 +342,7 @@ class PvPView(GameView):
             return
         qi_cost = await asyncio.to_thread(self.game.killer_move_qi_cost, self.player, move)
         if self.player_qi < qi_cost:
-            await interaction.response.send_message(f"Not enough Qi to use {move['name']} (needs {qi_cost:,}).", ephemeral=True)
+            await interaction.response.send_message(f"Not enough Qi to use {move['name']} (needs {format_number(qi_cost)}).", ephemeral=True)
             return
 
         def _resolve():
@@ -478,7 +478,7 @@ class PvPView(GameView):
         embed.add_field(
             name=f"🗡️ {self.opponent_name}",
             value=(
-                f"❤️ HP `{max(0, self.opponent_hp):.0f} / {self.opponent_max_hp:.0f}` • {opponent_pct}%\n"
+                f"❤️ HP `{format_number(max(0, self.opponent_hp), decimals=0)} / {format_number(self.opponent_max_hp, decimals=0)}` • {opponent_pct}%\n"
                 f"`{render_bar(self.opponent_hp, self.opponent_max_hp)}`"
             ),
             inline=False,
@@ -488,9 +488,9 @@ class PvPView(GameView):
         embed.add_field(
             name=f"🧍 {self.display_name}",
             value=(
-                f"❤️ HP `{max(0, self.player_hp):.0f} / {self.player_max_hp:.0f}` • {player_pct}%\n"
+                f"❤️ HP `{format_number(max(0, self.player_hp), decimals=0)} / {format_number(self.player_max_hp, decimals=0)}` • {player_pct}%\n"
                 f"`{render_bar(self.player_hp, self.player_max_hp)}`\n"
-                f"💧 Qi `{max(0, self.player_qi):.0f} / {self.player_max_qi:.0f}` • {qi_pct}%\n"
+                f"💧 Qi `{format_number(max(0, self.player_qi), decimals=0)} / {format_number(self.player_max_qi, decimals=0)}` • {qi_pct}%\n"
                 f"`{render_bar(self.player_qi, self.player_max_qi)}`\n"
                 f"Potions used: {self.potions_used}/{POTION_USE_CAP}{empower_note}"
             ),
@@ -503,7 +503,7 @@ class PvPView(GameView):
         if self.status == "victory":
             embed.add_field(
                 name="🎁 Reward",
-                value=f"**{self.stones_awarded}** 🪙 spirit stones! Your HP is unaffected — it's just a duel.",
+                value=f"**{format_number(self.stones_awarded)}** 🪙 spirit stones! Your HP is unaffected — it's just a duel.",
                 inline=False,
             )
         elif self.status == "defeat":

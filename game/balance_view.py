@@ -4,7 +4,7 @@ import traceback
 import discord
 
 from .base_view import GameView
-from .ui_utils import render_bar
+from .ui_utils import format_number, render_bar
 
 # /balance auto-refreshes on this cadence (see BalanceView._auto_refresh_loop) so a player
 # spending essence items elsewhere (e.g. Inventory's Use All on Primeval Essence Crystals)
@@ -54,7 +54,7 @@ class ConvertEssenceModal(discord.ui.Modal, title="Convert Stones to Essence"):
             reason = "your primeval essence is already full" if new_essence >= max_essence else "you don't have enough spirit stones"
             self.balance_view.last_result = f"No essence gained — {reason}."
         else:
-            self.balance_view.last_result = f"💠 Spent **{stones_spent:,}** spirit stones to gain **{essence_gained:,}** primeval essence."
+            self.balance_view.last_result = f"💠 Spent **{format_number(stones_spent)}** spirit stones to gain **{format_number(essence_gained)}** primeval essence."
         await asyncio.to_thread(self.balance_view._build_components)
         embed = await asyncio.to_thread(self.balance_view.build_embed)
         await interaction.response.edit_message(embed=embed, view=self.balance_view)
@@ -134,7 +134,7 @@ class BalanceView(GameView):
         if essence_spent == 0:
             self.last_result = "You don't have any primeval essence to absorb."
         else:
-            self.last_result = f"🌀 Absorbed **{essence_spent:,.0f}** primeval essence for **{qi_gained:,.0f}** qi."
+            self.last_result = f"🌀 Absorbed **{format_number(essence_spent, decimals=0)}** primeval essence for **{format_number(qi_gained, decimals=0)}** qi."
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -148,24 +148,24 @@ class BalanceView(GameView):
         embed = discord.Embed(title=f"💰 {self.display_name}'s Balance", color=discord.Color.dark_purple())
         embed.add_field(
             name="💎 Primeval Essence",
-            value=f"{p['primeval_essence']:,.0f}/{db.get_effective_max_essence(self.user_id):,.0f}", inline=False,
+            value=f"{format_number(p['primeval_essence'], decimals=0)}/{format_number(db.get_effective_max_essence(self.user_id), decimals=0)}", inline=False,
         )
 
         if status["at_max_realm"]:
             embed.add_field(
                 name="⚡ Qi to Next Realm",
-                value=f"🏔️ Peak realm reached — {p['qi']:,.2f} banked, ready to carry over once a realm above this one exists",
+                value=f"🏔️ Peak realm reached — {format_number(p['qi'])} banked, ready to carry over once a realm above this one exists",
                 inline=False,
             )
         else:
             percent = min(100, p["qi"] / status["qi_required"] * 100)
             embed.add_field(
                 name="⚡ Qi to Next Realm",
-                value=f"{p['qi']:,.2f} / {status['qi_required']:,.2f}\n`{render_bar(p['qi'], status['qi_required'])}` {percent:.1f}%",
+                value=f"{format_number(p['qi'])} / {format_number(status['qi_required'])}\n`{render_bar(p['qi'], status['qi_required'])}` {percent:.1f}%",
                 inline=False,
             )
 
-        embed.add_field(name="🪙 Spirit Stones", value=f"{p['spirit_stones']:,}", inline=False)
+        embed.add_field(name="🪙 Spirit Stones", value=f"{format_number(p['spirit_stones'])}", inline=False)
         if self.last_result:
             embed.add_field(name="Result", value=self.last_result[:1024], inline=False)
         embed.set_footer(

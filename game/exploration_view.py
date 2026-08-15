@@ -5,13 +5,13 @@ import discord
 
 from . import gathering, professions, white_heaven
 from .base_view import GameView
-from .ui_utils import path_footer
+from .ui_utils import format_number, path_footer
 
 HIGH_BANDS = ("Epic", "Legendary", "Mythic")
 
 
 def _found_text(node: dict) -> str:
-    main = f"**{node['stones']:,}** spirit stones" if node["stones"] else f"**{node['quantity']}x {node['item_name']}**"
+    main = f"**{format_number(node['stones'])}** spirit stones" if node["stones"] else f"**{node['quantity']}x {node['item_name']}**"
     if node.get("bonus_core"):
         main += f" ...and ✨ **1x {node['bonus_core']}**!"
     if node.get("bonus_essence_pill"):
@@ -126,7 +126,7 @@ class ExplorationHuntView(GameView):
         items_text = gathering.format_collected(self.collected_items)
         if not self.collected_stones:
             return items_text
-        stones_part = f"{self.collected_stones:,} 🪙 spirit stones"
+        stones_part = f"{format_number(self.collected_stones)} 🪙 spirit stones"
         if items_text == "Nothing yet":
             return stones_part
         return f"{stones_part}, {items_text}"

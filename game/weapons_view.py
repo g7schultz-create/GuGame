@@ -5,6 +5,7 @@ import discord
 from . import blacksmith
 from .base_view import GameView
 from .equipment import SLOT_TYPE_EMOJI, describe_stat_bonuses
+from .ui_utils import format_number
 
 # Fixed display order — matches the order these three slots appear in equipment.SLOTS.
 SLOT_TYPE_ORDER = ["Weapon", "Head", "Body"]
@@ -131,7 +132,7 @@ class WeaponsView(GameView):
                     count += 1
             stones = count * blacksmith.dismantle_stones(tier)
             self.last_result = (
-                f"Dismantled {count}x Tier {tier} {slot_type} pieces — recovered materials + {stones:,} 🪙 total."
+                f"Dismantled {count}x Tier {tier} {slot_type} pieces — recovered materials + {format_number(stones)} 🪙 total."
                 if count else "Nothing left to dismantle at that tier."
             )
         self.selected_gear_id = None
@@ -162,7 +163,7 @@ class WeaponsView(GameView):
                 for g in pieces:
                     marker = "✅ " if g["gear_id"] in equipped_ids else "　"
                     display_name = blacksmith.crafted_gear_display_name(g["base_type"], g["tier"], g["gear_id"])
-                    lines.append(f"{marker}**{display_name}** — {describe_stat_bonuses(g['stat_bonuses'])} (Power {g['power_score']:.1f})")
+                    lines.append(f"{marker}**{display_name}** — {describe_stat_bonuses(g['stat_bonuses'])} (Power {format_number(g['power_score'], decimals=1)})")
             else:
                 lines.append("　*(none)*")
             sections.append("\n".join(lines))
