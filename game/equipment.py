@@ -150,8 +150,13 @@ EQUIPMENT: Dict[str, Equipment] = {
         name="Heaven-Severing Blade",
         slot_type="Weapon",
         rank="Mythic",
-        description="A blade said to have split a mountain in two — its edge outclasses anything even a Grandmaster blacksmith can forge. Finding one at all is almost unheard of.",
-        stat_bonuses={"str_pct": 0.55, "atk_pct": 0.40, "crit_chance_pct": 0.08},
+        description="A blade said to have split a mountain in two — its edge outclasses anything even a Dao Master blacksmith can forge. Finding one at all is almost unheard of.",
+        # Re-tuned 2026-08-14 (Tier 9 added) to keep the design invariant test_heaven_
+        # severing_blade_buff.py checks dynamically against blacksmith.MAX_TIER: this must
+        # ALWAYS beat the single best possible crafted piece at the current top tier + the
+        # single highest gear_budget_bonus_pct root in the game (Long Hair Ancestor Root,
+        # 0.25), full stop -- same proportional split as before, just scaled up.
+        stat_bonuses={"str_pct": 0.71, "atk_pct": 0.52, "crit_chance_pct": 0.10},
     ),
     "Iron Skin Gu": Equipment(
         name="Iron Skin Gu",

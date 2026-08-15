@@ -29,6 +29,18 @@ class AlchemyView(GameView):
     def _is_locked(self) -> bool:
         return self._rank() < alchemy.rank_required_for_tier(self.selected_tier)
 
+    def _max_affordable_batches(self, tier: int) -> int:
+        """How many pills at this tier can actually be made right now -- the herb cost AND
+        every bonus ingredient (see alchemy.bonus_ingredients, real for Tier 8 only) all have
+        to clear, so this is the MINIMUM across all of them, not just the herb."""
+        inventory = self.game.get_inventory(self.user_id)
+        cost = alchemy.herb_cost(self.selected_type)
+        herb_owned = inventory.get(alchemy.herb_name(tier), 0)
+        limits = [herb_owned // cost if cost > 0 else 0]
+        for mat, qty in alchemy.bonus_ingredients(tier).items():
+            limits.append(inventory.get(mat, 0) // qty if qty > 0 else 0)
+        return min(limits)
+
     def _build_components(self):
         self.clear_items()
         rank = self._rank()
@@ -48,6 +60,9 @@ class AlchemyView(GameView):
             required = alchemy.rank_required_for_tier(tier)
             locked = rank < required
             label = f"Tier {tier} — needs {cost}x Tier {tier} Herb (have {inventory.get(alchemy.herb_name(tier), 0)})"
+            bonus = alchemy.bonus_ingredients(tier)
+            if bonus:
+                label += " + " + ", ".join(f"{qty}x {mat}" for mat, qty in bonus.items())
             if locked:
                 label += f" 🔒 needs {professions.rank_name(required)}"
             tier_options.append(discord.SelectOption(label=label[:100], value=str(tier), default=(tier == self.selected_tier)))
@@ -56,17 +71,17 @@ class AlchemyView(GameView):
         self.add_item(tier_select)
 
         owned = inventory.get(alchemy.herb_name(self.selected_tier), 0)
-        max_batch = owned // cost if cost > 0 else 0
+        max_batch = self._max_affordable_batches(self.selected_tier)
         locked = self._is_locked()
 
         craft1 = discord.ui.Button(
-            label="Make 1", emoji="⚗️", style=discord.ButtonStyle.success, row=2, disabled=locked or owned < cost,
+            label="Make 1", emoji="⚗️", style=discord.ButtonStyle.success, row=2, disabled=locked or max_batch < 1,
         )
         craft1.callback = self._make_craft_callback(1)
         self.add_item(craft1)
 
         craft10 = discord.ui.Button(
-            label="Make 10", emoji="⏩", style=discord.ButtonStyle.success, row=2, disabled=locked or owned < cost * 10,
+            label="Make 10", emoji="⏩", style=discord.ButtonStyle.success, row=2, disabled=locked or max_batch < 10,
         )
         craft10.callback = self._make_craft_callback(10)
         self.add_item(craft10)
@@ -137,11 +152,16 @@ class AlchemyView(GameView):
 
         effect = items.alchemy_pill_effect_text(self.selected_type, self.selected_tier)
 
+        recipe_lines = [f"🌿 Recipe: {cost}x {herb} (you have {owned})"]
+        inventory = self.game.get_inventory(self.user_id)
+        for mat, qty in alchemy.bonus_ingredients(self.selected_tier).items():
+            recipe_lines.append(f"　+ {qty}x {mat} (you have {inventory.get(mat, 0)})")
+
         embed = discord.Embed(title="⚗️ Alchemy", color=discord.Color.dark_green())
         embed.description = (
             f"**{item_name}**\n"
             f"✨ {effect}\n"
-            f"🌿 Recipe: {cost}x {herb} (you have {owned})\n"
+            + "\n".join(recipe_lines) + "\n"
             f"🎯 Success chance: **{chance * 100:.0f}%** — Alchemist: {professions.rank_name(player['alchemist_rank'])}"
         )
         required_rank = alchemy.rank_required_for_tier(self.selected_tier)

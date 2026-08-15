@@ -150,7 +150,12 @@ REFINEMENT_SPEC: Dict[str, RefinementSpec] = {
     "Copied": RefinementSpec(1, 0.20, 4, 0.15),
     "Annotated": RefinementSpec(2, 0.50, 10, 0.35),
     "Perfected": RefinementSpec(4, 1.00, 20, 0.75),
-    "True Meaning": RefinementSpec(0, 0.0, 0, 0.0),  # rare insight item / inheritance-gated, not duplicate-gated
+    # Was a dead stub (all-zero, explicitly refused by GameManager.refine_page) since this
+    # level was first added — "rare insight item / inheritance-gated" never actually got a
+    # real mechanic built. Unlocked (2026-08-14) as a real, bigger duplicate-gated step past
+    # Perfected, per explicit request ("refine them past perfected for even more stats") —
+    # same duplicate-spending flow as every level below it, just a steeper cost/payoff.
+    "True Meaning": RefinementSpec(6, 1.50, 35, 1.00),
 }
 NEXT_REFINEMENT = {level: REFINEMENT_LEVELS[i + 1] for i, level in enumerate(REFINEMENT_LEVELS[:-1])}
 

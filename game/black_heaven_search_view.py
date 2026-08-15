@@ -38,7 +38,7 @@ BATTLE_ROUND_TIMEOUT_SECONDS = 30  # matches raid.ROUND_TIMEOUT_SECONDS's own pa
 
 BUBBLE_ICON = {
     "gu": "🐛", "battle": "⚔️", "nothing": "💨",
-    "essence_crystal": "💎", "essence_pill": "🧪", "materials": "⛏️",
+    "essence_crystal": "💎", "essence_pill": "🧪", "materials": "⛏️", "ascension_pill": "💊",
 }
 
 
@@ -384,6 +384,10 @@ class BlackHeavenSearchView(TeamBattleEngine, GameView):
                 results = await asyncio.to_thread(self.game.grant_black_heaven_material_reward, self.team)
                 summary = "\n".join(f"**{name}**: {reward}" for name, reward in results)
                 self.last_bubble_notice = f"⛏️ The bubble held a cache of Rank 8 materials!\n{summary}"
+            elif category == "ascension_pill":
+                results = await asyncio.to_thread(self.game.grant_black_heaven_pill_reward, self.team)
+                summary = "\n".join(f"**{name}**: {reward}" for name, reward in results)
+                self.last_bubble_notice = f"💊 The bubble held a stash of Qi Ascension Pills!\n{summary}"
             else:  # "nothing"
                 self.last_bubble_notice = "💨 Just an empty bubble. Nothing here."
             if sum(self.actually_clicked) >= self._max_bubble_pops():

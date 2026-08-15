@@ -57,8 +57,20 @@ TIER_8_ORE_COST = 6
 TIER_8_BEAST_MATERIAL_COST = 4
 TIER_8_BEAST_CORE_COST = 3
 
+# Tier 9 (2026-08-14, "quasi 8.5") -- explicitly NOT another generic Tier-N-Ore/Material/Core
+# rung (no "Tier 9 Ore" item exists, and none is being added) -- instead a distinct recipe
+# built entirely from White Heaven's own named trophy/essence materials (content/materials_
+# white_heaven.py) plus Primeval Essence Crystal, PLUS the same Tier 8 Ore/Material/Core costs
+# reused on top (per explicit request: "using all of the materials below[,] essence crystals[,]
+# and the materials already required to forge t8 gear"). A real step past Tier 8, not a
+# reskin of it.
+TIER_9_RECIPE_EXTRA = {
+    "Blinking Bird Feather": 3, "Cloud Beast Hide": 3, "Remnant Heavenly Dog Fang": 3,
+    "Aurora-Veined Shard": 5, "White Heaven Floating Dust": 5, "Primeval Essence Crystal": 50,
+}
+
 MIN_TIER = 1
-MAX_TIER = 8
+MAX_TIER = 9
 
 # The 6 stats a crafted piece's percentage budget can land in — every stat realm
 # breakthroughs actually scale (see realms.py), swapping out LCK (which they don't) for
@@ -70,14 +82,15 @@ STAT_KEYS = ["str_pct", "atk_pct", "def_pct", "spd_pct", "hp_pct", "qi_pct"]
 # percentage is already realm-relative — so tiers just need to feel like a steady quality
 # climb. A piece dumping its whole budget into one stat is a genuinely great single-stat
 # roll; split across 3-4 stats (the common case) it's a handful of double-digit percents.
-TIER_PCT_BUDGET = {1: 8, 2: 14, 3: 20, 4: 28, 5: 37, 6: 47, 7: 60, 8: 76}
+TIER_PCT_BUDGET = {1: 8, 2: 14, 3: 20, 4: 28, 5: 37, 6: 47, 7: 60, 8: 76, 9: 95}
 
 # Blacksmith rank index required to ATTEMPT each tier (0 == Novice, everyone). "Early tier
 # easy for everyone, higher tier needs levels" — tiers 1-2 are open at rank 0, tier 7 needs
 # Grandmaster (index 5). Tier 8 (White Heaven materials only, see content/materials_white_
 # heaven.py) needs Heavenly Master (index 6) — real headroom professions.RANKS already had,
-# nothing used it until now.
-TIER_RANK_REQUIRED = {1: 0, 2: 0, 3: 1, 4: 2, 5: 3, 6: 4, 7: 5, 8: 6}
+# nothing used it until now. Tier 9 claims the LAST remaining headroom, Dao Master (index 7)
+# — professions.RANKS/SUCCESS_CHANCE_PER_RANK already had an entry for it, unused until now.
+TIER_RANK_REQUIRED = {1: 0, 2: 0, 3: 1, 4: 2, 5: 3, 6: 4, 7: 5, 8: 6, 9: 7}
 
 MIN_STATS_ROLLED = 2
 MAX_STATS_ROLLED = 4
@@ -96,8 +109,16 @@ def beast_core_name(tier: int) -> str:
 
 
 def recipe(tier: int) -> dict:
-    """{item_name: quantity} needed to craft any gear type at this tier."""
-    if tier >= MAX_TIER:
+    """{item_name: quantity} needed to craft any gear type at this tier. Explicit per-tier
+    dispatch (tier == 8 / tier == 9), NOT "tier >= MAX_TIER" -- that shortcut broke the moment
+    Tier 9 was added above Tier 8, since Tier 8 needed to keep its own real recipe rather than
+    silently reverting to the generic 1-7 formula."""
+    if tier == 9:
+        return {
+            ore_name(8): TIER_8_ORE_COST, beast_material_name(8): TIER_8_BEAST_MATERIAL_COST,
+            beast_core_name(8): TIER_8_BEAST_CORE_COST, **TIER_9_RECIPE_EXTRA,
+        }
+    if tier == 8:
         return {
             ore_name(tier): TIER_8_ORE_COST,
             beast_material_name(tier): TIER_8_BEAST_MATERIAL_COST,
@@ -114,7 +135,12 @@ def dismantle_yield(tier: int) -> dict:
     """Partial materials back for scrapping a crafted piece nobody wants — always exactly 1
     of each material at the piece's own tier. recipe()'s material COUNTS never scale with
     tier (only the materials' own tier does), so a flat "1 back" is already a consistent
-    partial refund at every tier without needing its own scaling table."""
+    partial refund at every tier without needing its own scaling table. Tier 9 has no generic
+    "Tier 9 Ore/Material/Core" item at all (see recipe()'s own tier==9 branch) -- would
+    otherwise hand back nonexistent items -- so it returns 1 of each REAL ingredient its own
+    recipe actually uses instead."""
+    if tier == 9:
+        return {name: 1 for name in recipe(9)}
     return {
         ore_name(tier): 1,
         beast_material_name(tier): 1,

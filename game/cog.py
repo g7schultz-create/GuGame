@@ -2444,7 +2444,7 @@ class GameCog(commands.Cog):
     @app_commands.guilds(GUILD)
     @app_commands.describe(
         gear_type="Sword (Weapon), Helm (Head), or Armor (Body)",
-        tier="Gear tier (1-7)",
+        tier="Gear tier (1-9)",
         member="Player to grant it to (defaults to you)",
     )
     @app_commands.choices(gear_type=GRANT_GEAR_TYPE_CHOICES)

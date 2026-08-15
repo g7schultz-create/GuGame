@@ -27,6 +27,10 @@ GU_QUALITY_WEIGHTS = {"Epic": 600, "Legendary": 300, "Mythic": 99, "Immortal": 1
 TREASURE_BONUS_WEIGHTS = {"accessory": 35, "avatar_gear": 35, "essence_pill": 28, "immortal_gu": 2}  # immortal_gu exactly 1/50
 BEAST_CORE_TIER_WEIGHTS = {4: 40, 5: 30, 6: 20, 7: 10}
 DECENT_SUB_WEIGHTS = {"manual_page": 30, "beast_core": 30, "essence_stone": 20, "essence_pill": 20}
+# White Heaven's own "decent" sub-table (2026-08-14) -- adds a "herb" outcome the base game's
+# own DECENT_SUB_WEIGHTS deliberately doesn't get (Tier N Herb has no equivalent base-game
+# drop gap to fill; this closes White Heaven's own one, per explicit request).
+WHITE_HEAVEN_DECENT_SUB_WEIGHTS = {"manual_page": 25, "beast_core": 25, "herb": 20, "essence_stone": 15, "essence_pill": 15}
 RARE_SUB_WEIGHTS = {"accessory": 40, "gu": 30, "essence_pill": 30}
 
 SMALL_MATERIAL_NAME = "Tier 1 Beast Material"
@@ -41,6 +45,9 @@ TREASURE_ESSENCE_CRYSTAL_QTY = 200
 # the base tables), so both are renormalized to 3 entries rather than simply shifted.
 WHITE_HEAVEN_MANUAL_PAGE_RANK_WEIGHTS = {6: 700, 7: 250, 8: 50}
 WHITE_HEAVEN_BEAST_CORE_TIER_WEIGHTS = {6: 45, 7: 35, 8: 20}
+# 2026-08-14: same 3-rung shape as WHITE_HEAVEN_BEAST_CORE_TIER_WEIGHTS above, for the new
+# "herb" sub-outcome (see WHITE_HEAVEN_DECENT_SUB_WEIGHTS).
+WHITE_HEAVEN_HERB_TIER_WEIGHTS = {6: 45, 7: 35, 8: 20}
 SMALL_MATERIAL_NAME_WHITE_HEAVEN = "Tier 6 Beast Material"
 SMALL_STONE_RANGE_WHITE_HEAVEN = (300, 900)
 TREASURE_ESSENCE_CRYSTAL_QTY_WHITE_HEAVEN = 500
@@ -109,7 +116,7 @@ def _roll_base_tile_reward(game, user_id: int, name: str, category: str, rng: ra
         return "🪨", f"{material_name} + {stones:,} 🪙"
 
     if category == "decent":
-        sub = _weighted_choice(DECENT_SUB_WEIGHTS, rng)
+        sub = _weighted_choice(WHITE_HEAVEN_DECENT_SUB_WEIGHTS if white_heaven else DECENT_SUB_WEIGHTS, rng)
         if sub == "manual_page":
             rank_weights = WHITE_HEAVEN_MANUAL_PAGE_RANK_WEIGHTS if white_heaven else MANUAL_PAGE_RANK_WEIGHTS
             rank = _weighted_choice(rank_weights, rng)
@@ -123,6 +130,11 @@ def _roll_base_tile_reward(game, user_id: int, name: str, category: str, rng: ra
             item_name = f"Tier {tier} Beast Core"
             db.add_item(user_id, item_name, 1)
             return "💠", item_name
+        if sub == "herb":  # White Heaven only -- see WHITE_HEAVEN_DECENT_SUB_WEIGHTS
+            tier = _weighted_choice(WHITE_HEAVEN_HERB_TIER_WEIGHTS, rng)
+            item_name = f"Tier {tier} Herb"
+            db.add_item(user_id, item_name, 1)
+            return "🌿", item_name
         if sub == "essence_stone":
             qty = rng.randint(15, 30) if white_heaven else rng.randint(3, 8)
             db.add_item(user_id, "Primeval Essence Crystal", qty)
@@ -138,7 +150,10 @@ def _roll_base_tile_reward(game, user_id: int, name: str, category: str, rng: ra
             granted = game.roll_and_grant_accessory_artifact(user_id, name, "treasure_hunt", 7, [])
             return ("✨", granted["affix"].name) if granted else ("🕳️", "Nothing (the roll fizzled)")
         if sub == "gu":
-            quality = _weighted_choice(GU_QUALITY_WEIGHTS, rng)
+            # White Heaven's own find always comes out Immortal (2026-08-14, explicit
+            # request) -- the base game keeps the real weighted roll (mostly Epic, Immortal
+            # a genuine 1/1000 jackpot) so Immortal doesn't become trivially common there.
+            quality = "Immortal" if white_heaven else _weighted_choice(GU_QUALITY_WEIGHTS, rng)
             gu_name = rng.choice(_gu_names_by_quality(quality))
             db.add_item(user_id, gu_name, 1)
             return "🐛", gu_name

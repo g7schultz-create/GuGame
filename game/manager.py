@@ -1007,7 +1007,7 @@ class GameManager:
     # generate_inheritance_ground_board), same "exactly one guaranteed tile, everything else
     # weighted" split treasure_hunt.TILE_CATEGORY_WEIGHTS/roll_board uses. First-pass weights,
     # easy to retune.
-    BUBBLE_OUTCOME_WEIGHT = {"nothing": 25, "ascension_pill": 15, "essence_crystal": 15, "essence_pill": 15}
+    BUBBLE_OUTCOME_WEIGHT = {"nothing": 25, "ascension_pill": 15, "essence_crystal": 15, "essence_pill": 15, "materials": 15}
     ESSENCE_CRYSTAL_QUANTITY_RANGE = (20, 100)
     ESSENCE_PILL_MIN_TIER = 4
     ESSENCE_PILL_MAX_TIER = 7
@@ -1179,6 +1179,20 @@ class GameManager:
             pill_name = items.alchemy_pill_name("Essence Restoration", tier)
             self.db.add_item(user_id, pill_name, 1)
             results.append((name, f"1x **{pill_name}**"))
+        return results
+
+    def grant_inheritance_ground_material_reward(self, team: list) -> list:
+        """A "materials" bubble (2026-08-14, see generate_inheritance_ground_board) --
+        guaranteed Tier 8 Herb per team member, same "whole team shares the bubble's find"
+        shape every other bubble-grant function here uses. Scoped to Herb only (not also
+        Ore/Beast Material/Beast Core, unlike Black Heaven's own "materials" bubble) since
+        that's specifically what this bubble was added to close a gap for. Returns
+        [(name, reward_str), ...]."""
+        results = []
+        for user_id, name in team:
+            qty = random.randint(2, 5)
+            self.db.add_item(user_id, "Tier 8 Herb", qty)
+            results.append((name, f"{qty}x **Tier 8 Herb**"))
         return results
 
     def grant_inheritance_ground_share_reward(self, ground_key: str, user_id: int, name: str) -> str:
@@ -3166,14 +3180,16 @@ class GameManager:
 
     # -- Search Black Heaven's own bubble board -- same "fixed 20-bubble board, team_size only
     # affects how many the team gets to POP" shape generate_inheritance_ground_board uses, just
-    # with Black Heaven's own category set per explicit request: nothing/essence_crystal/
-    # essence_pill/materials as the weighted filler, one guaranteed "gu" bubble (instead of
-    # Inheritance Ground's "treasure") and BLACK_HEAVEN_MIN_BATTLE_BUBBLES (3, not 2) guaranteed
-    # "battle" bubbles -- "very very strong mobs" gets more encounters, not just scarier ones.
+    # with Black Heaven's own category set per explicit request: nothing/ascension_pill/
+    # essence_crystal/essence_pill/materials as the weighted filler (ascension_pill added
+    # 2026-08-14, mirroring Inheritance Ground's own bubble), one guaranteed "gu" bubble
+    # (instead of Inheritance Ground's "treasure") and BLACK_HEAVEN_MIN_BATTLE_BUBBLES (3, not
+    # 2) guaranteed "battle" bubbles -- "very very strong mobs" gets more encounters, not just
+    # scarier ones.
     BLACK_HEAVEN_BOARD_SIZE = 20
     BLACK_HEAVEN_BUBBLES_PER_TEAM_MEMBER = 2
     BLACK_HEAVEN_MIN_BATTLE_BUBBLES = 3
-    BLACK_HEAVEN_BUBBLE_OUTCOME_WEIGHT = {"nothing": 40, "essence_crystal": 20, "essence_pill": 20, "materials": 20}
+    BLACK_HEAVEN_BUBBLE_OUTCOME_WEIGHT = {"nothing": 30, "ascension_pill": 20, "essence_crystal": 15, "essence_pill": 15, "materials": 20}
     BLACK_HEAVEN_ESSENCE_CRYSTAL_QUANTITY_RANGE = (40, 150)
     BLACK_HEAVEN_ESSENCE_PILL_MIN_TIER = 5
     BLACK_HEAVEN_ESSENCE_PILL_MAX_TIER = 7
@@ -3197,10 +3213,12 @@ class GameManager:
     def roll_black_heaven_bubble_gu(self) -> str:
         """The guaranteed "gu" bubble's own resolution (see generate_black_heaven_board) --
         unlike roll_black_heaven_battle_bonus_gu, this bubble already committed to the
-        outcome, so no chance gate is needed, just which of the 15 names. Always Common
-        quality/star 1, same convention every other drop mechanism in this codebase uses."""
+        outcome, so no chance gate is needed, just which of the 15 names. Immortal quality
+        (2026-08-14, explicit request, raised from the original Common) -- the whole team
+        already has to roll off for it (see grant_black_heaven_gu_reward), so the one winner
+        gets the top tier."""
         name = random.choice(canon_gu_black_heaven.BLACK_HEAVEN_CANON_GU_NAMES)
-        return equipment.gu_item_name(name, "Common")
+        return equipment.gu_item_name(name, "Immortal")
 
     def grant_black_heaven_gu_reward(self, team: list) -> dict:
         """The guaranteed "gu" bubble now awards ONE of Black Heaven's own 15 Gu to the whole
@@ -3225,6 +3243,21 @@ class GameManager:
             "gu_name": gu_name, "gu_family": gu_family,
             "effect_text": canon.get("effect_text", ""),
         }
+
+    def grant_black_heaven_pill_reward(self, team: list) -> list:
+        """An "ascension_pill" bubble (2026-08-14, see BLACK_HEAVEN_BUBBLE_OUTCOME_WEIGHT) --
+        direct mirror of grant_inheritance_ground_pill_reward's own shape: guaranteed grant,
+        tier randomized via the same shared items.QI_ASCENSION_PILL_TIER_WEIGHTS (now covering
+        1-8), one independent roll per team member. Returns [(name, reward_str), ...]."""
+        tiers = list(items.QI_ASCENSION_PILL_TIER_WEIGHTS.keys())
+        weights = list(items.QI_ASCENSION_PILL_TIER_WEIGHTS.values())
+        results = []
+        for user_id, name in team:
+            tier = random.choices(tiers, weights=weights, k=1)[0]
+            pill_name = items.alchemy_pill_name("Qi Ascension", tier)
+            self.db.add_item(user_id, pill_name, 1)
+            results.append((name, f"1x **{pill_name}**"))
+        return results
 
     def grant_black_heaven_essence_crystal_reward(self, team: list) -> list:
         results = []
@@ -3254,7 +3287,8 @@ class GameManager:
         generic Tier 8 items independently per team member (mirrors content/monsters/white_
         heaven.py's own multi-roll drop shape), no new named items. A guaranteed-minimum
         fallback (Tier 8 Ore if every independent roll happens to miss) keeps this bubble from
-        ever reading identically to "nothing"."""
+        ever reading identically to "nothing". Tier 8 Herb added 2026-08-14 -- previously the
+        one generic Tier 8 item this bubble's own docstring claimed to grant but didn't."""
         results = []
         for user_id, name in team:
             granted = {}
@@ -3264,6 +3298,8 @@ class GameManager:
                 granted["Tier 8 Beast Material"] = random.randint(2, 6)
             if random.random() < 0.35:
                 granted["Tier 8 Beast Core"] = random.randint(1, 3)
+            if random.random() < 0.45:
+                granted["Tier 8 Herb"] = random.randint(2, 5)
             if not granted:
                 granted["Tier 8 Ore"] = random.randint(3, 8)
             for item_name, qty in granted.items():
@@ -3879,10 +3915,18 @@ class GameManager:
             }
         cost = alchemy.herb_cost(pill_type)
         herb = alchemy.herb_name(tier)
-        if self.db.get_inventory(user_id).get(herb, 0) < cost:
-            return {"ok": False, "reason": f"You need {cost}x **{herb}** to craft this (you have {self.db.get_inventory(user_id).get(herb, 0)})."}
+        inventory = self.db.get_inventory(user_id)
+        if inventory.get(herb, 0) < cost:
+            return {"ok": False, "reason": f"You need {cost}x **{herb}** to craft this (you have {inventory.get(herb, 0)})."}
+        bonus_ingredients = alchemy.bonus_ingredients(tier)
+        missing_bonus = {mat: qty for mat, qty in bonus_ingredients.items() if inventory.get(mat, 0) < qty}
+        if missing_bonus:
+            missing_text = ", ".join(f"{qty}x {mat} (have {inventory.get(mat, 0)})" for mat, qty in missing_bonus.items())
+            return {"ok": False, "reason": f"Missing: {missing_text}."}
 
         self.db.remove_item(user_id, herb, cost)
+        for mat, qty in bonus_ingredients.items():
+            self.db.remove_item(user_id, mat, qty)
         bonuses = self.compute_equipment_bonuses(user_id)
         chance = min(1.0, professions.craft_success_chance(player["alchemist_rank"]) + bonuses.get("alchemy_success_pct", 0))
         success = random.random() < chance
@@ -5149,9 +5193,7 @@ class GameManager:
         current = owned["refinement_level"]
         next_level = manual_data.NEXT_REFINEMENT.get(current)
         if next_level is None:
-            return False, "Already at the highest normal refinement level."
-        if next_level == "True Meaning":
-            return False, "True Meaning requires a rare insight item or the original author's inheritance, not normal refinement."
+            return False, "Already at the highest refinement level."
         required = manual_data.REFINEMENT_SPEC[next_level].duplicate_requirement
         if owned["quantity"] < required + 1:  # +1 keeps the working copy itself
             spare = max(0, owned["quantity"] - 1)

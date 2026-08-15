@@ -143,14 +143,14 @@ WHITE_HEAVEN_BAND_POOLS = {
 # anything, so it needs its own separate roll rather than reusing GameManager.
 # roll_white_heaven_bonus_gu (hunt/raid's own per-kill version). Flat per-find chance (not
 # band-weighted), same "independent of the main band pick" shape as bonus_core.
-WHITE_HEAVEN_EXPLORE_BONUS_GU_CHANCE = 1 / 3000
+WHITE_HEAVEN_EXPLORE_BONUS_GU_CHANCE = 1 / 1000
 
 
 def roll_white_heaven_explore_bonus_gu():
     if random.random() >= WHITE_HEAVEN_EXPLORE_BONUS_GU_CHANCE:
         return None
     name = random.choice(WHITE_HEAVEN_CANON_GU_NAMES)
-    return gu_item_name(name, "Common")
+    return gu_item_name(name, "Immortal")
 
 
 def roll_explore(explorer_rank: int = 0, luck_stat: int = 0, white_heaven: bool = False) -> dict:

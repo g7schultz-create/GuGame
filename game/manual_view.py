@@ -140,9 +140,10 @@ class ManualView(GameView):
         Refine All button's count/label -- refinement_level (Unstudied -> Studied -> Copied ->
         Annotated -> Perfected -> True Meaning) is a duplicate-copy ladder, a SEPARATE track
         from the studied flag (see manual_gen.study_page), so this checks quantity against the
-        next level's duplicate_requirement, not whether the page has been studied."""
+        next level's duplicate_requirement, not whether the page has been studied. True Meaning
+        is a real, reachable top tier now (2026-08-14) -- no longer excluded here."""
         next_level = manual_data.NEXT_REFINEMENT.get(info["refinement_level"])
-        if next_level is None or next_level == "True Meaning":
+        if next_level is None:
             return False
         required = manual_data.REFINEMENT_SPEC[next_level].duplicate_requirement
         return info["quantity"] >= required + 1

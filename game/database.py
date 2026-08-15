@@ -83,6 +83,10 @@ class GameDatabase:
         "qi_ascension_uses_t5": "INTEGER DEFAULT 0",
         "qi_ascension_uses_t6": "INTEGER DEFAULT 0",
         "qi_ascension_uses_t7": "INTEGER DEFAULT 0",
+        # Tier 8 (2026-08-14) -- see QI_ASCENSION_TIER_COLUMN's own comment for the realm-lock
+        # fix this needed (there is no 8th Great Realm, so Tier 8 shares Tier 7's own Ancient
+        # Realm requirement rather than gating behind a realm that will never exist).
+        "qi_ascension_uses_t8": "INTEGER DEFAULT 0",
         "last_qi_ts": "INTEGER DEFAULT 0",
         "max_hp": "INTEGER DEFAULT 100",
         "max_primeval_essence": "INTEGER DEFAULT 1000",
@@ -1986,7 +1990,7 @@ class GameDatabase:
 
     # Qi Ascension Pill (see items.py) -- unlike add_qi_multiplier above (a flat, unlimited-use
     # PERMANENT ADD), this MULTIPLIES qi_multiplier, so repeated uses compound exponentially
-    # instead of stacking flat. That makes it far stronger per use, so each of the 7 tiers is
+    # instead of stacking flat. That makes it far stronger per use, so each tier is
     # independently capped to QI_ASCENSION_MAX_USES_PER_TIER lifetime uses, AND tier N
     # additionally requires the player's own Great Realm rank (1=Qi Condensation ... 7=Ancient
     # Realm) to be >= N -- per explicit request, this replaced an earlier single shared
@@ -1998,7 +2002,12 @@ class GameDatabase:
     # essence_capacity_pct in database.py's own history.
     QI_ASCENSION_MAX_USES_PER_TIER = 5
     QI_ASCENSION_PCT_PER_TIER = 0.03
-    QI_ASCENSION_TIER_COLUMN = {t: f"qi_ascension_uses_t{t}" for t in range(1, 8)}
+    QI_ASCENSION_TIER_COLUMN = {t: f"qi_ascension_uses_t{t}" for t in range(1, 9)}
+    # realms.GREAT_REALMS only has 7 entries (max player_rank is 7, Ancient Realm) -- Tier 8
+    # (2026-08-14) shares that SAME top-realm requirement rather than the naive "tier N needs
+    # realm N" formula, which would require a nonexistent 8th realm and make Tier 8 permanently
+    # unusable by anyone. get_qi_ascension_pill_status's own realm check is capped against this.
+    QI_ASCENSION_MAX_REQUIRED_RANK = 7
 
     def get_qi_ascension_pill_status(self, user_id: int, tier: int) -> dict:
         """Read-only realm/cap check for a Tier `tier` Qi Ascension Pill -- mutates nothing,
@@ -2016,10 +2025,11 @@ class GameDatabase:
         row = cur.fetchone()
         con.close()
         player_rank = _realms.STAGES[row["realm_index"]].great_realm_index + 1
+        required_rank = min(tier, self.QI_ASCENSION_MAX_REQUIRED_RANK)
         uses = row[column]
 
         reason = None
-        if player_rank < tier:
+        if player_rank < required_rank:
             reason = "realm_locked"
         elif uses >= self.QI_ASCENSION_MAX_USES_PER_TIER:
             reason = "cap_reached"
