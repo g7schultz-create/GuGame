@@ -2422,7 +2422,8 @@ class GameCog(commands.Cog):
         await asyncio.to_thread(_do_reset)
         await interaction.response.send_message(
             f"Reset all cooldowns for **{target.display_name}** — mine, gather, explore, battlefield, pvp, rest, meditate, "
-            f"manual change, region change, and teach (sect + personal).",
+            f"manual change, region change, teach (sect + personal), World Boss, Forgotten Blessed Land, Search Black Heaven, "
+            f"Inheritance Ground, Dao Companion Daily Burst, Killer Move swap, and Gu Pet mode switch.",
             ephemeral=True,
         )
 

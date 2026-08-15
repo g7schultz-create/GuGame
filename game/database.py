@@ -4471,15 +4471,39 @@ class GameDatabase:
     # sects.py's TEACH_COOLDOWN_SECONDS/PERSONAL_TEACH_COOLDOWN_SECONDS / world_regions.py's
     # REGION_CHANGE_COOLDOWN_SECONDS) — zeroing these makes _check_cooldown's remaining-time
     # math report 0 (ready) immediately, the same "clear it" trick this file's own tests use.
-    # Deliberately excludes last_qi_ts/last_restore_ts (passive qi/HP regen accrual clocks,
-    # not action cooldowns — zeroing those would falsely credit a huge burst of "elapsed"
-    # regen instead of just clearing a gate) and search_charges_last_ts (a charge-refill
-    # clock with the same accrual reasoning, not a hard on/off cooldown).
+    # 2026-08-15: audited every "last_*_ts"/"*_started_ts" column on the players row and added
+    # the 5 real cooldown gates that had been added since this list was last touched (Search
+    # Black Heaven, Inheritance Ground's leader cooldown, Dao Companion's daily burst, Killer
+    # Move's swap cooldown, Gu Pet's mode-switch cooldown) — all 5 confirmed via a real
+    # _check_cooldown call (or the equivalent inlined elapsed-time check) before being added,
+    # not just because the name looked cooldown-ish.
+    #
+    # Still deliberately excludes:
+    #   - last_qi_ts/last_restore_ts/battle_qi_last_ts/search_charges_last_ts — passive qi/HP/
+    #     battle-Qi regen and charge-refill accrual clocks, not action cooldowns. Zeroing these
+    #     would falsely credit a huge burst of "elapsed" regen instead of just clearing a gate.
+    #   - studying_started_ts/farm_planted_ts/split_body_started_ts and every "active_*_started_
+    #     ts"/"*_travel_started_ts" column (hunt/raid/inheritance_ground/world_region/white_
+    #     heaven/black_heaven) — these are PROGRESS clocks for something already in flight, not
+    #     repeat-action gates. studying_started_ts in particular would be a real exploit if
+    #     zeroed while studying_profession stays set: elapsed_hours becomes enormous and the
+    #     next /study call reports instant completion. The others risk similar "instantly
+    #     ready"/broken-state behavior. Each of these systems already has its own dedicated
+    #     stuck-state escape hatch (AbandonHuntView, AbandonRaidView, etc.) for exactly this
+    #     situation instead.
+    #   - black_heaven_search_invite_pending_ts — a duplicate-invite guard, not a player-facing
+    #     cooldown (clearing it is what clear_black_heaven_search_invite_pending is for).
+    #   - sect_joined_ts/master_since_ts/personal_master_since_ts — purely informational
+    #     timestamps, nothing ever gates on them.
+    #   - aptitude_reroll_ts — declared on the table but never actually read or written
+    #     anywhere else in the codebase; genuinely dead, not a live cooldown to reset.
     COOLDOWN_RESET_COLUMNS = [
         "last_mine_ts", "last_gather_ts", "last_explore_ts", "last_battlefield_ts",
         "last_pvp_ts", "last_rest_ts", "last_meditate_ts", "last_manual_change_ts",
         "last_world_region_change_ts", "last_teach_ts", "last_personal_teach_ts",
         "personal_last_taught_ts", "last_world_boss_attack_ts", "treasure_hunt_last_ts",
+        "last_black_heaven_search_ts", "last_inheritance_ground_ts", "last_dc_burst_ts",
+        "last_killer_move_swap_ts", "last_gu_pet_mode_switch_ts",
     ]
 
     def reset_all_cooldowns(self, user_id: int):
