@@ -1,3 +1,5 @@
+import random
+
 import discord
 
 BAR_LENGTH = 12
@@ -29,6 +31,23 @@ def paginate_select_options(options: list, page: int, reserved_slots: int = 0) -
     if page < total_pages - 1:
         chunk.append(discord.SelectOption(label="Next Page ▶", value=NAV_NEXT_VALUE))
     return chunk, total_pages, page
+
+
+def add_shuffled(view: discord.ui.View, buttons: list) -> None:
+    """Adds every already-constructed discord.ui.Button in `buttons` to `view` in a RANDOMIZED
+    order -- anti-macro measure for combat views (hunt/raid/battlefield/pvp/Inheritance
+    Ground): a click-macro that always taps the same fixed screen position ("wherever Attack
+    used to be") no longer reliably lands on the same action every round, since Attack/Guard/
+    Empower/etc. reshuffle their on-screen position each render. A real player reads the
+    label/emoji either way, so this costs legitimate play nothing. Each button's own `row` is
+    whatever was already set at construction time and is untouched here -- discord.py lays out
+    same-row items left-to-right in the order they're added to the view, which is the ONLY
+    thing this function actually randomizes; overall row layout (e.g. a target Select kept on
+    its own row) is unaffected."""
+    shuffled = list(buttons)
+    random.shuffle(shuffled)
+    for button in shuffled:
+        view.add_item(button)
 
 
 def render_bar(current: float, maximum: float, length: int = BAR_LENGTH) -> str:

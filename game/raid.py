@@ -58,7 +58,7 @@ from .team_battle import (
     RaidEnemy,
     TeamBattleEngine,
 )
-from .ui_utils import format_number, render_bar
+from .ui_utils import add_shuffled, format_number, render_bar
 
 RAID_SPIRIT_STONE_MIN = 50
 RAID_SPIRIT_STONE_MAX = 100
@@ -605,21 +605,24 @@ class RaidView(TeamBattleEngine, GameView):
             ("Guard", "🛡️", discord.ButtonStyle.secondary, self._on_guard),
             ("Flee", "🏃", discord.ButtonStyle.danger, self._on_flee),
         ]
+        row1_buttons = []
         for label, emoji, style, callback in action_buttons:
             button = discord.ui.Button(label=label, emoji=emoji, style=style, row=1, disabled=not active)
             button.callback = callback
-            self.add_item(button)
+            row1_buttons.append(button)
 
         empower_button = discord.ui.Button(label=f"Empower ({EMPOWER_QI_COST})", emoji="✨", style=discord.ButtonStyle.success, row=1, disabled=not active)
         empower_button.callback = self._on_toggle_empower
-        self.add_item(empower_button)
+        row1_buttons.append(empower_button)
 
         # Dispatches to Defend Ally/Inspire/Freeze based on the clicking player's own
         # character_class (see _on_class_ability) — one shared button since this view is
         # rendered identically for every participant regardless of their class.
         class_button = discord.ui.Button(label="Class Ability", emoji="🎭", style=discord.ButtonStyle.success, row=1, disabled=not active)
         class_button.callback = self._on_class_ability
-        self.add_item(class_button)
+        row1_buttons.append(class_button)
+        # Anti-macro: randomized on-screen order every render -- see ui_utils.add_shuffled.
+        add_shuffled(self, row1_buttons)
 
         target_options = [
             discord.SelectOption(label=f"{e.monster.name} — {max(0, e.hp):.0f}/{e.max_hp:.0f} HP", value=str(idx), emoji="👑" if idx == 0 else "🐗")
@@ -634,9 +637,10 @@ class RaidView(TeamBattleEngine, GameView):
         target_select.callback = self._on_pick_target
         self.add_item(target_select)
 
+        row3_buttons = []
         gu_button = discord.ui.Button(label="Use Gu Ability", emoji="🐛", style=discord.ButtonStyle.primary, row=3, disabled=not active)
         gu_button.callback = self._on_gu_ability
-        self.add_item(gu_button)
+        row3_buttons.append(gu_button)
 
         # Additive alongside Use Gu Ability above, not a replacement -- like it, this view is
         # shared across every participant, so it can only gate on the shared `active` flag
@@ -644,7 +648,7 @@ class RaidView(TeamBattleEngine, GameView):
         # _on_killer_move itself, same convention Soul Projection's own button just below uses.
         killer_move_button = discord.ui.Button(label="Use Killer Move", emoji="🌀", style=discord.ButtonStyle.primary, row=3, disabled=not active)
         killer_move_button.callback = self._on_killer_move
-        self.add_item(killer_move_button)
+        row3_buttons.append(killer_move_button)
 
         # Nascent Soul Avatar's Soul Projection (see avatar.py) — like Empower/Class Ability
         # above, this view is rendered identically for every participant, so it can only gate
@@ -655,7 +659,7 @@ class RaidView(TeamBattleEngine, GameView):
             style=discord.ButtonStyle.success, row=3, disabled=not active,
         )
         soul_projection_button.callback = self._on_soul_projection
-        self.add_item(soul_projection_button)
+        row3_buttons.append(soul_projection_button)
 
         # A per-player select (built fresh from just the clicking user's inventory) rather
         # than a shared one on this view — see _on_open_potion_menu. The full catalog of
@@ -664,7 +668,8 @@ class RaidView(TeamBattleEngine, GameView):
         # ("The application did not respond") every single time /raid was used.
         potion_button = discord.ui.Button(label="Use Potion/Pill", emoji="🧪", style=discord.ButtonStyle.success, row=3, disabled=not active)
         potion_button.callback = self._on_open_potion_menu
-        self.add_item(potion_button)
+        row3_buttons.append(potion_button)
+        add_shuffled(self, row3_buttons)
 
     def build_embed(self) -> discord.Embed:
         if self.status == "starting":

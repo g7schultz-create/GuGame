@@ -33,7 +33,7 @@ from .team_battle import (
     FREEZE_STR_MULTIPLIER, GUARD_DAMAGE_REDUCTION, INSPIRE_DEF_BONUS_PCT, INSPIRE_DURATION_ROUNDS,
     INSPIRE_STR_BONUS_PCT, RaidEnemy, TeamBattleEngine,
 )
-from .ui_utils import format_number, render_bar
+from .ui_utils import add_shuffled, format_number, render_bar
 
 BETRAYAL_DECISION_SECONDS = 60
 BATTLE_ROUND_TIMEOUT_SECONDS = 30  # matches raid.ROUND_TIMEOUT_SECONDS's own pacing
@@ -372,34 +372,39 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
                 target_select.callback = self._on_pick_target
                 self.add_item(target_select)
 
+            row0_buttons = []
             attack_button = discord.ui.Button(label="Attack", emoji="⚔️", style=discord.ButtonStyle.danger, row=0)
             attack_button.callback = self._on_attack
-            self.add_item(attack_button)
+            row0_buttons.append(attack_button)
             guard_button = discord.ui.Button(label="Guard", emoji="🛡️", style=discord.ButtonStyle.secondary, row=0)
             guard_button.callback = self._on_guard
-            self.add_item(guard_button)
+            row0_buttons.append(guard_button)
             empower_button = discord.ui.Button(label=f"Empower ({EMPOWER_QI_COST})", emoji="✨", style=discord.ButtonStyle.success, row=0)
             empower_button.callback = self._on_toggle_empower
-            self.add_item(empower_button)
+            row0_buttons.append(empower_button)
             class_button = discord.ui.Button(label="Class Ability", emoji="🎭", style=discord.ButtonStyle.success, row=0)
             class_button.callback = self._on_class_ability
-            self.add_item(class_button)
+            row0_buttons.append(class_button)
+            # Anti-macro: randomized on-screen order every render -- see ui_utils.add_shuffled.
+            add_shuffled(self, row0_buttons)
 
+            row1_buttons = []
             gu_button = discord.ui.Button(label="Use Gu Ability", emoji="🐛", style=discord.ButtonStyle.primary, row=1)
             gu_button.callback = self._on_gu_ability
-            self.add_item(gu_button)
+            row1_buttons.append(gu_button)
             killer_move_button = discord.ui.Button(label="Use Killer Move", emoji="🌀", style=discord.ButtonStyle.primary, row=1)
             killer_move_button.callback = self._on_killer_move
-            self.add_item(killer_move_button)
+            row1_buttons.append(killer_move_button)
             soul_projection_button = discord.ui.Button(
                 label=f"Soul Projection ({format_number(avatar.SOUL_PROJECTION_QI_COST)})", emoji="🌀",
                 style=discord.ButtonStyle.success, row=1,
             )
             soul_projection_button.callback = self._on_soul_projection
-            self.add_item(soul_projection_button)
+            row1_buttons.append(soul_projection_button)
             potion_button = discord.ui.Button(label="Use Potion/Pill", emoji="🧪", style=discord.ButtonStyle.success, row=1)
             potion_button.callback = self._on_open_potion_menu
-            self.add_item(potion_button)
+            row1_buttons.append(potion_button)
+            add_shuffled(self, row1_buttons)
         elif self.phase == "pre_trial":
             button = discord.ui.Button(label="Face the Trial", emoji="⚔️", style=discord.ButtonStyle.danger)
             button.callback = self._on_face_trial
@@ -432,34 +437,39 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             target_select.callback = self._on_duel_pick_target
             self.add_item(target_select)
 
+            duel_row0_buttons = []
             attack_button = discord.ui.Button(label="Attack", emoji="⚔️", style=discord.ButtonStyle.danger, row=0)
             attack_button.callback = self._on_duel_attack
-            self.add_item(attack_button)
+            duel_row0_buttons.append(attack_button)
             guard_button = discord.ui.Button(label="Guard", emoji="🛡️", style=discord.ButtonStyle.secondary, row=0)
             guard_button.callback = self._on_duel_guard
-            self.add_item(guard_button)
+            duel_row0_buttons.append(guard_button)
             empower_button = discord.ui.Button(label=f"Empower ({EMPOWER_QI_COST})", emoji="✨", style=discord.ButtonStyle.success, row=0)
             empower_button.callback = self._on_toggle_empower
-            self.add_item(empower_button)
+            duel_row0_buttons.append(empower_button)
             class_button = discord.ui.Button(label="Class Ability", emoji="🎭", style=discord.ButtonStyle.success, row=0)
             class_button.callback = self._on_duel_class_ability
-            self.add_item(class_button)
+            duel_row0_buttons.append(class_button)
+            # Anti-macro: randomized on-screen order every render -- see ui_utils.add_shuffled.
+            add_shuffled(self, duel_row0_buttons)
 
+            duel_row1_buttons = []
             gu_button = discord.ui.Button(label="Use Gu Ability", emoji="🐛", style=discord.ButtonStyle.primary, row=1)
             gu_button.callback = self._on_duel_gu_ability
-            self.add_item(gu_button)
+            duel_row1_buttons.append(gu_button)
             killer_move_button = discord.ui.Button(label="Use Killer Move", emoji="🌀", style=discord.ButtonStyle.primary, row=1)
             killer_move_button.callback = self._on_duel_killer_move
-            self.add_item(killer_move_button)
+            duel_row1_buttons.append(killer_move_button)
             soul_projection_button = discord.ui.Button(
                 label=f"Soul Projection ({format_number(avatar.SOUL_PROJECTION_QI_COST)})", emoji="🌀",
                 style=discord.ButtonStyle.success, row=1,
             )
             soul_projection_button.callback = self._on_duel_soul_projection
-            self.add_item(soul_projection_button)
+            duel_row1_buttons.append(soul_projection_button)
             potion_button = discord.ui.Button(label="Use Potion/Pill", emoji="🧪", style=discord.ButtonStyle.success, row=1)
             potion_button.callback = self._on_open_potion_menu
-            self.add_item(potion_button)
+            duel_row1_buttons.append(potion_button)
+            add_shuffled(self, duel_row1_buttons)
         # "trial_result" and "resolved" phases have no buttons -- purely display states.
 
     # -- intro -----------------------------------------------------------------------------

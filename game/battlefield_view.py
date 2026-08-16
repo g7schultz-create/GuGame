@@ -30,7 +30,7 @@ from .raid import (
     INSPIRE_STR_BONUS_PCT,
 )
 from .raid import DEFEND_ALLY_DAMAGE_REDUCTION as _BRACE_EXTRA_REDUCTION
-from .ui_utils import format_number, render_bar
+from .ui_utils import add_shuffled, format_number, render_bar
 
 GUARD_DAMAGE_REDUCTION = 0.5
 POTION_USE_CAP = 5  # a longer fight than a normal hunt, so a slightly higher cap
@@ -581,10 +581,11 @@ class BattlefieldView(GameView):
             ("Guard", "🛡️", discord.ButtonStyle.secondary, self._on_guard),
             ("Withdraw", "🏃", discord.ButtonStyle.danger, self._on_flee),
         ]
+        row0_buttons = []
         for label, emoji, style, callback in buttons:
             button = discord.ui.Button(label=label, emoji=emoji, style=style, row=0, disabled=not active)
             button.callback = callback
-            self.add_item(button)
+            row0_buttons.append(button)
 
         empower_button = discord.ui.Button(
             label=f"Empower ({EMPOWER_QI_COST})", emoji="✨",
@@ -592,13 +593,16 @@ class BattlefieldView(GameView):
             row=0, disabled=not active or (not self.qi_empowered and self.player_qi < EMPOWER_QI_COST),
         )
         empower_button.callback = self._on_toggle_empower
-        self.add_item(empower_button)
+        row0_buttons.append(empower_button)
+        # Anti-macro: randomized on-screen order every render -- see ui_utils.add_shuffled.
+        add_shuffled(self, row0_buttons)
 
+        row1_buttons = []
         class_button = discord.ui.Button(
             label="Class Ability", emoji="🎭", style=discord.ButtonStyle.success, row=1, disabled=not active,
         )
         class_button.callback = self._on_class_ability
-        self.add_item(class_button)
+        row1_buttons.append(class_button)
 
         # Nascent Soul Avatar's Soul Projection (see avatar.py).
         soul_projection_button = discord.ui.Button(
@@ -607,7 +611,8 @@ class BattlefieldView(GameView):
             disabled=not active or not self.player["avatar_soul"] or self.player_qi < avatar.SOUL_PROJECTION_QI_COST,
         )
         soul_projection_button.callback = self._on_soul_projection
-        self.add_item(soul_projection_button)
+        row1_buttons.append(soul_projection_button)
+        add_shuffled(self, row1_buttons)
 
         inventory = self.game.get_inventory(self.user_id)
         usable = [

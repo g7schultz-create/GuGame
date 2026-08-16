@@ -7,7 +7,7 @@ from . import chargen, combat
 from .base_view import GameView
 from .equipment import EQUIPMENT
 from .items import ITEMS
-from .ui_utils import format_number, render_bar
+from .ui_utils import add_shuffled, format_number, render_bar
 
 FLEE_BASE_CHANCE = 0.5
 FLEE_CHANCE_PER_SPD_DIFF = 0.02
@@ -413,10 +413,11 @@ class PvPView(GameView):
             ("Guard", "🛡️", discord.ButtonStyle.secondary, self._on_guard),
             ("Flee", "🏃", discord.ButtonStyle.danger, self._on_flee),
         ]
+        row0_buttons = []
         for label, emoji, style, callback in buttons:
             button = discord.ui.Button(label=label, emoji=emoji, style=style, row=0, disabled=not active)
             button.callback = callback
-            self.add_item(button)
+            row0_buttons.append(button)
 
         empower_button = discord.ui.Button(
             label=f"Empower ({EMPOWER_QI_COST})",
@@ -426,8 +427,11 @@ class PvPView(GameView):
             disabled=not active or (not self.qi_empowered and self.player_qi < EMPOWER_QI_COST),
         )
         empower_button.callback = self._on_toggle_empower
-        self.add_item(empower_button)
+        row0_buttons.append(empower_button)
+        # Anti-macro: randomized on-screen order every render -- see ui_utils.add_shuffled.
+        add_shuffled(self, row0_buttons)
 
+        row1_buttons = []
         gu = self._equipped_gu()
         if gu and gu.active_ability:
             gu_button = discord.ui.Button(
@@ -435,7 +439,7 @@ class PvPView(GameView):
                 disabled=not active or self.player_qi < gu.active_ability.qi_cost,
             )
             gu_button.callback = self._on_gu_ability
-            self.add_item(gu_button)
+            row1_buttons.append(gu_button)
 
         killer_move = self.game.get_equipped_killer_move(self.player, "combat")
         if killer_move:
@@ -444,7 +448,8 @@ class PvPView(GameView):
                 disabled=not active or self.player_qi < self.game.killer_move_qi_cost(self.player, killer_move),
             )
             killer_move_button.callback = self._on_killer_move
-            self.add_item(killer_move_button)
+            row1_buttons.append(killer_move_button)
+        add_shuffled(self, row1_buttons)
 
         inventory = self.game.get_inventory(self.user_id)
         usable = [
