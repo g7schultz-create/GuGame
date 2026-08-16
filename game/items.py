@@ -322,10 +322,12 @@ def _use_qi_ascension_pill(tier: int):
         result = db.use_qi_ascension_pill(user_id, tier)
         if not result["used"]:
             if result["reason"] == "realm_locked":
-                # realms.GREAT_REALMS only has 7 entries -- Tier 8 shares Tier 7's own top-
-                # realm requirement (see GameDatabase.QI_ASCENSION_MAX_REQUIRED_RANK), so the
-                # message names that same realm rather than indexing past the end of the list.
-                required_realm_index = min(tier, len(realms.GREAT_REALMS)) - 1
+                # Tier 8 shares Tier 7's own top-realm requirement (see GameDatabase.
+                # QI_ASCENSION_MAX_REQUIRED_RANK, the actual gate this message must match) --
+                # reads that SAME constant rather than len(realms.GREAT_REALMS), which drifted
+                # out of sync the moment Dao Realm became an 8th Great Realm (the pill's real
+                # gate didn't move with it, so the message can't be allowed to either).
+                required_realm_index = min(tier, db.QI_ASCENSION_MAX_REQUIRED_RANK) - 1
                 required_realm_name = realms.GREAT_REALMS[required_realm_index]["name"]
                 return (
                     f"Your dantian isn't ready — a Tier {tier} Qi Ascension Pill requires "
@@ -538,10 +540,11 @@ def roll_essence_restoration_pill_drop(rng: Optional[random.Random] = None) -> O
 # silently blow out row budget in OTHER, unrelated renderers.
 for _tier in range(1, 9):  # Tier 8 added 2026-08-14
     _name = alchemy_pill_name("Qi Ascension", _tier)
-    # realms.GREAT_REALMS only has 7 entries -- Tier 8 shares Tier 7's own top-realm
-    # requirement (see GameDatabase.QI_ASCENSION_MAX_REQUIRED_RANK) rather than indexing
-    # past the end of the list.
-    _required_realm_name = realms.GREAT_REALMS[min(_tier, len(realms.GREAT_REALMS)) - 1]["name"]
+    # Tier 8 shares Tier 7's own top-realm requirement (see GameDatabase.
+    # QI_ASCENSION_MAX_REQUIRED_RANK, the actual gate this description must match) -- reads
+    # that SAME constant rather than len(realms.GREAT_REALMS), which drifted out of sync the
+    # moment Dao Realm became an 8th Great Realm (the pill's real gate didn't move with it).
+    _required_realm_name = realms.GREAT_REALMS[min(_tier, GameDatabase.QI_ASCENSION_MAX_REQUIRED_RANK) - 1]["name"]
     ITEMS[_name] = Item(
         name=_name,
         category="Pills",

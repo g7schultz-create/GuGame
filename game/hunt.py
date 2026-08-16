@@ -5,7 +5,7 @@ import random
 
 import discord
 
-from . import avatar, canon_gu, chargen, combat, dao_paths, white_heaven
+from . import avatar, canon_gu, chargen, combat, dao_essences, dao_paths, white_heaven
 from .base_view import GameView
 from .equipment import EQUIPMENT, gear_power_score, parse_gu_name
 from .items import ITEMS, item_emoji, roll_essence_restoration_pill_drop
@@ -146,6 +146,12 @@ class HuntView(GameView):
         self._guard_stacks = 0  # Iron Skin family, capped at 2
         self._dodge_momentum_pending = False  # Swift Foot family
         self._dodge_momentum_triggered = False  # only the FIRST dodge each encounter arms it
+        # Essence of the Undying Vow (see game/dao_essences.py) -- resolved once here (can't
+        # change mid-encounter, same as root_spec/physique_spec above), consumed at most once
+        # per encounter via _undying_vow_used, naturally reset since a new HuntView is
+        # constructed per fight.
+        self._has_undying_vow = dao_essences.UNDYING_VOW_NAME in self.game.db.get_dao_essences_picked(user_id)
+        self._undying_vow_used = False
         self._attack_count = 0  # Strong Bone family (every 3rd successful basic Attack)
         self._first_gu_use_discounted = False  # Sturdy Frame family
         self._guard_or_potion_qi_restored = False  # River Walker family, once per encounter
@@ -305,6 +311,22 @@ class HuntView(GameView):
         if not self.player["avatar_soul"]:
             return False
         return self.game.db.try_use_daily_avatar_fatal_block(self.user_id)
+
+    def _try_undying_vow(self) -> bool:
+        """Essence of the Undying Vow (see game/dao_essences.py) — once per ENCOUNTER (not
+        daily, unlike the two saves above), a lethal blow leaves the player at 1 HP instead.
+        No persistent player-facing debuff exists in solo hunts to cleanse (see
+        team_battle.py's bleed/frozen_rounds for the sites where that actually applies), so
+        this just grants the retaliation buff on top of the survival itself."""
+        if not self._has_undying_vow or self._undying_vow_used:
+            return False
+        self._undying_vow_used = True
+        self.game.db.add_buff(
+            self.user_id, dao_essences.UNDYING_VOW_RETALIATION_BUFF_NAME, 0,
+            dao_essences.UNDYING_VOW_RETALIATION_DURATION_SECONDS,
+            special_bonuses={"total_damage_pct": dao_essences.UNDYING_VOW_RETALIATION_BONUS_PCT},
+        )
+        return True
 
     def _log_line(self, text: str):
         self.log.append(f"Round {self.round}: {text}")
@@ -471,6 +493,11 @@ class HuntView(GameView):
                     if self.monster_hp <= 0:
                         self._handle_victory()
         if self.player_hp <= 0:
+            if self._try_undying_vow():
+                self.player_hp = 1
+                self._persist_hp()
+                self._log_line("🌌 **Essence of the Undying Vow** flares — death itself yields! You stand at 1 HP, primed for a retaliation strike!")
+                return
             flee_ward_name = self.game.check_and_consume_flee_ward(self.user_id)
             if flee_ward_name:
                 self.status = "fled"

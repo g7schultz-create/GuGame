@@ -2,10 +2,10 @@ import json
 import random
 import sqlite3
 import time
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from config import DB_PATH
-from . import dao_paths, sects
+from . import dao_essences, dao_paths, sects
 
 
 class GameDatabase:
@@ -368,6 +368,12 @@ class GameDatabase:
         # from a path once spent (see GameDatabase.allocate_dao_marks).
         "dao_marks_banked": "INTEGER DEFAULT 0",
         "dao_path_marks": "TEXT DEFAULT NULL",
+        # Dao Realm Essences (see game/dao_essences.py / /dao_essence) -- a JSON list of up to
+        # DAO_ESSENCE_PICK_LIMIT essence names the player has permanently picked, one per Dao
+        # Realm substage breakthrough. Unlike dao_path_marks this isn't a scaled investment, just
+        # "which names were chosen" -- same one-JSON-blob-column idiom, just a list instead of a
+        # dict since there's no per-pick amount to track (see GameDatabase.pick_dao_essence).
+        "dao_essences_picked": "TEXT DEFAULT NULL",
         # Guards GameManager.backfill_dao_marks_for_all_players (the retroactive one-time grant
         # for breakthroughs completed before Spirit Severing/Dao Seeking/Ancient Realm's own
         # dao_paths.breakthrough_marks lump sums existed for them) -- 0 until backfilled, then 1
@@ -4382,6 +4388,35 @@ class GameDatabase:
             "UPDATE players SET dao_marks_banked = dao_marks_banked - ?, dao_path_marks = ? WHERE user_id = ?",
             (amount, json.dumps(path_marks), user_id),
         )
+        con.commit()
+        con.close()
+        return True
+
+    def get_dao_essences_picked(self, user_id: int) -> List[str]:
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute("SELECT dao_essences_picked FROM players WHERE user_id = ?", (user_id,))
+        row = cur.fetchone()
+        con.close()
+        if not row or not row["dao_essences_picked"]:
+            return []
+        return json.loads(row["dao_essences_picked"])
+
+    def pick_dao_essence(self, user_id: int, essence_name: str) -> bool:
+        """Atomic: appends essence_name to the player's permanent picks, only if it isn't already
+        picked AND the player hasn't already used up dao_essences.DAO_ESSENCE_PICK_LIMIT picks.
+        Once picked, an essence can never be un-picked or swapped -- there is no corresponding
+        "unpick" method anywhere in this class, same one-way idiom as allocate_dao_marks."""
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute("SELECT dao_essences_picked FROM players WHERE user_id = ?", (user_id,))
+        row = cur.fetchone()
+        picked = json.loads(row["dao_essences_picked"]) if row and row["dao_essences_picked"] else []
+        if essence_name in picked or len(picked) >= dao_essences.DAO_ESSENCE_PICK_LIMIT:
+            con.close()
+            return False
+        picked.append(essence_name)
+        cur.execute("UPDATE players SET dao_essences_picked = ? WHERE user_id = ?", (json.dumps(picked), user_id))
         con.commit()
         con.close()
         return True

@@ -93,6 +93,12 @@ def build_breakthrough_result_embed(display_name: str, result: dict, game) -> di
             value=f"Sundering deeper into Spirit Severing grants **{format_number(result['dao_marks_granted'])}** Dao Marks! Allocate them with `/dao_path`.",
             inline=False,
         )
+    if success and result.get("dao_essence_pick_available"):
+        embed.add_field(
+            name="🌌 Dao Essence",
+            value="A Dao Essence awaits your choice — pick one with `/dao_essence`!",
+            inline=False,
+        )
     return embed
 
 

@@ -1029,30 +1029,39 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
         else:
             self.round += 1
 
-    def _apply_duel_knockout(self, user_id: int, p: dict):
+    def _apply_duel_knockout(self, user_id: int, p: dict) -> bool:
         """Ward/Worldly Escape/death-penalty pipeline on an actual duel knockout -- shared by
         both a landed hit and a retaliation kill in _resolve_duel_hit, mirroring how a normal
         battle's Phase 1.65 (bleed) reuses the exact same pipeline as its own Phase 3. Per
         explicit request, only a BACKSTABBER risks losing Qi here -- a defending sharer who
         gets knocked out was only protecting the loot, not the aggressor, so they're simply
-        out of the fight with no further penalty."""
+        out of the fight with no further penalty. Returns True if actually knocked out, False
+        if Essence of the Undying Vow saved them instead -- callers use this to decide whether
+        to keep treating the participant as still in the fight."""
+        if self._try_undying_vow(user_id, p):
+            p["hp"] = 1
+            self._persist_hp(user_id, p)
+            p["frozen_rounds"] = 0
+            self._log(f"🌌 **{p['name']}**'s Undying Vow flares — death itself yields! They stand at 1 HP, primed for a retaliation strike!")
+            return False
         p["down"] = True
         self.game.db.set_hp(user_id, 1)
         if p["side"] == SHARER_SIDE:
             self._log(f"💫 **{p['name']}** is knocked out of the fight -- no Qi lost, they were only defending.")
-            return
+            return True
         ward_name = self.game.check_and_consume_defeat_ward(user_id)
         if ward_name:
             self._log(f"✨ **{ward_name}** activates for **{p['name']}** — knocked out, but the Qi loss is warded away!")
-            return
+            return True
         escape_gu_name = self.game.check_and_consume_worldly_escape(user_id)
         if escape_gu_name:
             self._log(f"✨ **{escape_gu_name}** activates for **{p['name']}** — knocked out, but the Qi loss is escaped entirely!")
-            return
+            return True
         reduction = self.game.compute_equipment_bonuses(user_id).get("death_qi_loss_reduction_pct", 0)
         qi_lost, _ = self.game.db.apply_death_penalty(user_id, reduction_pct=reduction)
         p["qi_lost_on_death"] = qi_lost
         self._log(f"💀 **{p['name']}** is knocked out, losing {format_number(qi_lost)} qi!")
+        return True
 
     def _resolve_duel_hit(
         self, attacker_uid: int, attacker_p: dict, attacker_stats: dict, bonuses: dict, sp: dict,
@@ -1128,8 +1137,7 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             heal_text = f" 💚 +{result.heal} HP"
         self._log(f"⚔️ **{attacker_p['name']}** hits **{target_p['name']}** for {result.damage} damage{crit} with {label}.{heal_text}")
 
-        if target_p["hp"] <= 0:
-            self._apply_duel_knockout(target_uid, target_p)
+        if target_p["hp"] <= 0 and self._apply_duel_knockout(target_uid, target_p):
             return
         if is_freeze and random.random() < FREEZE_PROC_CHANCE:
             target_p["frozen_rounds"] = max(target_p.get("frozen_rounds", 0), 1)

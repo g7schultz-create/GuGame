@@ -27,7 +27,7 @@ import random
 
 import discord
 
-from . import avatar, chargen, combat, dao_paths
+from . import avatar, chargen, combat, dao_essences, dao_paths
 from .equipment import EQUIPMENT
 from .items import ITEMS
 from .base_view import GameView
@@ -150,6 +150,25 @@ class TeamBattleEngine:
         if not p.get("avatar_soul"):
             return False
         return self.game.db.try_use_daily_avatar_fatal_block(user_id)
+
+    def _try_undying_vow(self, user_id: int, p: dict) -> bool:
+        """Essence of the Undying Vow (see game/dao_essences.py) — once per ENCOUNTER (not
+        daily, unlike the two saves above), a lethal blow leaves the participant at 1 HP
+        instead, cleanses their bleed DoT (the one persistent player-facing debuff this engine
+        tracks), and grants a brief retaliation buff. Shared by every team_battle.py lethal-
+        damage site (bleed tick, DPS-check forced kill, _resolve_enemy_hit) AND reused directly
+        by inheritance_ground_view.py's separate backstab-duel implementation."""
+        if not p.get("has_undying_vow") or p.get("undying_vow_used"):
+            return False
+        p["undying_vow_used"] = True
+        p["bleed_damage_per_tick"] = 0
+        p["bleed_ticks_remaining"] = 0
+        self.game.db.add_buff(
+            user_id, dao_essences.UNDYING_VOW_RETALIATION_BUFF_NAME, 0,
+            dao_essences.UNDYING_VOW_RETALIATION_DURATION_SECONDS,
+            special_bonuses={"total_damage_pct": dao_essences.UNDYING_VOW_RETALIATION_BONUS_PCT},
+        )
+        return True
 
     def _soul_projection_bonuses(self, user_id: int, p: dict) -> dict:
         """Extra amounts Soul Projection adds on top of the passive while active this round
@@ -324,6 +343,11 @@ class TeamBattleEngine:
             # embed show each participant's own qi loss, not just a shared scrolling log line
             # that can get pushed out of MAX_LOG_LINES by the time the fight actually ends.
             "qi_lost_on_death": 0.0,
+            # Essence of the Undying Vow (see game/dao_essences.py) -- resolved once here (can't
+            # change mid-encounter), consumed at most once per encounter via undying_vow_used,
+            # naturally reset since this state dict is rebuilt per fight.
+            "has_undying_vow": dao_essences.UNDYING_VOW_NAME in self.game.db.get_dao_essences_picked(user_id),
+            "undying_vow_used": False,
         }
         # Clear Mind-family physique's encounter-start adaptive stat — compared against the
         # opponent (self.enemies[0]), same one-time-at-join computation hunt.py's own
@@ -748,6 +772,11 @@ class TeamBattleEngine:
             self._persist_hp(user_id, p)
             self._log(f"🩸 **{p['name']}** bleeds for {format_number(bleed_damage)} damage!")
             if p["hp"] <= 0:
+                if self._try_undying_vow(user_id, p):
+                    p["hp"] = 1
+                    self._persist_hp(user_id, p)
+                    self._log(f"🌌 **{p['name']}**'s Undying Vow flares — death itself yields! They stand at 1 HP, primed for a retaliation strike!")
+                    continue
                 p["down"] = True
                 self.game.db.set_hp(user_id, 1)
                 ward_name = self.game.check_and_consume_defeat_ward(user_id)
@@ -816,6 +845,17 @@ class TeamBattleEngine:
                 break
             target_id = random.choice(alive_ids)
             p = self.participants[target_id]
+            # Essence of the Undying Vow (see game/dao_essences.py) is the one exception this
+            # forced kill respects — deliberately, as the single top-realm-exclusive essence,
+            # even though every OTHER survival mechanic (dodge/block/fatal-hit-negation) is
+            # bypassed here by design. Still only once per encounter.
+            if self._try_undying_vow(target_id, p):
+                p["hp"] = 1
+                self._persist_hp(target_id, p)
+                self._log(f"🌌 **{p['name']}**'s Undying Vow flares — {enemy.monster.name}'s pressure should have been fatal, but death itself yields!")
+                enemy.dps_check_interval += enemy.monster.dps_check_interval_growth
+                enemy.dps_check_next_kill_round += enemy.dps_check_interval
+                continue
             p["hp"] = 0
             p["down"] = True
             self.game.db.set_hp(target_id, 1)
@@ -948,7 +988,11 @@ class TeamBattleEngine:
                 self._log(f"🩸 **{p['name']}** begins bleeding!")
             if enemy.monster.enrage_stack_cap > 0:
                 enemy.enrage_stacks = min(enemy.monster.enrage_stack_cap, enemy.enrage_stacks + 1)
-            if p["hp"] <= 0:
+            if p["hp"] <= 0 and self._try_undying_vow(target_id, p):
+                p["hp"] = 1
+                self._persist_hp(target_id, p)
+                self._log(f"🌌 **{p['name']}**'s Undying Vow flares — death itself yields! They stand at 1 HP, primed for a retaliation strike!")
+            elif p["hp"] <= 0:
                 p["down"] = True
                 self.game.db.set_hp(target_id, 1)
                 ward_name = self.game.check_and_consume_defeat_ward(target_id)

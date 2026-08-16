@@ -18,7 +18,7 @@ import random
 
 import discord
 
-from . import avatar, canon_gu, chargen, combat, equipment, realms
+from . import avatar, canon_gu, chargen, combat, dao_essences, equipment, realms
 from .base_view import GameView
 from .items import ITEMS
 from .monsters import MONSTERS, hunt_monster_name_for_realm, roll_loot
@@ -99,6 +99,11 @@ class BattlefieldView(GameView):
         # Nascent Soul Avatar's Soul Projection (see avatar.py) — independent of class,
         # gated on having a chosen avatar soul rather than a character_class.
         self.soul_projection_rounds_remaining = 0
+        # Essence of the Undying Vow (see game/dao_essences.py) -- resolved once here, consumed
+        # at most once per encounter via _undying_vow_used, naturally reset since a new
+        # BattlefieldView is constructed per wave-survival run.
+        self._has_undying_vow = dao_essences.UNDYING_VOW_NAME in self.game.db.get_dao_essences_picked(user_id)
+        self._undying_vow_used = False
 
         self.log: list = []
         self.status = "fighting"
@@ -186,6 +191,21 @@ class BattlefieldView(GameView):
         if not self.player["avatar_soul"]:
             return False
         return self.game.db.try_use_daily_avatar_fatal_block(self.user_id)
+
+    def _try_undying_vow(self) -> bool:
+        """Essence of the Undying Vow (see game/dao_essences.py) — once per ENCOUNTER (not
+        daily, unlike the two saves above), a lethal blow leaves the player at 1 HP instead.
+        No persistent player-facing debuff exists in this wave-survival loop to cleanse, so
+        this just grants the retaliation buff on top of the survival itself."""
+        if not self._has_undying_vow or self._undying_vow_used:
+            return False
+        self._undying_vow_used = True
+        self.game.db.add_buff(
+            self.user_id, dao_essences.UNDYING_VOW_RETALIATION_BUFF_NAME, 0,
+            dao_essences.UNDYING_VOW_RETALIATION_DURATION_SECONDS,
+            special_bonuses={"total_damage_pct": dao_essences.UNDYING_VOW_RETALIATION_BONUS_PCT},
+        )
+        return True
 
     def _soul_projection_bonuses(self) -> dict:
         """Extra amounts Soul Projection adds on top of the passive while active this round
@@ -299,6 +319,11 @@ class BattlefieldView(GameView):
                 heal_text = f" It recovers {format_number(result.heal)} HP."
             self._log_line(f"🩸 {self.monster.name} uses {self.monster.ability.name} for {format_number(result.damage)} damage{crit}.{heal_text}")
         if self.player_hp <= 0:
+            if self._try_undying_vow():
+                self.player_hp = 1
+                self._persist_hp()
+                self._log_line("🌌 **Essence of the Undying Vow** flares — death itself yields! You stand at 1 HP, primed for a retaliation strike!")
+                return
             flee_ward_name = self.game.check_and_consume_flee_ward(self.user_id)
             if flee_ward_name:
                 self.status = "fled"

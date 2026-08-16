@@ -11,9 +11,10 @@ from config import IMAGE_CACHE_DIR
 
 from . import (
     accessories_data, accessories_gen, alchemy, avatar, avatar_gear, black_heaven, blacksmith, canon_gu, chargen,
-    combat, dao_companion, dao_paths, discovery_gen, equipment, exploration, gathering, gu_pet, gu_pet_images, gu_types,
-    inheritance_ground_data, items, killer_move_gen, manual_data, manual_gen, monsters, professions, realms,
-    search_data, sects, split_body, tournament, treasure_hunt, white_heaven, world_boss, world_regions,
+    combat, dao_companion, dao_essences, dao_paths, discovery_gen, equipment, exploration, gathering, gu_pet,
+    gu_pet_images, gu_types, inheritance_ground_data, items, killer_move_gen, manual_data, manual_gen, monsters,
+    professions, realms, search_data, sects, split_body, tournament, treasure_hunt, white_heaven, world_boss,
+    world_regions,
 )
 from .content.monsters import blood_sea_ancestor
 from .content.monsters import black_heaven as black_heaven_monsters
@@ -547,6 +548,12 @@ class GameManager:
                 self.db.add_dao_marks(user_id, marks)
                 dao_marks_granted = marks
 
+        # A Dao Realm substage breakthrough earns a Dao Essence pick (see game/dao_essences.py /
+        # /dao_essence) — flagged here rather than granted automatically, same "point the player
+        # at a separate command" precedent as dao_marks_granted above, since a pick is a real
+        # choice among 9 named options, not a number to just add.
+        dao_essence_pick_available = success and self.get_dao_essence_status(user_id, player)["pick_available"]
+
         # "Gain a temporary stat boost after every breakthrough" (Epic Physique) — sized off
         # the player's fresh post-breakthrough stats, so it scales naturally with realm.
         epic_vigor_granted = False
@@ -639,6 +646,7 @@ class GameManager:
             "red_lotus_retried": red_lotus_retried,
             "boundless_foundation_stat": boundless_foundation_stat,
             "dao_marks_granted": dao_marks_granted,
+            "dao_essence_pick_available": dao_essence_pick_available,
         }
 
     # -- Economy: spirit stones -> primeval essence -> qi -----------------
@@ -1678,6 +1686,13 @@ class GameManager:
         # fire_burn_tick_damage's exact engine). Deliberately distinct from monsters.py's own
         # bleed_damage_pct, which is a MONSTER ability against players, the opposite direction.
         "gu_pet_bleed_damage_pct",
+        # Dao Realm Essences (see game/dao_essences.py / /dao_essence) — these 2 have no gear/
+        # manual/root/Dao-Path precedent anywhere else, only a Dao Essence can grant them:
+        # pvp_damage_pct (Essence of the Sovereign, consumed in pvp_view.py's/tournament.py's
+        # own damage_pct_bonus expressions), gu_pet_power_pct (Essence of the Myriad Gu,
+        # consumed directly inside this method's own Gu Pet Combat Mode block below since it
+        # scales a value that's itself only computed here).
+        "pvp_damage_pct", "gu_pet_power_pct",
     )
 
     # A manual's essence_recovery_pct (see manual_view.EFFECT_LABELS) is the exact same
@@ -1756,6 +1771,18 @@ class GameManager:
                     crafted_pct_totals[stat] += value
                 elif stat in special:
                     special[stat] += value
+        # Dao Realm Essences (see game/dao_essences.py / /dao_essence) — up to 4 permanently
+        # picked essences, each granting its full bonus (no scaling fraction, unlike Dao Paths
+        # above). Same luck_flat/crafted_pct_totals/special triage; kept as a local so the Gu
+        # Pet Combat Mode block further below can read gu_pet_power_pct off it directly.
+        dao_essence_totals = self.get_dao_essence_totals(user_id) if player_row else {}
+        for stat, value in dao_essence_totals.items():
+            if stat == "luck_flat":
+                stats["luck_stat"] = stats.get("luck_stat", 0) + value
+            elif stat in crafted_pct_totals:
+                crafted_pct_totals[stat] += value
+            elif stat in special:
+                special[stat] += value
         if player_row:
             for pct_key, flat_key in equipment.CRAFTED_GEAR_PCT_TO_FLAT.items():
                 pct = crafted_pct_totals[pct_key]
@@ -1896,9 +1923,13 @@ class GameManager:
             elif pet and pet["stage"] == gu_pet.STAGE_MATURE and pet["mode"] == gu_pet.MODE_COMBAT:
                 satiety_mult, _ = gu_pet.satiety_band(pet["satiety"])
                 combat_mult = gu_pet.rank_scaling(pet["rank"])["combat_multiplier"]
+                # Essence of the Myriad Gu's gu_pet_power_pct (see game/dao_essences.py) scales
+                # this exact block multiplicatively -- the only place a pet's Combat Mode power
+                # is computed, so it's the only place this key can be consumed.
+                essence_power_mult = 1 + dao_essence_totals.get("gu_pet_power_pct", 0)
                 for stat, base_value in gu_pet.COMBAT_SPECIALTY_BASE_VALUES.get(pet["species"], {}).items():
                     if stat in special:
-                        special[stat] += base_value * combat_mult * satiety_mult
+                        special[stat] += base_value * combat_mult * satiety_mult * essence_power_mult
         return {"stats": stats, **special}
 
     # -- Spirit Severing Dao Paths (see game/dao_paths.py / /dao_path, /transmute) ------------
@@ -1975,6 +2006,69 @@ class GameManager:
         if not self.db.allocate_dao_marks(user_id, path_name, amount):
             return False, "You don't have enough banked Dao Marks, or that would push the path over its 2,000 cap."
         return True, f"Allocated **{format_number(amount)}** Dao Marks into **{path_name}**."
+
+    # -- Dao Realm Essences (see game/dao_essences.py / /dao_essence) -------------------------
+    # Dao Realm is realms.GREAT_REALMS' current last entry -- resolved by name once here rather
+    # than hardcoding its index, same reasoning as SPIRIT_SEVERING_GREAT_REALM_INDEX above.
+
+    DAO_REALM_GREAT_REALM_INDEX = next(
+        i for i, great_realm in enumerate(realms.GREAT_REALMS) if great_realm["name"] == "Dao Realm"
+    )
+
+    def has_reached_dao_realm(self, player_row: dict) -> bool:
+        return realms.STAGES[player_row["realm_index"]].great_realm_index >= self.DAO_REALM_GREAT_REALM_INDEX
+
+    def get_dao_essence_eligible_count(self, player_row: dict) -> int:
+        """How many Dao Realm substage breakthroughs (Early/Middle/Late/Peak) this player has
+        reached so far -- 0 until Dao Realm, up to dao_essences.DAO_ESSENCE_PICK_LIMIT (4) once
+        Peak Dao Realm is reached. Name-keyed off realms.STAGES rather than a hardcoded
+        realm_index range, mirroring dao_paths.breakthrough_marks' own name-keyed philosophy."""
+        return sum(1 for s in realms.STAGES if s.great_realm_name == "Dao Realm" and s.index <= player_row["realm_index"])
+
+    def get_dao_essence_totals(self, user_id: int) -> dict:
+        """Sums each PICKED essence's full bonus dict (no scaling fraction, unlike Dao Path
+        investment above — a pick is all-or-nothing) into one combined dict, additive per key
+        exactly like every other compute_equipment_bonuses source."""
+        picked = self.db.get_dao_essences_picked(user_id)
+        totals: dict = {}
+        for essence_name in picked:
+            spec = dao_essences.DAO_ESSENCES.get(essence_name)
+            if not spec:
+                continue
+            for key, value in spec.bonus.items():
+                totals[key] = totals.get(key, 0.0) + value
+        return totals
+
+    def get_dao_essence_status(self, user_id: int, player_row: Optional[dict] = None) -> dict:
+        """Read-only snapshot for /dao_essence's view and attempt_breakthrough's post-breakthrough
+        check: how many picks the player has earned, how many they've spent, and which of the 9
+        named essences are still available to choose from."""
+        if player_row is None:
+            player_row = self.db.get_player_row(user_id)
+        picked = self.db.get_dao_essences_picked(user_id)
+        eligible = self.get_dao_essence_eligible_count(player_row) if player_row else 0
+        available_names = [name for name in dao_essences.DAO_ESSENCES if name not in picked]
+        return {
+            "picked": picked,
+            "eligible": eligible,
+            "pick_available": eligible > len(picked),
+            "available_names": available_names,
+        }
+
+    def pick_dao_essence(self, user_id: int, essence_name: str):
+        """Permanently locks in one of the 9 Dao Essences -- see GameDatabase.pick_dao_essence for
+        the already-picked/over-cap guard; this method additionally gates on whether the player
+        has actually earned a pick yet (breakthrough count), which the DB layer can't know."""
+        if essence_name not in dao_essences.DAO_ESSENCES:
+            return False, f"**{essence_name}** isn't a Dao Essence."
+        status = self.get_dao_essence_status(user_id)
+        if not status["pick_available"]:
+            return False, "You have no Dao Essence pick available right now."
+        if essence_name not in status["available_names"]:
+            return False, f"You've already picked **{essence_name}**."
+        if not self.db.pick_dao_essence(user_id, essence_name):
+            return False, "That pick couldn't be completed."
+        return True, f"You have permanently claimed **{essence_name}**."
 
     def get_transmute_status(self, user_id: int) -> dict:
         """Read-only -- for /transmute's view to show remaining charges without spending one."""
@@ -6813,6 +6907,14 @@ class GameManager:
         return "none", latest
 
     def _run_and_complete_tournament(self, tournament_id: int, participants: list) -> dict:
+        # Essence of the Undying Vow (see game/dao_essences.py) -- checked FRESH here rather
+        # than baked into the frozen-at-signup snapshot (unlike every other stat/special bonus
+        # in that snapshot), since it's a permanent essence pick, not a build-time gear/buff
+        # snapshot -- correctly reflects a pick made after signup but before the battle
+        # actually fires, and stays consistent across the crash-recovery re-run path too (both
+        # callers of this method route through here).
+        for p in participants:
+            p["has_undying_vow"] = dao_essences.UNDYING_VOW_NAME in self.db.get_dao_essences_picked(p["user_id"])
         result = tournament.run_battle_royale(participants)
         placements = []
         for entry in result["placements"]:

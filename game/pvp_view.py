@@ -212,7 +212,10 @@ class PvPView(GameView):
 
     def _do_attack(self, str_multiplier: float = 1.0, label: str = "Attack", guaranteed_hit: bool = False, is_technique: bool = False):
         bonuses = self._equipment_bonuses()
-        damage_pct_bonus = (bonuses.get("technique_damage_pct", 0) if is_technique else bonuses.get("physical_damage_pct", 0)) + bonuses.get("total_damage_pct", 0)
+        damage_pct_bonus = (
+            (bonuses.get("technique_damage_pct", 0) if is_technique else bonuses.get("physical_damage_pct", 0))
+            + bonuses.get("total_damage_pct", 0) + bonuses.get("pvp_damage_pct", 0)
+        )
         result = combat.resolve_attack(
             self._player_combat_stats(), self.opponent_stats, str_multiplier=str_multiplier, guaranteed_hit=guaranteed_hit,
             crit_chance_bonus=bonuses.get("crit_chance_pct", 0), crit_damage_bonus=bonuses.get("crit_damage_pct", 0),

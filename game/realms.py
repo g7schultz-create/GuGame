@@ -48,6 +48,10 @@ GREAT_REALMS = [
         "name": "Ancient Realm",
         "description": "Body and soul approach perfection. Possess the power to influence the world itself.",
     },
+    {
+        "name": "Dao Realm",
+        "description": "Transcend the boundary between mortal cultivation and true Dao — the essence of existence itself answers your call.",
+    },
 ]
 
 SUB_STAGES = ["Early", "Middle", "Late", "Peak"]

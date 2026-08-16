@@ -15,7 +15,7 @@ the "N combatants, last one standing" loop around it.
 import random
 from typing import Optional
 
-from . import chargen, combat, dao_paths, equipment
+from . import chargen, combat, dao_essences, dao_paths, equipment
 
 # -- Lifecycle timing -------------------------------------------------------------------------
 
@@ -51,7 +51,7 @@ def _attack_kwargs(attacker_snapshot: dict, defender_snapshot: dict, defender_hp
     return dict(
         crit_chance_bonus=a.get("crit_chance_pct", 0), crit_damage_bonus=a.get("crit_damage_pct", 0),
         lifesteal_percent=a.get("lifesteal_percent", 0),
-        damage_pct_bonus=a.get("physical_damage_pct", 0) + a.get("total_damage_pct", 0),
+        damage_pct_bonus=a.get("physical_damage_pct", 0) + a.get("total_damage_pct", 0) + a.get("pvp_damage_pct", 0),
         armor_penetration_pct=a.get("armor_penetration_pct", 0),
         dodge_chance_bonus=d.get("dodge_chance_pct", 0), ignore_chance=d.get("ignore_attack_chance", 0),
         incoming_reduction=incoming_reduction,
@@ -69,10 +69,27 @@ def _describe_event(round_num: int, attacker_name: str, defender_name: str, resu
     return f"Round {round_num}: {attacker_name} hits {defender_name} for {result.damage} damage{crit}."
 
 
+def _try_undying_vow(defender: dict, target_id, undying_vow_used: set, burn_state: dict, gu_pet_bleed_state: dict, round_num: int, events: list) -> bool:
+    """True (and marks the charge used) if this elimination was saved by Essence of the
+    Undying Vow -- see run_battle_royale's own docstring for the full mechanic. Shared by all
+    3 elimination sites (attack, fire burn tick, Gu Pet bleed tick)."""
+    if not defender.get("has_undying_vow") or target_id in undying_vow_used:
+        return False
+    undying_vow_used.add(target_id)
+    defender["hp"] = 1.0
+    burn_state.pop(target_id, None)
+    gu_pet_bleed_state.pop(target_id, None)
+    defender["_retaliation_bonus"] = dao_essences.UNDYING_VOW_RETALIATION_BONUS_PCT
+    events.append(f"Round {round_num}: 🌌 {defender['name']}'s Undying Vow flares — death itself yields!")
+    return True
+
+
 def run_battle_royale(participants: list, rng: Optional[random.Random] = None) -> dict:
-    """participants: [{"user_id", "name", "snapshot"}, ...] where snapshot is
+    """participants: [{"user_id", "name", "snapshot", "has_undying_vow"}, ...] where snapshot is
     {"stats": {atk_stat,str_stat,def_stat,spd_stat,luck_stat,hp}, "special": {...}, "race",
-    "physique_tier"} -- see GameManager._tournament_combat_snapshot. Returns {"events": [str],
+    "physique_tier"} -- see GameManager._tournament_combat_snapshot -- and has_undying_vow is a
+    plain bool checked FRESH by the caller (GameManager._run_and_complete_tournament), not part
+    of the frozen snapshot (see that method's own comment on why). Returns {"events": [str],
     "placements": [{"rank","user_id","name"}, ...] (1=winner..N=last), "rounds_used", "capped"}.
 
     Each round: shuffle the currently-alive user_id list (no fixed turn-order advantage), then
@@ -81,11 +98,22 @@ def run_battle_royale(participants: list, rng: Optional[random.Random] = None) -
     attacker only ever damages someone else, never themself, so a round can eliminate at most
     (alive_count - 1) targets: the pool shrinks but can never reach 0, guaranteeing the
     `while len(alive) > 1` loop always terminates with exactly one eventual survivor (barring
-    the TOURNAMENT_MAX_ROUNDS safety cap, tiebroken deterministically by remaining HP fraction)."""
+    the TOURNAMENT_MAX_ROUNDS safety cap, tiebroken deterministically by remaining HP fraction).
+
+    Essence of the Undying Vow (see game/dao_essences.py) is the one exception to "eliminated
+    means gone" -- once per battle per holder, whatever would eliminate them instead leaves them
+    at 1 HP, cleanses their burn/bleed DoTs, and arms a one-shot retaliation damage bonus on
+    their own next attack (read once, then cleared -- see the attack loop below). This is a pure
+    in-memory function with no DB access mid-call, so the buff can't ride GameDatabase.add_buff
+    the way every other combat site's version of this essence does -- a local flag on the
+    participant dict is the equivalent for the duration of just this one function call."""
     r = rng or random
     alive = {
-        p["user_id"]: {"name": p["name"], "hp": float(p["snapshot"]["stats"]["hp"]),
-                       "max_hp": max(1.0, float(p["snapshot"]["stats"]["hp"])), "snapshot": p["snapshot"]}
+        p["user_id"]: {
+            "name": p["name"], "hp": float(p["snapshot"]["stats"]["hp"]),
+            "max_hp": max(1.0, float(p["snapshot"]["stats"]["hp"])), "snapshot": p["snapshot"],
+            "has_undying_vow": p.get("has_undying_vow", False),
+        }
         for p in participants
     }
     # Fire Dao Path burn (see dao_paths.fire_burn_tick_damage) -- target user_id -> [damage_
@@ -96,6 +124,8 @@ def run_battle_royale(participants: list, rng: Optional[random.Random] = None) -
     # gu_pet_bleed_damage_pct) -- same shape as burn_state above, a second independent
     # damage-over-time pool (see the bleed-tick block below).
     gu_pet_bleed_state: dict = {}
+    # Essence of the Undying Vow -- user_ids who've already burned their once-per-battle charge.
+    undying_vow_used: set = set()
     events, eliminated_order, rounds_used = [], [], 0
     while len(alive) > 1 and rounds_used < TOURNAMENT_MAX_ROUNDS:
         rounds_used += 1
@@ -107,6 +137,11 @@ def run_battle_royale(participants: list, rng: Optional[random.Random] = None) -
             target_id = r.choice([uid for uid in alive if uid != attacker_id])
             attacker, defender = alive[attacker_id], alive[target_id]
             kwargs = _attack_kwargs(attacker["snapshot"], defender["snapshot"], defender["hp"] / defender["max_hp"])
+            # Essence of the Undying Vow's retaliation bonus (see _try_undying_vow) -- armed by
+            # this participant's own most recent revive, consumed on their very next attack.
+            retaliation_bonus = attacker.pop("_retaliation_bonus", 0)
+            if retaliation_bonus:
+                kwargs["damage_pct_bonus"] += retaliation_bonus
             result = combat.resolve_attack(attacker["snapshot"]["stats"], defender["snapshot"]["stats"], **kwargs)
             events.append(_describe_event(rounds_used, attacker["name"], defender["name"], result))
             if result.hit and not result.dodged and not result.ignored:
@@ -123,7 +158,7 @@ def run_battle_royale(participants: list, rng: Optional[random.Random] = None) -
                     tick_damage = dao_paths.fire_burn_tick_damage(result.damage, gu_pet_bleed_pct)
                     if tick_damage > 0:
                         gu_pet_bleed_state[target_id] = [tick_damage, dao_paths.FIRE_BURN_TICKS]
-                if defender["hp"] <= 0:
+                if defender["hp"] <= 0 and not _try_undying_vow(defender, target_id, undying_vow_used, burn_state, gu_pet_bleed_state, rounds_used, events):
                     eliminated_order.append(target_id)
                     del alive[target_id]
                     burn_state.pop(target_id, None)
@@ -143,7 +178,7 @@ def run_battle_royale(participants: list, rng: Optional[random.Random] = None) -
             actual = min(defender["hp"], tick_damage)
             defender["hp"] -= actual
             events.append(f"Round {rounds_used}: {defender['name']} burns for {actual:.0f} damage.")
-            if defender["hp"] <= 0:
+            if defender["hp"] <= 0 and not _try_undying_vow(defender, target_id, undying_vow_used, burn_state, gu_pet_bleed_state, rounds_used, events):
                 eliminated_order.append(target_id)
                 del alive[target_id]
                 burn_state.pop(target_id, None)
@@ -167,7 +202,7 @@ def run_battle_royale(participants: list, rng: Optional[random.Random] = None) -
             actual = min(defender["hp"], tick_damage)
             defender["hp"] -= actual
             events.append(f"Round {rounds_used}: {defender['name']} bleeds for {actual:.0f} damage.")
-            if defender["hp"] <= 0:
+            if defender["hp"] <= 0 and not _try_undying_vow(defender, target_id, undying_vow_used, burn_state, gu_pet_bleed_state, rounds_used, events):
                 eliminated_order.append(target_id)
                 del alive[target_id]
                 gu_pet_bleed_state.pop(target_id, None)

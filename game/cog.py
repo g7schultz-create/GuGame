@@ -37,6 +37,7 @@ from .accessories_view import AccessoriesView
 from .sell_view import SellView
 from .tournament_view import TournamentView, _placement_label, cooldown_remaining_seconds, rest_placement_fields
 from .dao_path_view import DaoPathView
+from .dao_essence_view import DaoEssenceView
 from .transmute_view import TransmuteView
 from .killer_move_view import KillerMoveView
 from .raid import AbandonRaidView, RaidView
@@ -92,6 +93,7 @@ GREAT_REALM_ROLE_COLOR = {
     "Spirit Severing": discord.Color.dark_purple(),
     "Dao Seeking": discord.Color.gold(),
     "Ancient Realm": discord.Color.red(),
+    "Dao Realm": discord.Color.fuchsia(),
 }
 
 
@@ -1936,6 +1938,23 @@ class GameCog(commands.Cog):
             )
             return
         view = DaoPathView( interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
+
+    @app_commands.command(name="dao_essence", description="View and pick your permanent Dao Realm Essences")
+    @app_commands.guilds(GUILD)
+    async def dao_essence(self, interaction: discord.Interaction):
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
+        if not player["character_confirmed"]:
+            await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
+            return
+        if not self.game.has_reached_dao_realm(player):
+            await interaction.response.send_message(
+                "🔒 Dao Essences awaken once you reach **Dao Realm** — keep cultivating!",
+                ephemeral=True,
+            )
+            return
+        view = DaoEssenceView( interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 

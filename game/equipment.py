@@ -443,6 +443,11 @@ SPECIAL_STAT_TEXT = {
     "retaliation_damage_pct": lambda v: f"+{v * 100:.0f}% Damage Reflected",
     "boss_damage_bonus_pct": lambda v: f"+{v * 100:.0f}% Boss Damage",
     "dodge_cap_bonus_pct": lambda v: f"+{v * 100:.0f}% Dodge Cap",
+    # Dao Realm Essences (see game/dao_essences.py / /dao_essence) — the 2 keys with no other
+    # gear/manual/Dao-Path precedent, surfaced here too so dao_essence_view.py's own bonus
+    # display renders with consistent wording, same reasoning as the Dao Path keys above.
+    "pvp_damage_pct": lambda v: f"+{v * 100:.0f}% PvP Damage",
+    "gu_pet_power_pct": lambda v: f"+{v * 100:.0f}% Gu Pet Power",
 }
 
 
