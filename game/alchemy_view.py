@@ -6,6 +6,29 @@ from . import alchemy, items, professions
 from .base_view import GameView
 
 
+class AlchemyCraftQuantityModal(discord.ui.Modal, title="Craft Custom Amount"):
+    quantity_input = discord.ui.TextInput(label="How many?", placeholder="e.g. 25", max_length=12)
+
+    def __init__(self, alchemy_view: "AlchemyView", max_quantity: int):
+        super().__init__()
+        self.alchemy_view = alchemy_view
+        self.max_quantity = max_quantity
+        self.quantity_input.placeholder = f"1-{max_quantity}"
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw = self.quantity_input.value.strip()
+        try:
+            quantity = int(raw)
+        except ValueError:
+            await interaction.response.send_message(f"'{raw}' isn't a whole number.", ephemeral=True)
+            return
+        if quantity < 1:
+            await interaction.response.send_message("Enter at least 1.", ephemeral=True)
+            return
+        quantity = min(quantity, self.max_quantity)
+        await self.alchemy_view._perform_craft(interaction, quantity)
+
+
 class AlchemyView(GameView):
     def __init__(self, user_id: int, game, display_name: str):
         super().__init__(timeout=120)
@@ -85,11 +108,11 @@ class AlchemyView(GameView):
         craft1.callback = self._make_craft_callback(1)
         self.add_item(craft1)
 
-        craft10 = discord.ui.Button(
-            label="Make 10", emoji="⏩", style=discord.ButtonStyle.success, row=2, disabled=locked or max_batch < 10,
+        craft_custom = discord.ui.Button(
+            label="Craft X", emoji="🔢", style=discord.ButtonStyle.primary, row=2, disabled=locked or max_batch < 1,
         )
-        craft10.callback = self._make_craft_callback(10)
-        self.add_item(craft10)
+        craft_custom.callback = self._make_craft_custom_callback(max_batch)
+        self.add_item(craft_custom)
 
         craft_all = discord.ui.Button(
             label=f"Make All ({max_batch})", emoji="⏭️", style=discord.ButtonStyle.success, row=2, disabled=locked or max_batch < 1,
@@ -115,21 +138,30 @@ class AlchemyView(GameView):
 
     def _make_craft_callback(self, attempts: int):
         async def callback(interaction: discord.Interaction):
-            # Make All can be many craft_pill calls back-to-back (see
-            # GameManager.craft_pill_multiple) -- defer first so we have up to 15 minutes to
-            # finish instead of Discord's normal 3-second ack window (same fix as
-            # premium_view.py's "until broke" reroll / InventoryView's Use All). Now also off
-            # the event loop entirely via asyncio.to_thread.
-            await interaction.response.defer()
-            attempted, successes, last_result = await asyncio.to_thread(
-                self.game.craft_pill_multiple, self.user_id, self.display_name, self.selected_type, self.selected_tier, attempts,
-            )
-            self.last_result = self._format_craft_result(attempted, successes, last_result)
-            await asyncio.to_thread(self._build_components)
-            embed = await asyncio.to_thread(self.build_embed)
-            await interaction.edit_original_response(embed=embed, view=self)
+            await self._perform_craft(interaction, attempts)
 
         return callback
+
+    def _make_craft_custom_callback(self, max_quantity: int):
+        async def callback(interaction: discord.Interaction):
+            await interaction.response.send_modal(AlchemyCraftQuantityModal(self, max_quantity))
+
+        return callback
+
+    async def _perform_craft(self, interaction: discord.Interaction, attempts: int):
+        # Make All (and now Craft X) can be many craft_pill calls back-to-back (see
+        # GameManager.craft_pill_multiple) -- defer first so we have up to 15 minutes to
+        # finish instead of Discord's normal 3-second ack window (same fix as
+        # premium_view.py's "until broke" reroll / InventoryView's Use All). Now also off
+        # the event loop entirely via asyncio.to_thread.
+        await interaction.response.defer()
+        attempted, successes, last_result = await asyncio.to_thread(
+            self.game.craft_pill_multiple, self.user_id, self.display_name, self.selected_type, self.selected_tier, attempts,
+        )
+        self.last_result = self._format_craft_result(attempted, successes, last_result)
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.edit_original_response(embed=embed, view=self)
 
     def _format_craft_result(self, attempted: int, successes: int, last_result: dict) -> str:
         if attempted == 0:
