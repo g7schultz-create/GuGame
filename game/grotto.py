@@ -150,26 +150,31 @@ def level_up_recipe(current_level: int) -> Optional[Dict[str, int]]:
 
 GROTTO_MAX_INK_MEN = 3
 INK_MAN_TICK_INTERVAL_SECONDS = 24 * 3600  # one refine attempt/real day, matches Gu Pet feeding's own cadence
-INK_MAN_RECRUIT_STONES_BASE = 2000
+INK_MAN_RECRUIT_STONES_BASE = 5000
 
 # Manual Ink/Insight Dust -- the two manual currencies (player columns, spent via
 # GameDatabase.spend_manual_ink/spend_insight_dust, same as spirit_stones -- NOT inventory
-# items) -- fitting for an Ink Man, tapering cost per additional one already owned (0-indexed,
-# the FIRST recruit uses already_owned=0).
-INK_MAN_RECRUIT_INK_BASE = 40
-INK_MAN_RECRUIT_DUST_BASE = 40
+# items) -- fitting for an Ink Man.
+INK_MAN_RECRUIT_INK_BASE = 60
+INK_MAN_RECRUIT_DUST_BASE = 60
+
+# Retuned 2026-08-17 (per explicit request: "make it expensive... scaling more with the more
+# you have") -- QUADRATIC per-recruit scaling (already_owned+1)**2 instead of the old plain
+# linear (already_owned+1), on top of a higher base. The 2nd Ink Man now costs 4x the 1st and
+# the 3rd costs 9x the 1st (was a flat 2x/3x), so hitting the GROTTO_MAX_INK_MEN=3 cap is a
+# real escalating investment rather than "the same purchase, three times."
 
 
 def ink_man_recruit_ink_cost(already_owned: int) -> int:
-    return INK_MAN_RECRUIT_INK_BASE * (already_owned + 1)
+    return INK_MAN_RECRUIT_INK_BASE * (already_owned + 1) ** 2
 
 
 def ink_man_recruit_dust_cost(already_owned: int) -> int:
-    return INK_MAN_RECRUIT_DUST_BASE * (already_owned + 1)
+    return INK_MAN_RECRUIT_DUST_BASE * (already_owned + 1) ** 2
 
 
 def ink_man_recruit_stones_cost(already_owned: int) -> int:
-    return INK_MAN_RECRUIT_STONES_BASE * (already_owned + 1)
+    return INK_MAN_RECRUIT_STONES_BASE * (already_owned + 1) ** 2
 
 
 # -- Hairy Men (see GameManager.recruit_hairy_man/assign_hairy_man/check_and_complete_hairy_
@@ -177,7 +182,7 @@ def ink_man_recruit_stones_cost(already_owned: int) -> int:
 
 GROTTO_MAX_HAIRY_MEN = 3
 HAIRY_MAN_TICK_INTERVAL_SECONDS = 24 * 3600  # same daily cadence as Ink Men
-HAIRY_MAN_RECRUIT_STONES_BASE = 3000
+HAIRY_MAN_RECRUIT_STONES_BASE = 6000
 
 # Same two catalysts Gu Pet refinement and Avatar leveling already use -- Hairy Man's own
 # established in-game lore is already Gu-refinement-flavored (see character_data.py's
@@ -185,14 +190,17 @@ HAIRY_MAN_RECRUIT_STONES_BASE = 3000
 SOUL_NOURISHING_PILL = "Soul Nourishing Pill"
 SOUL_CRYSTAL = "Soul Crystal"
 
+# Same quadratic-scaling retune as Ink Men above (see that comment) -- step**2 instead of a
+# plain step, on top of a higher stones base.
+
 
 def hairy_man_recruit_recipe(already_owned: int) -> Dict[str, int]:
     step = already_owned + 1
-    return {SOUL_NOURISHING_PILL: 6 * step, SOUL_CRYSTAL: 2 * step}
+    return {SOUL_NOURISHING_PILL: 6 * step * step, SOUL_CRYSTAL: 2 * step * step}
 
 
 def hairy_man_recruit_stones_cost(already_owned: int) -> int:
-    return HAIRY_MAN_RECRUIT_STONES_BASE * (already_owned + 1)
+    return HAIRY_MAN_RECRUIT_STONES_BASE * (already_owned + 1) ** 2
 
 
 GU_LEGENDARY_PLUS_QUALITIES = ("Legendary", "Mythic", "Immortal")
