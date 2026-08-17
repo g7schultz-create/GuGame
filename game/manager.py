@@ -3022,7 +3022,12 @@ class GameManager:
 
         effects = move["effects"]
         if move["kind"] == "essence":
-            gained = self._restore_essence_pct(user_id, effects["pct"], settled)
+            # allow_overflow=True -- a Killer Move is a deliberate, cooldown/Qi-gated activation
+            # (unlike the passive equipment-bonus top-ups restore_essence_percent's docstring
+            # warns off overflow for), so it shouldn't get partially wasted just because the
+            # player wasn't already sitting well below their essence cap, matching the same
+            # never-waste-it precedent items.py's essence pills/crystals already use.
+            gained = self._restore_essence_pct(user_id, effects["pct"], allow_overflow=True)
             return True, f"**{move['name']}**: restored {format_number(gained, decimals=0)} primeval essence."
         if move["kind"] == "cultivation":
             self.db.add_buff(user_id, move["name"], effects["pct"], effects["duration_seconds"])
@@ -4800,7 +4805,7 @@ class GameManager:
             if charges_used >= max_charges:
                 return False, f"**{affix.name}** is out of charges for today."
             self.db.set_accessory_instance_charges(instance_id, charges_used + 1, now if charges_used == 0 else instance["charges_reset_ts"])
-            gained = self._restore_essence_pct(user_id, params.get("pct", 0.1), player)
+            gained = self._restore_essence_pct(user_id, params.get("pct", 0.1))
             return True, f"**{affix.name}**: restored {format_number(gained, decimals=0)} primeval essence ({max_charges - charges_used - 1} charge(s) left today)."
 
         if affix.effect_key == "search_reroll_daily":
@@ -4881,11 +4886,8 @@ class GameManager:
 
         return False, f"**{affix.name}** doesn't have a manual activation — it triggers automatically."
 
-    def _restore_essence_pct(self, user_id: int, pct: float, player: dict) -> float:
-        effective_max = self.db.get_effective_max_essence(user_id)
-        gained = min(effective_max - player["primeval_essence"], effective_max * pct)
-        if gained > 0:
-            self.db.add_primeval_essence(user_id, gained)
+    def _restore_essence_pct(self, user_id: int, pct: float, allow_overflow: bool = False) -> float:
+        gained, _, _ = self.db.restore_essence_percent(user_id, pct, allow_overflow=allow_overflow)
         return gained
 
     # -- Rank 6-7 Unique-rarity signature effects (hand-authored per item, per the design
