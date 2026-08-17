@@ -360,6 +360,12 @@ class GameDatabase:
         "split_body_started_ts": "INTEGER DEFAULT 0",
         "split_body_notified": "INTEGER DEFAULT 0",
 
+        # Grotto (see game/grotto.py / /grotto) -- 0 = not yet founded. A single level column
+        # is enough (no separate "founded" flag needed, unlike avatar_level which starts at 1
+        # since every player already has SOME avatar state) since grotto.grotto_bonuses(0)
+        # already returns {} cleanly.
+        "grotto_level": "INTEGER DEFAULT 0",
+
         # Spirit Severing Dao Paths (see game/dao_paths.py / /dao_path) -- dao_marks_banked is
         # unallocated marks waiting to be spent; dao_path_marks is a JSON dict {path_name: marks
         # invested}, same "one JSON blob column" idiom as pending_breakthrough_boost/unique_choice
@@ -591,6 +597,11 @@ class GameDatabase:
         equipped_columns = {row[1] for row in cur.execute("PRAGMA table_info(equipped)").fetchall()}
         if "gear_id" not in equipped_columns:
             cur.execute("ALTER TABLE equipped ADD COLUMN gear_id INTEGER")
+        # Nullable pointer into gu_instances (see below) -- set only when the Gu slot holds a
+        # Hairy-Man-blessed instance instead of a catalog EQUIPMENT item. Same "item_name kept
+        # as a display-only cache, the id column is authoritative" idiom as gear_id above.
+        if "gu_instance_id" not in equipped_columns:
+            cur.execute("ALTER TABLE equipped ADD COLUMN gu_instance_id INTEGER")
 
         # The Nascent Soul Avatar's OWN independent gear slots (see game/avatar_gear.py) --
         # a second, separate equip table from `equipped` above. item_name is kept as a
@@ -688,6 +699,53 @@ class GameDatabase:
         CREATE TABLE IF NOT EXISTS gu_pet_image_cache (
             cache_key TEXT PRIMARY KEY,
             image_path TEXT,
+            created_ts INTEGER
+        )
+        """)
+
+        # Grotto helpers (see game/grotto.py / /grotto). Ink Men passively work through a
+        # player's owned manual-page duplicates (see GameManager.check_and_complete_ink_men_
+        # work, which just calls the existing refine_page for them) -- assigned_page_id is
+        # NULL while idle. next_tick_ts is 0 while idle (never compared against 'now' by the
+        # sweep unless a page is actually assigned).
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS grotto_ink_men (
+            ink_man_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER,
+            assigned_page_id TEXT DEFAULT NULL,
+            next_tick_ts INTEGER DEFAULT 0,
+            created_ts INTEGER
+        )
+        """)
+
+        # Hairy Men passively bless ONE specific Legendary+ Gu instance over time (see
+        # GameManager.check_and_complete_hairy_men_work) -- same idle/assigned shape as Ink
+        # Men above, just pointing at a gu_instances row instead of a page_id.
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS grotto_hairy_men (
+            hairy_man_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER,
+            assigned_instance_id INTEGER DEFAULT NULL,
+            next_tick_ts INTEGER DEFAULT 0,
+            created_ts INTEGER
+        )
+        """)
+
+        # Individually-tracked Gu instances -- ONLY created the moment a Hairy Man is assigned
+        # to bless a specific Legendary+ Gu copy (see GameManager.assign_hairy_man). Every
+        # OTHER Gu in the game stays a plain fungible item_name+quantity stack against the
+        # static equipment.EQUIPMENT catalog, completely untouched by this table's existence --
+        # same "static catalog + owned-instance row" split as crafted_gear/accessory_artifact_
+        # instances, just opt-in per copy instead of universal. bonus_stat_bonuses is the
+        # ACCRUED extra on top of equipment.EQUIPMENT[item_name].stat_bonuses (the base never
+        # changes), scaled by blessing_ticks (see grotto.py's own blessing constants).
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS gu_instances (
+            instance_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER,
+            item_name TEXT,
+            bonus_stat_bonuses TEXT DEFAULT '{}',
+            blessing_ticks INTEGER DEFAULT 0,
             created_ts INTEGER
         )
         """)
@@ -1447,6 +1505,15 @@ class GameDatabase:
                 satiety_mult, _ = _gu_pet.satiety_band(current_satiety)
                 pet_cultivation_pct = json.loads(pet_row["stat_bonuses"]).get("cultivation_speed_pct", 0)
                 total_manual_pct += pet_cultivation_pct * satiety_mult * 100
+
+        # Grotto (see game/grotto.py / /grotto) -- by design the single largest passive
+        # cultivation source in the game, so it rides this SAME capped pool (not
+        # GameManager.compute_equipment_bonuses' generic display-only pool -- that mistake has
+        # already bitten avatar gear/soul AND Gu Pet cultivation speed, see the comments above).
+        from . import grotto as _grotto
+
+        if player["grotto_level"]:
+            total_manual_pct += _grotto.grotto_bonuses(player["grotto_level"]).get("cultivation_speed_pct", 0) * 100
 
         player_rank = _realms.STAGES[player["realm_index"]].great_realm_index + 1
         soft_cap = _search_data.CULTIVATION_SOFT_CAP_BY_PLAYER_RANK.get(player_rank, 100)
@@ -2944,6 +3011,16 @@ class GameDatabase:
         con.close()
         return level
 
+    def set_grotto_level(self, user_id: int, level: int) -> int:
+        """Clamps to [0, grotto.GROTTO_MAX_LEVEL's 10] and returns the level actually stored,
+        same idiom as set_avatar_level."""
+        level = max(0, min(10, level))
+        con = self.connect()
+        con.execute("UPDATE players SET grotto_level = ? WHERE user_id = ?", (level, user_id))
+        con.commit()
+        con.close()
+        return level
+
     def get_player_realm_index(self, user_id: int) -> int:
         """Read-only realm_index lookup for callers (like compute_equipment_bonuses) that
         don't have the player's display name handy — unlike get_or_create_player, never
@@ -3860,16 +3937,17 @@ class GameDatabase:
         cur.execute("SELECT 1 FROM equipped WHERE user_id = ? AND slot_key = ?", (user_id, slot_key))
         if cur.fetchone() is None:
             cur.execute(
-                "INSERT INTO equipped (user_id, slot_key, item_name, gear_id, accessory_instance_id) VALUES (?, ?, ?, NULL, NULL)",
+                "INSERT INTO equipped (user_id, slot_key, item_name, gear_id, accessory_instance_id, gu_instance_id) VALUES (?, ?, ?, NULL, NULL, NULL)",
                 (user_id, slot_key, item_name),
             )
         else:
-            # gear_id/accessory_instance_id are reset to NULL here too — equipping an
-            # ordinary catalog item over a slot that previously held a rolled crafted_gear
-            # or accessory/artifact instance must stop that instance's effects from
-            # counting (see compute_equipment_bonuses), not just change the display name.
+            # gear_id/accessory_instance_id/gu_instance_id are reset to NULL here too —
+            # equipping an ordinary catalog item over a slot that previously held a rolled
+            # crafted_gear, accessory/artifact, or blessed Gu instance must stop that
+            # instance's effects from counting (see compute_equipment_bonuses), not just
+            # change the display name.
             cur.execute(
-                "UPDATE equipped SET item_name = ?, gear_id = NULL, accessory_instance_id = NULL WHERE user_id = ? AND slot_key = ?",
+                "UPDATE equipped SET item_name = ?, gear_id = NULL, accessory_instance_id = NULL, gu_instance_id = NULL WHERE user_id = ? AND slot_key = ?",
                 (item_name, user_id, slot_key),
             )
         con.commit()
@@ -3882,9 +3960,15 @@ class GameDatabase:
         cur = con.cursor()
         cur.execute("SELECT 1 FROM equipped WHERE user_id = ? AND slot_key = ?", (user_id, slot_key))
         if cur.fetchone() is None:
-            cur.execute("INSERT INTO equipped (user_id, slot_key, item_name, gear_id) VALUES (?, ?, ?, ?)", (user_id, slot_key, display_name, gear_id))
+            cur.execute(
+                "INSERT INTO equipped (user_id, slot_key, item_name, gear_id, accessory_instance_id, gu_instance_id) VALUES (?, ?, ?, ?, NULL, NULL)",
+                (user_id, slot_key, display_name, gear_id),
+            )
         else:
-            cur.execute("UPDATE equipped SET item_name = ?, gear_id = ? WHERE user_id = ? AND slot_key = ?", (display_name, gear_id, user_id, slot_key))
+            cur.execute(
+                "UPDATE equipped SET item_name = ?, gear_id = ?, accessory_instance_id = NULL, gu_instance_id = NULL WHERE user_id = ? AND slot_key = ?",
+                (display_name, gear_id, user_id, slot_key),
+            )
         con.commit()
         con.close()
 
@@ -4149,6 +4233,171 @@ class GameDatabase:
         con.commit()
         con.close()
 
+    # -- Grotto (see game/grotto.py / /grotto) -- gu_instances (Hairy-Man-blessed Gu copies),
+    # Ink Men, and Hairy Men themselves (see setup()'s own docstrings for each table's shape).
+
+    @staticmethod
+    def _gu_instance_row_to_dict(row) -> dict:
+        return {
+            "instance_id": row["instance_id"], "owner_id": row["owner_id"], "item_name": row["item_name"],
+            "bonus_stat_bonuses": json.loads(row["bonus_stat_bonuses"]), "blessing_ticks": row["blessing_ticks"],
+            "created_ts": row["created_ts"],
+        }
+
+    def create_gu_instance(self, owner_id: int, item_name: str) -> int:
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute(
+            "INSERT INTO gu_instances (owner_id, item_name, bonus_stat_bonuses, blessing_ticks, created_ts) VALUES (?, ?, '{}', 0, ?)",
+            (owner_id, item_name, int(time.time())),
+        )
+        con.commit()
+        instance_id = cur.lastrowid
+        con.close()
+        return instance_id
+
+    def get_gu_instance(self, instance_id: int) -> Optional[dict]:
+        con = self.connect()
+        row = con.execute("SELECT * FROM gu_instances WHERE instance_id = ?", (instance_id,)).fetchone()
+        con.close()
+        return self._gu_instance_row_to_dict(row) if row else None
+
+    def get_player_gu_instances(self, owner_id: int) -> list:
+        con = self.connect()
+        rows = con.execute("SELECT * FROM gu_instances WHERE owner_id = ? ORDER BY instance_id", (owner_id,)).fetchall()
+        con.close()
+        return [self._gu_instance_row_to_dict(row) for row in rows]
+
+    def update_gu_instance_blessing(self, instance_id: int, blessing_ticks: int, bonus_stat_bonuses: dict):
+        con = self.connect()
+        con.execute(
+            "UPDATE gu_instances SET blessing_ticks = ?, bonus_stat_bonuses = ? WHERE instance_id = ?",
+            (blessing_ticks, json.dumps(bonus_stat_bonuses), instance_id),
+        )
+        con.commit()
+        con.close()
+
+    def delete_gu_instance(self, instance_id: int):
+        con = self.connect()
+        con.execute("DELETE FROM gu_instances WHERE instance_id = ?", (instance_id,))
+        con.commit()
+        con.close()
+
+    @staticmethod
+    def _ink_man_row_to_dict(row) -> dict:
+        return {
+            "ink_man_id": row["ink_man_id"], "owner_id": row["owner_id"],
+            "assigned_page_id": row["assigned_page_id"], "next_tick_ts": row["next_tick_ts"],
+            "created_ts": row["created_ts"],
+        }
+
+    def create_ink_man(self, owner_id: int) -> int:
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute("INSERT INTO grotto_ink_men (owner_id, created_ts) VALUES (?, ?)", (owner_id, int(time.time())))
+        con.commit()
+        ink_man_id = cur.lastrowid
+        con.close()
+        return ink_man_id
+
+    def get_player_ink_men(self, owner_id: int) -> list:
+        con = self.connect()
+        rows = con.execute("SELECT * FROM grotto_ink_men WHERE owner_id = ? ORDER BY ink_man_id", (owner_id,)).fetchall()
+        con.close()
+        return [self._ink_man_row_to_dict(row) for row in rows]
+
+    def get_ink_man(self, ink_man_id: int) -> Optional[dict]:
+        con = self.connect()
+        row = con.execute("SELECT * FROM grotto_ink_men WHERE ink_man_id = ?", (ink_man_id,)).fetchone()
+        con.close()
+        return self._ink_man_row_to_dict(row) if row else None
+
+    def assign_ink_man_page(self, ink_man_id: int, page_id: str, next_tick_ts: int):
+        con = self.connect()
+        con.execute("UPDATE grotto_ink_men SET assigned_page_id = ?, next_tick_ts = ? WHERE ink_man_id = ?", (page_id, next_tick_ts, ink_man_id))
+        con.commit()
+        con.close()
+
+    def clear_ink_man_assignment(self, ink_man_id: int):
+        con = self.connect()
+        con.execute("UPDATE grotto_ink_men SET assigned_page_id = NULL, next_tick_ts = 0 WHERE ink_man_id = ?", (ink_man_id,))
+        con.commit()
+        con.close()
+
+    def set_ink_man_next_tick(self, ink_man_id: int, next_tick_ts: int):
+        con = self.connect()
+        con.execute("UPDATE grotto_ink_men SET next_tick_ts = ? WHERE ink_man_id = ?", (next_tick_ts, ink_man_id))
+        con.commit()
+        con.close()
+
+    def get_ink_men_pending_work(self, now: int) -> list:
+        """Every Ink Man across every player with an assigned page whose next_tick_ts has
+        elapsed -- used only by the background check_and_complete_ink_men_work sweep."""
+        con = self.connect()
+        rows = con.execute(
+            "SELECT * FROM grotto_ink_men WHERE assigned_page_id IS NOT NULL AND next_tick_ts <= ?", (now,)
+        ).fetchall()
+        con.close()
+        return [self._ink_man_row_to_dict(row) for row in rows]
+
+    @staticmethod
+    def _hairy_man_row_to_dict(row) -> dict:
+        return {
+            "hairy_man_id": row["hairy_man_id"], "owner_id": row["owner_id"],
+            "assigned_instance_id": row["assigned_instance_id"], "next_tick_ts": row["next_tick_ts"],
+            "created_ts": row["created_ts"],
+        }
+
+    def create_hairy_man(self, owner_id: int) -> int:
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute("INSERT INTO grotto_hairy_men (owner_id, created_ts) VALUES (?, ?)", (owner_id, int(time.time())))
+        con.commit()
+        hairy_man_id = cur.lastrowid
+        con.close()
+        return hairy_man_id
+
+    def get_player_hairy_men(self, owner_id: int) -> list:
+        con = self.connect()
+        rows = con.execute("SELECT * FROM grotto_hairy_men WHERE owner_id = ? ORDER BY hairy_man_id", (owner_id,)).fetchall()
+        con.close()
+        return [self._hairy_man_row_to_dict(row) for row in rows]
+
+    def get_hairy_man(self, hairy_man_id: int) -> Optional[dict]:
+        con = self.connect()
+        row = con.execute("SELECT * FROM grotto_hairy_men WHERE hairy_man_id = ?", (hairy_man_id,)).fetchone()
+        con.close()
+        return self._hairy_man_row_to_dict(row) if row else None
+
+    def assign_hairy_man_instance(self, hairy_man_id: int, instance_id: int, next_tick_ts: int):
+        con = self.connect()
+        con.execute("UPDATE grotto_hairy_men SET assigned_instance_id = ?, next_tick_ts = ? WHERE hairy_man_id = ?", (instance_id, next_tick_ts, hairy_man_id))
+        con.commit()
+        con.close()
+
+    def clear_hairy_man_assignment(self, hairy_man_id: int):
+        con = self.connect()
+        con.execute("UPDATE grotto_hairy_men SET assigned_instance_id = NULL, next_tick_ts = 0 WHERE hairy_man_id = ?", (hairy_man_id,))
+        con.commit()
+        con.close()
+
+    def set_hairy_man_next_tick(self, hairy_man_id: int, next_tick_ts: int):
+        con = self.connect()
+        con.execute("UPDATE grotto_hairy_men SET next_tick_ts = ? WHERE hairy_man_id = ?", (next_tick_ts, hairy_man_id))
+        con.commit()
+        con.close()
+
+    def get_hairy_men_pending_work(self, now: int) -> list:
+        """Every Hairy Man across every player with an assigned Gu instance whose
+        next_tick_ts has elapsed -- used only by the background check_and_complete_hairy_men_
+        work sweep."""
+        con = self.connect()
+        rows = con.execute(
+            "SELECT * FROM grotto_hairy_men WHERE assigned_instance_id IS NOT NULL AND next_tick_ts <= ?", (now,)
+        ).fetchall()
+        con.close()
+        return [self._hairy_man_row_to_dict(row) for row in rows]
+
     # -- Accessories/artifacts (see accessories_data.py) -----------------------------------
 
     @staticmethod
@@ -4252,6 +4501,37 @@ class GameDatabase:
         rows = cur.fetchall()
         con.close()
         return {row["slot_key"]: row["accessory_instance_id"] for row in rows}
+
+    def set_equipped_gu_instance(self, user_id: int, slot_key: str, instance_id: int, display_name: str):
+        """Like set_equipped_accessory, but for a Hairy-Man-blessed gu_instances row instead
+        of an accessory/artifact instance — see the gu_instances table's docstring in setup()."""
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute("SELECT 1 FROM equipped WHERE user_id = ? AND slot_key = ?", (user_id, slot_key))
+        if cur.fetchone() is None:
+            cur.execute(
+                "INSERT INTO equipped (user_id, slot_key, item_name, gear_id, accessory_instance_id, gu_instance_id) VALUES (?, ?, ?, NULL, NULL, ?)",
+                (user_id, slot_key, display_name, instance_id),
+            )
+        else:
+            cur.execute(
+                "UPDATE equipped SET item_name = ?, gear_id = NULL, accessory_instance_id = NULL, gu_instance_id = ? WHERE user_id = ? AND slot_key = ?",
+                (display_name, instance_id, user_id, slot_key),
+            )
+        con.commit()
+        con.close()
+
+    def get_equipped_gu_instance_ids(self, user_id: int) -> dict:
+        """{slot_key: instance_id} for only the slots currently holding a Hairy-Man-blessed
+        Gu instance — parallel to get_equipped_accessory_ids."""
+        con = self.connect()
+        cur = con.execute(
+            "SELECT slot_key, gu_instance_id FROM equipped WHERE user_id = ? AND gu_instance_id IS NOT NULL",
+            (user_id,),
+        )
+        rows = cur.fetchall()
+        con.close()
+        return {row["slot_key"]: row["gu_instance_id"] for row in rows}
 
     # -- Equipment presets (see setup()'s equipment_presets table docstring) ----------------
 

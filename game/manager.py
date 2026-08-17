@@ -11,7 +11,7 @@ from config import IMAGE_CACHE_DIR
 
 from . import (
     accessories_data, accessories_gen, alchemy, avatar, avatar_gear, black_heaven, blacksmith, canon_gu, chargen,
-    combat, dao_companion, dao_essences, dao_paths, discovery_gen, equipment, exploration, gathering, gu_pet,
+    combat, dao_companion, dao_essences, dao_paths, discovery_gen, equipment, exploration, gathering, grotto, gu_pet,
     gu_pet_images, gu_types, inheritance_ground_data, items, killer_move_gen, manual_data, manual_gen, monsters,
     professions, realms, search_data, sects, split_body, tournament, treasure_hunt, white_heaven, world_boss,
     world_regions,
@@ -895,17 +895,18 @@ class GameManager:
         item_name = self.db.get_equipped(user_id).get(slot_key)
         if not item_name:
             return False, "That slot is already empty."
-        # A crafted_gear instance isn't inventory-tracked (owning the row IS owning the
-        # piece — see database.py's crafted_gear table docstring), so unequipping one just
-        # clears the slot; only a catalog item needs an inventory row back.
-        if slot_key not in self.db.get_equipped_gear_ids(user_id):
+        # A crafted_gear or Hairy-Man-blessed Gu instance isn't inventory-tracked (owning the
+        # row IS owning the piece — see database.py's crafted_gear/gu_instances table
+        # docstrings), so unequipping one just clears the slot; only a catalog item needs an
+        # inventory row back.
+        if slot_key not in self.db.get_equipped_gear_ids(user_id) and slot_key not in self.db.get_equipped_gu_instance_ids(user_id):
             self.db.add_item(user_id, item_name, 1)
         self.db.clear_equipped(user_id, slot_key)
         return True, f"Unequipped **{item_name}** from {equipment.SLOT_LABEL_BY_KEY[slot_key]}."
 
     def unequip_all(self, user_id: int, name: str):
         self.db.get_or_create_player(user_id, name)
-        instance_slots = self.db.get_equipped_gear_ids(user_id)
+        instance_slots = set(self.db.get_equipped_gear_ids(user_id)) | set(self.db.get_equipped_gu_instance_ids(user_id))
         for slot_key, item_name in self.db.get_equipped(user_id).items():
             if slot_key not in instance_slots:
                 self.db.add_item(user_id, item_name, 1)
@@ -1610,6 +1611,231 @@ class GameManager:
             if time.time() - player["split_body_started_ts"] >= split_body.SPLIT_BODY_DURATION_SECONDS
         ]
 
+    # -- Grotto (see game/grotto.py / /grotto) -----------------------------------------------
+
+    def get_grotto_status(self, user_id: int, name: str) -> dict:
+        """Read-only -- for /grotto's view to show current level, live bonuses, and the next
+        upgrade's cost without spending anything."""
+        player = self.db.get_or_create_player(user_id, name)
+        level = player["grotto_level"]
+        eligible = grotto.is_realm_eligible(realms.STAGES[player["realm_index"]].great_realm_index)
+        recipe = grotto.level_up_recipe(level)
+        return {
+            "level": level,
+            "eligible": eligible,
+            "bonuses": grotto.grotto_bonuses(level),
+            "next_recipe": recipe,
+            "next_stones_cost": grotto.level_up_stones_cost(level + 1) if recipe is not None else None,
+            "maxed": recipe is None,
+        }
+
+    def upgrade_grotto(self, user_id: int, name: str):
+        """Founds the grotto (level 0 -> 1) or advances it one level, atomically -- same
+        exact-recipe-per-level shape as avatar_level_up, plus a separate spirit-stone cost
+        (see grotto.level_up_stones_cost's own docstring for why that's not folded into the
+        same materials recipe dict)."""
+        player = self.db.get_or_create_player(user_id, name)
+        if not grotto.is_realm_eligible(realms.STAGES[player["realm_index"]].great_realm_index):
+            return False, "Your grotto awakens once you reach **Foundation Establishment** — keep cultivating!"
+        recipe = grotto.level_up_recipe(player["grotto_level"])
+        if recipe is None:
+            return False, f"Your grotto is already at its peak — Level {grotto.GROTTO_MAX_LEVEL}."
+        stones_cost = grotto.level_up_stones_cost(player["grotto_level"] + 1)
+        if player["spirit_stones"] < stones_cost:
+            return False, f"Not enough spirit stones — need {format_number(stones_cost)}, have {format_number(player['spirit_stones'])}."
+        inventory = self.db.get_inventory(user_id)
+        missing = {item: qty for item, qty in recipe.items() if inventory.get(item, 0) < qty}
+        if missing:
+            missing_text = ", ".join(f"{qty}x {item} (have {inventory.get(item, 0)})" for item, qty in missing.items())
+            return False, f"Missing materials: {missing_text}."
+        if not self.db.spend_spirit_stones(user_id, stones_cost):
+            return False, "Not enough spirit stones."  # defensive re-check, shouldn't fire after the check above
+        for item, qty in recipe.items():
+            self.db.remove_item(user_id, item, qty)
+        new_level = self.db.set_grotto_level(user_id, player["grotto_level"] + 1)
+        verb = "founded" if new_level == 1 else "deepened"
+        return True, f"Your grotto is {verb} — now **Level {new_level}**!"
+
+    def _grotto_yield_bonus(self, player: dict) -> float:
+        """Grotto's flat mine/gather/farm yield bonus -- mirrors _trait_bonus's own shape but
+        reads grotto_level directly, since mine/gather/farm have no generic bonus pool at all
+        (each computes its own yield_mult independently -- see start_mining_vein/
+        start_gathering_patch/harvest_farm)."""
+        return grotto.grotto_bonuses(player["grotto_level"]).get("grotto_yield_pct", 0.0)
+
+    def get_crafting_success_bonus_total(self, user_id: int) -> float:
+        """Every non-rank source of /blacksmith craft success -- Space Dao Path plus Grotto --
+        summed in ONE place so craft_gear and blacksmith_view's own preview can never drift
+        apart (they previously each independently re-derived just the Dao Path half of this)."""
+        player = self.db.get_player_row(user_id)
+        space_bonus = self.get_dao_path_totals(user_id).get("crafting_success_pct", 0)
+        grotto_bonus = grotto.grotto_bonuses(player["grotto_level"]).get("grotto_crafting_success_pct", 0.0) if player else 0.0
+        return space_bonus + grotto_bonus
+
+    # -- Ink Men (see game/grotto.py / /grotto) -- passively work through owned manual-page
+    # duplicates by calling the EXISTING refine_page on the player's behalf, no reimplemented
+    # refinement logic. ---------------------------------------------------------------------
+
+    def recruit_ink_man(self, user_id: int, name: str):
+        player = self.db.get_or_create_player(user_id, name)
+        if player["grotto_level"] <= 0:
+            return False, "Found your grotto with `/grotto` first."
+        owned = len(self.db.get_player_ink_men(user_id))
+        if owned >= grotto.GROTTO_MAX_INK_MEN:
+            return False, f"You already have the maximum {grotto.GROTTO_MAX_INK_MEN} Ink Men."
+        stones_cost = grotto.ink_man_recruit_stones_cost(owned)
+        ink_cost = grotto.ink_man_recruit_ink_cost(owned)
+        dust_cost = grotto.ink_man_recruit_dust_cost(owned)
+        if player["spirit_stones"] < stones_cost or player["manual_ink"] < ink_cost or player["insight_dust"] < dust_cost:
+            return False, (
+                f"Not enough resources — need {format_number(stones_cost)} spirit stones, "
+                f"{format_number(ink_cost)} Manual Ink, {format_number(dust_cost)} Insight Dust."
+            )
+        if not self.db.spend_spirit_stones(user_id, stones_cost):
+            return False, "Not enough spirit stones."
+        self.db.spend_manual_ink(user_id, ink_cost)
+        self.db.spend_insight_dust(user_id, dust_cost)
+        self.db.create_ink_man(user_id)
+        return True, "An Ink Man arrives at your grotto, ready to work."
+
+    def assign_ink_man(self, user_id: int, ink_man_id: int, page_id: str):
+        ink_man = self.db.get_ink_man(ink_man_id)
+        if ink_man is None or ink_man["owner_id"] != user_id:
+            return False, "That Ink Man isn't yours."
+        if ink_man["assigned_page_id"] is not None:
+            return False, "That Ink Man is already working on something."
+        owned_pages = self.db.get_player_pages(user_id)
+        owned = owned_pages.get(page_id)
+        if not owned:
+            return False, "You don't own that page."
+        page = manual_data.PAGES.get(page_id)
+        if page is None:
+            return False, "That isn't a real page."
+        if manual_data.NEXT_REFINEMENT.get(owned["refinement_level"]) is None:
+            return False, f"**{page.name}** is already at the highest refinement level."
+        self.db.assign_ink_man_page(ink_man_id, page_id, int(time.time()) + grotto.INK_MAN_TICK_INTERVAL_SECONDS)
+        return True, f"Your Ink Man begins refining **{page.name}**."
+
+    def get_ink_men_status(self, user_id: int) -> list:
+        """Read-only -- for /grotto's Ink Men tab."""
+        result = []
+        for ink_man in self.db.get_player_ink_men(user_id):
+            page = manual_data.PAGES.get(ink_man["assigned_page_id"]) if ink_man["assigned_page_id"] else None
+            result.append({
+                "ink_man_id": ink_man["ink_man_id"], "assigned_page_id": ink_man["assigned_page_id"],
+                "page_name": page.name if page else None, "idle": ink_man["assigned_page_id"] is None,
+                "next_tick_ts": ink_man["next_tick_ts"],
+            })
+        return result
+
+    def check_and_complete_ink_men_work(self) -> list:
+        """Periodic sweep (see cog.py's grotto_tick) -- for every Ink Man whose next tick has
+        elapsed, calls the EXISTING refine_page on the player's behalf. On success, keeps
+        grinding the same page (resets the timer); on failure (maxed out, or ran out of
+        duplicates), goes idle. Returns one summary dict per Ink Man that did something, for
+        the caller to DM about."""
+        completed = []
+        now = int(time.time())
+        for ink_man in self.db.get_ink_men_pending_work(now):
+            owner_id = ink_man["owner_id"]
+            player = self.db.get_player_row(owner_id)
+            if player is None:
+                self.db.clear_ink_man_assignment(ink_man["ink_man_id"])
+                continue
+            page_id = ink_man["assigned_page_id"]
+            ok, message = self.refine_page(owner_id, player["name"], page_id)
+            if ok:
+                self.db.set_ink_man_next_tick(ink_man["ink_man_id"], now + grotto.INK_MAN_TICK_INTERVAL_SECONDS)
+            else:
+                self.db.clear_ink_man_assignment(ink_man["ink_man_id"])
+            completed.append({"user_id": owner_id, "name": player["name"], "success": ok, "message": message})
+        return completed
+
+    # -- Hairy Men (see game/grotto.py / /grotto) -- passively bless ONE specific Legendary+
+    # Gu instance over time. -------------------------------------------------------------------
+
+    def recruit_hairy_man(self, user_id: int, name: str):
+        player = self.db.get_or_create_player(user_id, name)
+        if player["grotto_level"] <= 0:
+            return False, "Found your grotto with `/grotto` first."
+        owned = len(self.db.get_player_hairy_men(user_id))
+        if owned >= grotto.GROTTO_MAX_HAIRY_MEN:
+            return False, f"You already have the maximum {grotto.GROTTO_MAX_HAIRY_MEN} Hairy Men."
+        stones_cost = grotto.hairy_man_recruit_stones_cost(owned)
+        recipe = grotto.hairy_man_recruit_recipe(owned)
+        if player["spirit_stones"] < stones_cost:
+            return False, f"Not enough spirit stones — need {format_number(stones_cost)}."
+        inventory = self.db.get_inventory(user_id)
+        missing = {item: qty for item, qty in recipe.items() if inventory.get(item, 0) < qty}
+        if missing:
+            missing_text = ", ".join(f"{qty}x {item} (have {inventory.get(item, 0)})" for item, qty in missing.items())
+            return False, f"Missing materials: {missing_text}."
+        if not self.db.spend_spirit_stones(user_id, stones_cost):
+            return False, "Not enough spirit stones."
+        for item, qty in recipe.items():
+            self.db.remove_item(user_id, item, qty)
+        self.db.create_hairy_man(user_id)
+        return True, "A Hairy Man arrives at your grotto, ready to work."
+
+    def assign_hairy_man(self, user_id: int, hairy_man_id: int, item_name: str):
+        hairy_man = self.db.get_hairy_man(hairy_man_id)
+        if hairy_man is None or hairy_man["owner_id"] != user_id:
+            return False, "That Hairy Man isn't yours."
+        if hairy_man["assigned_instance_id"] is not None:
+            return False, "That Hairy Man is already working on something."
+        quality = equipment.gu_quality_for(item_name)
+        if quality not in grotto.GU_LEGENDARY_PLUS_QUALITIES:
+            return False, "Only Legendary, Mythic, or Immortal Gu can be blessed."
+        if self.db.get_inventory(user_id).get(item_name, 0) < 1:
+            return False, f"You don't own **{item_name}**."
+        if not self.db.remove_item(user_id, item_name, 1):
+            return False, f"You don't own **{item_name}**."
+        instance_id = self.db.create_gu_instance(user_id, item_name)
+        self.db.assign_hairy_man_instance(hairy_man_id, instance_id, int(time.time()) + grotto.HAIRY_MAN_TICK_INTERVAL_SECONDS)
+        return True, f"Your Hairy Man begins blessing **{item_name}**."
+
+    def get_hairy_men_status(self, user_id: int) -> list:
+        """Read-only -- for /grotto's Hairy Men tab."""
+        result = []
+        for hairy_man in self.db.get_player_hairy_men(user_id):
+            instance = self.db.get_gu_instance(hairy_man["assigned_instance_id"]) if hairy_man["assigned_instance_id"] else None
+            result.append({
+                "hairy_man_id": hairy_man["hairy_man_id"], "assigned_instance_id": hairy_man["assigned_instance_id"],
+                "item_name": instance["item_name"] if instance else None,
+                "blessing_ticks": instance["blessing_ticks"] if instance else 0,
+                "idle": hairy_man["assigned_instance_id"] is None, "next_tick_ts": hairy_man["next_tick_ts"],
+            })
+        return result
+
+    def check_and_complete_hairy_men_work(self) -> list:
+        """Periodic sweep (see cog.py's grotto_tick) -- for every Hairy Man whose next tick
+        has elapsed, deepens the blessing on their assigned Gu instance by one tick. Goes idle
+        once GROTTO_BLESSING_MAX_TICKS is reached ('fully blessed'). Returns one summary dict
+        per Hairy Man that did something, for the caller to DM about."""
+        completed = []
+        now = int(time.time())
+        for hairy_man in self.db.get_hairy_men_pending_work(now):
+            owner_id = hairy_man["owner_id"]
+            player = self.db.get_player_row(owner_id)
+            instance = self.db.get_gu_instance(hairy_man["assigned_instance_id"])
+            if player is None or instance is None:
+                self.db.clear_hairy_man_assignment(hairy_man["hairy_man_id"])
+                continue
+            base_gear = equipment.EQUIPMENT.get(instance["item_name"])
+            base_stat_bonuses = base_gear.stat_bonuses if base_gear else {}
+            new_ticks = instance["blessing_ticks"] + 1
+            new_bonus = grotto.blessing_bonus_stat_bonuses(base_stat_bonuses, new_ticks)
+            self.db.update_gu_instance_blessing(instance["instance_id"], new_ticks, new_bonus)
+            maxed = new_ticks >= grotto.GROTTO_BLESSING_MAX_TICKS
+            if maxed:
+                self.db.clear_hairy_man_assignment(hairy_man["hairy_man_id"])
+                message = f"**{instance['item_name']}** is now fully blessed!"
+            else:
+                self.db.set_hairy_man_next_tick(hairy_man["hairy_man_id"], now + grotto.HAIRY_MAN_TICK_INTERVAL_SECONDS)
+                message = f"Your Hairy Man deepens the blessing on **{instance['item_name']}** ({new_ticks}/{grotto.GROTTO_BLESSING_MAX_TICKS})."
+            completed.append({"user_id": owner_id, "name": player["name"], "item_name": instance["item_name"], "message": message, "maxed": maxed})
+        return completed
+
     # Special stat_bonuses keys that aren't flat foundation stats — each fed straight
     # through to combat.resolve_attack (via hunt.py/raid.py), the qi-rate system, or
     # somewhere else specific (see canon_gu.py's docstring for where the newer ones go).
@@ -1723,6 +1949,7 @@ class GameManager:
         crafted_pct_totals = {key: 0.0 for key in equipment.CRAFTED_GEAR_PCT_TO_FLAT}
         instance_gear_ids = self.db.get_equipped_gear_ids(user_id)
         accessory_ids = self.db.get_equipped_accessory_ids(user_id)
+        gu_instance_ids = self.db.get_equipped_gu_instance_ids(user_id)
         for slot_key, item_name in self.db.get_equipped(user_id).items():
             if slot_key in instance_gear_ids:
                 crafted = self.db.get_crafted_gear(instance_gear_ids[slot_key])
@@ -1735,6 +1962,17 @@ class GameManager:
                 # Rank gate (section 2): equipped more than one rank above the player's own
                 # cultivation rank still works, just at half numerical power.
                 power_mult = 0.5 if (affix and affix.rank > player_rank + 1) else 1.0
+            elif slot_key in gu_instance_ids:
+                # Hairy-Man-blessed Gu instance (see game/grotto.py / gu_instances table) --
+                # starts from the SAME base catalog stat_bonuses every unblessed copy of this
+                # Gu has, then adds the instance's own accrued bonus_stat_bonuses on top.
+                gu_instance = self.db.get_gu_instance(gu_instance_ids[slot_key])
+                base_gear = equipment.EQUIPMENT.get(gu_instance["item_name"]) if gu_instance else None
+                stat_bonuses = dict(base_gear.stat_bonuses) if base_gear else {}
+                if gu_instance:
+                    for key, value in gu_instance["bonus_stat_bonuses"].items():
+                        stat_bonuses[key] = stat_bonuses.get(key, 0) + value
+                power_mult = 1.0
             else:
                 gear = equipment.EQUIPMENT.get(item_name)
                 stat_bonuses = gear.stat_bonuses if gear else {}
@@ -1783,6 +2021,14 @@ class GameManager:
                 crafted_pct_totals[stat] += value
             elif stat in special:
                 special[stat] += value
+        # Grotto (see game/grotto.py / /grotto) -- only alchemy_success_pct rides this generic
+        # pool; cultivation_speed_pct is wired directly into database.py's _qi_rate_components
+        # (the real qi-rate hook, NOT this pool -- see that function's own comment), and
+        # grotto_crafting_success_pct/grotto_yield_pct are consumed directly at their own call
+        # sites (get_crafting_success_bonus_total, _grotto_yield_bonus) since blacksmith craft
+        # and mine/gather/farm yield don't read this pool at all.
+        if player_row and player_row["grotto_level"]:
+            special["alchemy_success_pct"] = special.get("alchemy_success_pct", 0) + grotto.grotto_bonuses(player_row["grotto_level"]).get("alchemy_success_pct", 0)
         if player_row:
             for pct_key, flat_key in equipment.CRAFTED_GEAR_PCT_TO_FLAT.items():
                 pct = crafted_pct_totals[pct_key]
@@ -3675,7 +3921,7 @@ class GameManager:
         yield_mult = (
             professions.yield_multiplier(player["miner_rank"])
             * self._region_bonus_dict(player).get("gather_yield_multiplier", 1.0)
-            * (1 + self._trait_bonus(player, "mining_yield_pct"))
+            * (1 + self._trait_bonus(player, "mining_yield_pct") + self._grotto_yield_bonus(player))
         )
         nodes = []
         for _ in range(self.MINE_VEIN_NODE_COUNT):
@@ -3708,7 +3954,7 @@ class GameManager:
         yield_mult = (
             professions.yield_multiplier(player["gatherer_rank"])
             * self._region_bonus_dict(player).get("gather_yield_multiplier", 1.0)
-            * (1 + self._trait_bonus(player, "herb_yield_pct"))
+            * (1 + self._trait_bonus(player, "herb_yield_pct") + self._grotto_yield_bonus(player))
         )
         nodes = []
         for _ in range(self.GATHER_PATCH_NODE_COUNT):
@@ -3994,7 +4240,7 @@ class GameManager:
             return False, None, 0, "Nothing is ready to harvest yet."
         tier = slot["tier"]
         multiplier = professions.yield_multiplier(overview["player"]["farmer_rank"]) * (
-            1 + self._trait_bonus(overview["player"], "herb_yield_pct")
+            1 + self._trait_bonus(overview["player"], "herb_yield_pct") + self._grotto_yield_bonus(overview["player"])
         )
         quantity = max(1, round(random.randint(*self.FARM_BASE_YIELD_RANGE) * multiplier))
         item_name = f"Tier {tier} Herb"
@@ -4172,9 +4418,10 @@ class GameManager:
 
         for material, qty in needed.items():
             self.db.remove_item(user_id, material, qty)
-        # Space Dao Path's crafting_success_pct is the blacksmith-side counterpart to
-        # alchemy_success_pct (craft_pill already reads that one via compute_equipment_bonuses).
-        space_bonus = self.get_dao_path_totals(user_id).get("crafting_success_pct", 0)
+        # Space Dao Path's crafting_success_pct + Grotto's own contribution, the blacksmith-side
+        # counterpart to alchemy_success_pct (craft_pill already reads that one via
+        # compute_equipment_bonuses) -- see get_crafting_success_bonus_total's own docstring.
+        space_bonus = self.get_crafting_success_bonus_total(user_id)
         chance = min(1.0, professions.craft_success_chance(player["blacksmith_rank"]) + self._trait_bonus(player, "blacksmith_success_pct") + space_bonus)
         success = random.random() < chance
         # A Refinement-family root's craft_salvage_bonus_pct (see character_data.
@@ -4263,6 +4510,37 @@ class GameManager:
 
         self.db.set_equipped_instance(user_id, slot_key, gear_id, display_name)
         return True, f"Equipped **{display_name}** to {equipment.SLOT_LABEL_BY_KEY[slot_key]}."
+
+    def equip_gu_instance(self, user_id: int, name: str, slot_key: str, instance_id: int):
+        """Like equip_crafted_gear, but for a Hairy-Man-blessed gu_instances row -- takes an
+        explicit slot_key (unlike equip_crafted_gear's SLOT_KEY_BY_TYPE lookup) since Gu has
+        TWO possible slot_keys sharing one slot_type (gu_ability/gu_ability_2, the second only
+        reachable with Twin Gu Sovereign Physique -- same backstop equip_item's own Gu-slot-2
+        check uses)."""
+        player = self.db.get_or_create_player(user_id, name)
+        instance = self.db.get_gu_instance(instance_id)
+        if instance is None or instance["owner_id"] != user_id:
+            return False, "You don't own that blessed Gu."
+        expected_type = equipment.SLOT_TYPE_BY_KEY.get(slot_key)
+        if expected_type != "Gu":
+            return False, "That slot doesn't exist."
+        if slot_key == equipment.GU_SLOT_KEY_2 and player["physique_name"] != equipment.TWIN_GU_SOVEREIGN_PHYSIQUE_NAME:
+            return False, f"{equipment.TWIN_GU_SOVEREIGN_PHYSIQUE_NAME} is required to bind a second Gu."
+
+        currently_equipped_instance_ids = self.db.get_equipped_gu_instance_ids(user_id)
+        if currently_equipped_instance_ids.get(slot_key) == instance_id:
+            return False, f"**{instance['item_name']}** is already equipped there."
+
+        # If this slot currently holds an ordinary catalog item (not another Gu instance --
+        # those don't need anything returned, the old instance stays owned via its own row
+        # either way), it has to go back to inventory here same as equip_item does.
+        if slot_key not in currently_equipped_instance_ids:
+            previous_item_name = self.db.get_equipped(user_id).get(slot_key)
+            if previous_item_name:
+                self.db.add_item(user_id, previous_item_name, 1)
+
+        self.db.set_equipped_gu_instance(user_id, slot_key, instance_id, instance["item_name"])
+        return True, f"Equipped your blessed **{instance['item_name']}** to {equipment.SLOT_LABEL_BY_KEY[slot_key]}."
 
     def dismantle_crafted_gear(self, user_id: int, name: str, gear_id: int):
         player = self.db.get_or_create_player(user_id, name)

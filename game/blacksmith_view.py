@@ -100,9 +100,10 @@ class BlacksmithView(GameView):
 
     def build_embed(self) -> discord.Embed:
         player = self.game.get_player_stats(self.user_id, self.display_name)
-        # Space Dao Path's crafting_success_pct -- mirrors craft_gear's own chance calculation
-        # so this preview doesn't drift from what a craft attempt actually rolls against.
-        space_bonus = self.game.get_dao_path_totals(self.user_id).get("crafting_success_pct", 0)
+        # Space Dao Path's crafting_success_pct + Grotto's own contribution -- mirrors
+        # craft_gear's own chance calculation so this preview doesn't drift from what a craft
+        # attempt actually rolls against.
+        space_bonus = self.game.get_crafting_success_bonus_total(self.user_id)
         chance = min(1.0, professions.craft_success_chance(player["blacksmith_rank"]) + space_bonus)
         needed = blacksmith.recipe(self.selected_tier)
         inventory = self.game.get_inventory(self.user_id)

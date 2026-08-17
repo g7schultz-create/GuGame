@@ -44,11 +44,15 @@ class GuCollectionView(GameView):
         ]
 
     def _owned(self) -> list:
-        """[(family, quality, item_name, qty), ...] -- every owned Gu with a resolvable
-        quality tier (flat/non-tiered Gu, e.g. the 3 starters and World Boss's flat drops,
-        have never shown up in /gu -- this view keeps that existing behavior unchanged).
-        Equipping a Gu moves it OUT of inventory into the equipped table, so the currently-
-        worn one(s) wouldn't show up at all without adding them back in here."""
+        """[(family, quality, item_name, qty, instance), ...] -- every owned Gu with a
+        resolvable quality tier (flat/non-tiered Gu, e.g. the 3 starters and World Boss's flat
+        drops, have never shown up in /gu -- this view keeps that existing behavior unchanged).
+        `instance` is None for an ordinary quantity-stacked catalog entry, or the gu_instances
+        row for a Hairy-Man-blessed copy (see game/grotto.py) -- those are never inventory-
+        tracked (owning the row IS owning the piece, same as crafted_gear), so they're listed
+        separately here rather than folded into the plain inventory counts above. Equipping a
+        Gu moves it OUT of inventory into the equipped table, so the currently-worn one(s)
+        wouldn't show up at all without adding them back in here."""
         inventory = self.game.get_inventory(self.user_id)
         counts = {name: qty for name, qty in inventory.items() if equipment.parse_gu_name(name)[0] is not None}
         for equipped_gu in self._equipped_gu_names():
@@ -57,7 +61,12 @@ class GuCollectionView(GameView):
         owned = []
         for item_name, qty in counts.items():
             family, quality = equipment.parse_gu_name(item_name)
-            owned.append((family, quality, item_name, qty))
+            owned.append((family, quality, item_name, qty, None))
+        for instance in self.game.db.get_player_gu_instances(self.user_id):
+            family, quality = equipment.parse_gu_name(instance["item_name"])
+            if family is None:
+                continue
+            owned.append((family, quality, instance["item_name"], 1, instance))
         return owned
 
     def _filtered_sorted(self) -> list:
@@ -102,12 +111,22 @@ class GuCollectionView(GameView):
         title_suffix = f" — {self.tier_filter}" if self.tier_filter else ""
         embed = discord.Embed(title=f"🐛 {self.display_name}'s Gu Collection{title_suffix}", color=discord.Color.dark_teal())
         if owned:
+            equipped_instance_ids = set(self.game.db.get_equipped_gu_instance_ids(self.user_id).values())
             lines = []
-            for family, quality, item_name, qty in owned:
+            for family, quality, item_name, qty, instance in owned:
                 gear = equipment.EQUIPMENT.get(item_name)
-                marker = " ✅ equipped" if item_name in equipped_gu_names else ""
-                stats_text = equipment.describe_stat_bonuses(gear.stat_bonuses) if gear else ""
-                lines.append(f"**{item_name}** x{qty}{marker} — {stats_text}")
+                base_stats = gear.stat_bonuses if gear else {}
+                if instance:
+                    marker = " ✅ equipped" if instance["instance_id"] in equipped_instance_ids else ""
+                    combined = dict(base_stats)
+                    for key, value in instance["bonus_stat_bonuses"].items():
+                        combined[key] = combined.get(key, 0) + value
+                    stats_text = equipment.describe_stat_bonuses(combined)
+                    lines.append(f"🐒 **{item_name}** (Blessed +{instance['blessing_ticks']}){marker} — {stats_text}")
+                else:
+                    marker = " ✅ equipped" if item_name in equipped_gu_names else ""
+                    stats_text = equipment.describe_stat_bonuses(base_stats)
+                    lines.append(f"**{item_name}** x{qty}{marker} — {stats_text}")
             embed.description = "\n".join(lines)[:4000]
         elif self.tier_filter:
             embed.description = f"You don't own any {self.tier_filter}-quality Gu yet."

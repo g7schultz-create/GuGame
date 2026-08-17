@@ -41,6 +41,10 @@ INSTANCE_VALUE_PREFIX = "gear:"
 # ordinary catalog item (Rusty Jade Ring, Basic Flying Artifact) or a rolled instance.
 ACCESSORY_VALUE_PREFIX = "acc:"
 ACCESSORY_SLOT_TYPES = {"Ring", "Earring", "Necklace", "Bracelet", "Artifact"}
+# Same idea for Hairy-Man-blessed Gu instances (see game/grotto.py / gu_instances table) --
+# the Gu slot is, like Weapon/Head/Body/accessories, dual-nature: either an ordinary catalog
+# item or a specific blessed instance with its own accrued bonus_stat_bonuses.
+GU_INSTANCE_VALUE_PREFIX = "gublessed:"
 # Assembled manuals (see /manual, manual_data.py) live entirely outside the `equipped`
 # table/equipment.SLOTS system this view is otherwise built around — GameManager.
 # equip_manual writes straight to players.equipped_primary_manual_id/
@@ -252,6 +256,17 @@ class EquipmentView(GameView):
             keys.update(gear.stat_bonuses.keys())
         return sorted(keys, key=lambda k: GU_STAT_LABELS.get(k, k))
 
+    def _owned_gu_instances(self) -> list:
+        """Owned, NOT-currently-equipped Hairy-Man-blessed Gu instances -- each shown as its
+        own selectable option (unlike catalog Gu, an instance isn't a quantity stack, so it
+        never needs an inventory-count check, just an equipped-elsewhere check, same as
+        crafted_gear/accessory instances above)."""
+        equipped_instance_ids = set(self.game.db.get_equipped_gu_instance_ids(self.user_id).values())
+        return [
+            instance for instance in self.game.db.get_player_gu_instances(self.user_id)
+            if instance["instance_id"] not in equipped_instance_ids
+        ]
+
     def _build_gu_options(self) -> list:
         entries = self._owned_gu_items()
         if self.gu_sort_mode == "rarity":
@@ -260,10 +275,22 @@ class EquipmentView(GameView):
             entries.sort(key=lambda e: (-e[1].stat_bonuses.get(self.gu_sort_stat, 0), -gear_power_score(e[1]), e[0]))
         else:
             entries.sort(key=lambda e: (-gear_power_score(e[1]), e[0]))
-        return [
+        options = [
             discord.SelectOption(label=item_name[:100], value=item_name, description=_describe_gear_for_select(gear)[:100])
             for item_name, gear in entries
         ]
+        for instance in self._owned_gu_instances():
+            base_gear = EQUIPMENT.get(instance["item_name"])
+            base_stats = base_gear.stat_bonuses if base_gear else {}
+            combined = dict(base_stats)
+            for key, value in instance["bonus_stat_bonuses"].items():
+                combined[key] = combined.get(key, 0) + value
+            options.append(discord.SelectOption(
+                label=f"🐒 {instance['item_name']} (Blessed +{instance['blessing_ticks']})"[:100],
+                value=f"{GU_INSTANCE_VALUE_PREFIX}{instance['instance_id']}",
+                description=describe_stat_bonuses(combined)[:100],
+            ))
+        return options
 
     def _add_gu_sort_controls(self, row: int):
         for key, label, emoji in GU_SORT_MODES:
@@ -518,6 +545,9 @@ class EquipmentView(GameView):
         elif choice.startswith(ACCESSORY_VALUE_PREFIX):
             instance_id = int(choice[len(ACCESSORY_VALUE_PREFIX):])
             _, result = self.game.equip_accessory_artifact(self.user_id, self.display_name, self.selected_slot, instance_id)
+        elif choice.startswith(GU_INSTANCE_VALUE_PREFIX):
+            instance_id = int(choice[len(GU_INSTANCE_VALUE_PREFIX):])
+            _, result = self.game.equip_gu_instance(self.user_id, self.display_name, self.selected_slot, instance_id)
         else:
             _, result = self.game.equip_item(self.user_id, self.display_name, self.selected_slot, choice)
         self.refresh()
