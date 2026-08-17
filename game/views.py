@@ -1,10 +1,12 @@
 import asyncio
+import csv
+import io
 import time
 from typing import Optional
 
 import discord
 
-from . import avatar, chargen, combat, equipment, gathering, professions, realms
+from . import avatar, chargen, combat, equipment, gathering, items, professions, realms
 from .base_view import GameView
 from .character_class import get_character_class
 from .character_data import PHYSIQUE_TIERS, ROOT_TIERS
@@ -568,6 +570,14 @@ class InventoryView(GameView):
         for button in _build_category_buttons(self.active_category, row=0, callback_factory=self._make_category_callback, categories=self.DISPLAY_CATEGORIES):
             self.add_item(button)
 
+        # Row 4 is the one row no other InventoryView component ever reaches (item selects top
+        # out at row 3 even in Materials' worst-case 2-subcategory-row layout -- see
+        # _build_subcategory_buttons -- and the Use x1/x10/All row tops out at 3 buttons), so
+        # Export always fits there alongside them regardless of category/subcategory state.
+        export_button = discord.ui.Button(label="Export CSV", emoji="📄", style=discord.ButtonStyle.secondary, row=4)
+        export_button.callback = self._on_export_csv
+        self.add_item(export_button)
+
         if self.active_category == "Equipment":
             manage_button = discord.ui.Button(label="Manage Equipment", emoji="🛡️", style=discord.ButtonStyle.primary, row=1)
             manage_button.callback = self._on_manage_equipment
@@ -654,6 +664,39 @@ class InventoryView(GameView):
             await interaction.edit_original_response(embed=embed, view=self)
 
         return callback
+
+    def _build_inventory_csv(self) -> discord.File:
+        inventory = self.game.get_inventory(self.user_id)
+        rows = []
+        for name, qty in inventory.items():
+            if qty <= 0:
+                continue
+            item = items.ITEMS.get(name)
+            if item:
+                category = item.category
+                subcategory = item.subcategory or ""
+                tier = items.item_effective_tier(item)
+                tier_text = str(tier) if tier is not None else ""
+            else:
+                family, quality = equipment.parse_gu_name(name)
+                if family is not None:
+                    category, subcategory, tier_text = "Gu", family, quality
+                else:
+                    category, subcategory, tier_text = "Other", "", ""
+            rows.append((category, subcategory, name, qty, tier_text))
+        rows.sort(key=lambda r: (r[0], r[1], r[2]))
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(["Category", "Subcategory", "Item", "Quantity", "Tier/Quality"])
+        writer.writerows(rows)
+        data = io.BytesIO(buffer.getvalue().encode("utf-8"))
+        return discord.File(data, filename=f"{self.display_name}_inventory.csv")
+
+    async def _on_export_csv(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        file = await asyncio.to_thread(self._build_inventory_csv)
+        await interaction.followup.send(content="Your full inventory, exported.", file=file, ephemeral=True)
 
     async def _on_manage_equipment(self, interaction: discord.Interaction):
         from .equipment_view import EquipmentView  # local import: avoids a circular import at module load time
