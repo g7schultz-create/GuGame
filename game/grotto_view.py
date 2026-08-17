@@ -36,6 +36,8 @@ class GrottoView(GameView):
         self.selected_page_id: str = None
         self.selected_hairy_man_id: int = None
         self.selected_gu_item: str = None
+        self.page_page: int = 0
+        self.gu_page: int = 0
         self.last_result: str = None
         self._build_components()
 
@@ -107,22 +109,34 @@ class GrottoView(GameView):
             self.add_item(ink_man_select)
 
             owned_pages = self.game.get_player_pages(self.user_id)
-            eligible_pages = [
-                (page_id, owned) for page_id, owned in owned_pages.items()
-                if manual_data.NEXT_REFINEMENT.get(owned["refinement_level"]) is not None and page_id in manual_data.PAGES
-            ]
+            eligible_pages = sorted(
+                (
+                    (page_id, owned) for page_id, owned in owned_pages.items()
+                    if manual_data.NEXT_REFINEMENT.get(owned["refinement_level"]) is not None and page_id in manual_data.PAGES
+                ),
+                key=lambda row: manual_data.PAGES[row[0]].name,
+            )
             if self.selected_page_id is None and eligible_pages:
                 self.selected_page_id = eligible_pages[0][0]
+
+            page_size = 25
+            total_pages = max(1, -(-len(eligible_pages) // page_size))
+            self.page_page = max(0, min(self.page_page, total_pages - 1))
+            shown_pages = eligible_pages[self.page_page * page_size:(self.page_page + 1) * page_size]
+
             page_options = [
                 discord.SelectOption(
                     label=f"{manual_data.PAGES[page_id].name} ({owned['refinement_level']}, x{owned['quantity']})"[:100],
                     value=page_id, default=(page_id == self.selected_page_id),
                 )
-                for page_id, owned in eligible_pages
+                for page_id, owned in shown_pages
             ]
+            placeholder = "Choose a page to refine..."
+            if total_pages > 1:
+                placeholder += f" (page {self.page_page + 1}/{total_pages})"
             page_select = discord.ui.Select(
-                placeholder="Choose a page to refine...",
-                options=page_options[:25] or [discord.SelectOption(label="No eligible pages owned", value="none")],
+                placeholder=placeholder,
+                options=page_options or [discord.SelectOption(label="No eligible pages owned", value="none")],
                 disabled=not page_options, row=3,
             )
             page_select.callback = self._on_pick_page
@@ -130,10 +144,18 @@ class GrottoView(GameView):
 
             assign_button = discord.ui.Button(
                 label="Assign", emoji="📌", style=discord.ButtonStyle.primary, row=4,
-                disabled=not page_options,
+                disabled=not eligible_pages,
             )
             assign_button.callback = self._on_assign_ink_man
             self.add_item(assign_button)
+
+            if total_pages > 1:
+                prev_button = discord.ui.Button(label="◀ Prev", row=4, disabled=self.page_page == 0)
+                prev_button.callback = self._make_page_page_callback(-1)
+                self.add_item(prev_button)
+                next_button = discord.ui.Button(label="Next ▶", row=4, disabled=self.page_page >= total_pages - 1)
+                next_button.callback = self._make_page_page_callback(1)
+                self.add_item(next_button)
 
     def _build_hairy_men_components(self):
         hairy_men = self.game.get_hairy_men_status(self.user_id)
@@ -158,20 +180,32 @@ class GrottoView(GameView):
             self.add_item(hairy_man_select)
 
             inventory = self.game.get_inventory(self.user_id)
-            eligible_gu = [
-                (name, qty) for name, qty in inventory.items()
-                if qty > 0 and equipment.EQUIPMENT.get(name) and equipment.EQUIPMENT[name].slot_type == "Gu"
-                and equipment.gu_quality_for(name) in grotto.GU_LEGENDARY_PLUS_QUALITIES
-            ]
+            eligible_gu = sorted(
+                (
+                    (name, qty) for name, qty in inventory.items()
+                    if qty > 0 and equipment.EQUIPMENT.get(name) and equipment.EQUIPMENT[name].slot_type == "Gu"
+                    and equipment.gu_quality_for(name) in grotto.GU_LEGENDARY_PLUS_QUALITIES
+                ),
+                key=lambda row: (-equipment.GU_QUALITY_ORDER.index(equipment.gu_quality_for(row[0])), row[0]),
+            )
             if self.selected_gu_item is None and eligible_gu:
                 self.selected_gu_item = eligible_gu[0][0]
+
+            page_size = 25
+            total_pages = max(1, -(-len(eligible_gu) // page_size))
+            self.gu_page = max(0, min(self.gu_page, total_pages - 1))
+            shown_gu = eligible_gu[self.gu_page * page_size:(self.gu_page + 1) * page_size]
+
             gu_options = [
                 discord.SelectOption(label=f"{name} (own {qty})"[:100], value=name, default=(name == self.selected_gu_item))
-                for name, qty in eligible_gu
+                for name, qty in shown_gu
             ]
+            placeholder = "Choose a Legendary+ Gu to bless..."
+            if total_pages > 1:
+                placeholder += f" (page {self.gu_page + 1}/{total_pages})"
             gu_select = discord.ui.Select(
-                placeholder="Choose a Legendary+ Gu to bless...",
-                options=gu_options[:25] or [discord.SelectOption(label="No eligible Gu owned", value="none")],
+                placeholder=placeholder,
+                options=gu_options or [discord.SelectOption(label="No eligible Gu owned", value="none")],
                 disabled=not gu_options, row=3,
             )
             gu_select.callback = self._on_pick_gu
@@ -179,10 +213,18 @@ class GrottoView(GameView):
 
             assign_button = discord.ui.Button(
                 label="Assign", emoji="📌", style=discord.ButtonStyle.primary, row=4,
-                disabled=not gu_options,
+                disabled=not eligible_gu,
             )
             assign_button.callback = self._on_assign_hairy_man
             self.add_item(assign_button)
+
+            if total_pages > 1:
+                prev_button = discord.ui.Button(label="◀ Prev", row=4, disabled=self.gu_page == 0)
+                prev_button.callback = self._make_gu_page_callback(-1)
+                self.add_item(prev_button)
+                next_button = discord.ui.Button(label="Next ▶", row=4, disabled=self.gu_page >= total_pages - 1)
+                next_button.callback = self._make_gu_page_callback(1)
+                self.add_item(next_button)
 
     # -- callbacks ------------------------------------------------------------------------------
 
@@ -212,6 +254,14 @@ class GrottoView(GameView):
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
 
+    def _make_page_page_callback(self, delta: int):
+        async def callback(interaction: discord.Interaction):
+            self.page_page += delta
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
+        return callback
+
     async def _on_assign_ink_man(self, interaction: discord.Interaction):
         if self.selected_ink_man_id and self.selected_page_id:
             _, self.last_result = await asyncio.to_thread(self.game.assign_ink_man, self.user_id, self.selected_ink_man_id, self.selected_page_id)
@@ -240,6 +290,14 @@ class GrottoView(GameView):
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
+
+    def _make_gu_page_callback(self, delta: int):
+        async def callback(interaction: discord.Interaction):
+            self.gu_page += delta
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
+        return callback
 
     async def _on_assign_hairy_man(self, interaction: discord.Interaction):
         if self.selected_hairy_man_id and self.selected_gu_item:
