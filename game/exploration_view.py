@@ -3,7 +3,7 @@ import os
 
 import discord
 
-from . import gathering, professions, white_heaven
+from . import gathering, manual_data, professions, white_heaven
 from .base_view import GameView
 from .ui_utils import format_number, path_footer
 
@@ -11,7 +11,13 @@ HIGH_BANDS = ("Epic", "Legendary", "Mythic")
 
 
 def _found_text(node: dict) -> str:
-    main = f"**{format_number(node['stones'])}** spirit stones" if node["stones"] else f"**{node['quantity']}x {node['item_name']}**"
+    if node["stones"]:
+        main = f"**{format_number(node['stones'])}** spirit stones"
+    elif node.get("page_id"):
+        page = manual_data.PAGES.get(node["page_id"])
+        main = f"**{node.get('page_quantity', 1)}x {page.name if page else node['page_id']}** manual page"
+    else:
+        main = f"**{node['quantity']}x {node['item_name']}**"
     if node.get("bonus_core"):
         main += f" ...and ✨ **1x {node['bonus_core']}**!"
     if node.get("bonus_essence_pill"):
@@ -41,6 +47,7 @@ class ExplorationHuntView(GameView):
         self.current_index = 0
         self.collected_stones = 0
         self.collected_items: dict = {}
+        self.collected_pages: dict = {}  # {page_id: quantity} -- see GameManager.collect_exploration_hunt
         self.finished = False
         self.left_early = False
         self.message: discord.Message = None
@@ -66,7 +73,7 @@ class ExplorationHuntView(GameView):
 
     def _finish(self):
         self.finished = True
-        self.game.collect_exploration_hunt(self.user_id, self.collected_stones, self.collected_items)
+        self.game.collect_exploration_hunt(self.user_id, self.collected_stones, self.collected_items, self.collected_pages)
 
     async def _on_hunt(self, interaction: discord.Interaction):
         # defer() first, THEN do the DB work -- see MiningVeinView._on_strike's identical
@@ -76,6 +83,8 @@ class ExplorationHuntView(GameView):
         node = self.nodes[self.current_index]
         if node["stones"]:
             self.collected_stones += node["stones"]
+        elif node.get("page_id"):
+            self.collected_pages[node["page_id"]] = self.collected_pages.get(node["page_id"], 0) + node.get("page_quantity", 1)
         else:
             self.collected_items[node["item_name"]] = self.collected_items.get(node["item_name"], 0) + node["quantity"]
         if node.get("bonus_core"):
@@ -123,7 +132,14 @@ class ExplorationHuntView(GameView):
         return f"🍀 Luck: {effective_luck:.0f} • 🧭 Explorer: {professions.rank_name(rank_index)}"
 
     def _collected_text(self) -> str:
-        items_text = gathering.format_collected(self.collected_items)
+        # collected_pages is page_id-keyed (what the real grant needs -- see
+        # GameManager.collect_exploration_hunt); merged into a name-keyed copy here purely
+        # for display, reusing format_collected rather than duplicating its sort/formatting.
+        display_items = dict(self.collected_items)
+        for page_id, quantity in self.collected_pages.items():
+            page = manual_data.PAGES.get(page_id)
+            display_items[page.name if page else page_id] = display_items.get(page.name if page else page_id, 0) + quantity
+        items_text = gathering.format_collected(display_items)
         if not self.collected_stones:
             return items_text
         stones_part = f"{format_number(self.collected_stones)} 🪙 spirit stones"

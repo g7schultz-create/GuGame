@@ -4008,10 +4008,10 @@ class GameManager:
         hunted down one at a time via ExplorationHuntView. The cooldown is spent once for the
         whole trail, not per find. Returns {"ok": False, "remaining_seconds": ...} or
         {"ok": True, "nodes": [...], "white_heaven": bool} where each node is {"band",
-        "stones", "item_name", "quantity"} (see exploration.roll_explore — either stones or
-        item_name is set). white_heaven mirrors whether the caller's own White Heaven status
-        was "present" for this roll (see ExplorationHuntView) -- for its own reward-pool
-        swap, not just display."""
+        "stones", "item_name", "quantity", "page_id", "page_quantity"} (see exploration.
+        roll_explore — exactly one of stones/item_name/page_id is set). white_heaven mirrors
+        whether the caller's own White Heaven status was "present" for this roll (see
+        ExplorationHuntView) -- for its own reward-pool swap, not just display."""
         player = self.db.get_or_create_player(user_id, name)
         remaining = self._check_cooldown(player, "last_explore_ts", self.EXPLORE_COOLDOWN_SECONDS)
         if remaining > 0:
@@ -4033,13 +4033,18 @@ class GameManager:
         self.db.set_timestamp_column(user_id, "last_explore_ts", int(time.time()))
         return {"ok": True, "nodes": nodes, "white_heaven": in_white_heaven, "region_find": self.maybe_trigger_region_discovery(user_id, name)}
 
-    def collect_exploration_hunt(self, user_id: int, collected_stones: int, collected_items: dict):
+    def collect_exploration_hunt(self, user_id: int, collected_stones: int, collected_items: dict, collected_pages: dict = None):
         """Grants whatever an ExplorationHuntView session actually hunted down — called once
-        when the trail ends, whether by finishing all finds or leaving early."""
+        when the trail ends, whether by finishing all finds or leaving early. collected_pages
+        is {page_id: quantity} -- pages live in their own player_pages table (see
+        GameDatabase.add_player_page), not the generic inventory collected_items grants
+        through, so they need their own grant call."""
         if collected_stones:
             self.db.add_spirit_stones(user_id, collected_stones)
         for item_name, quantity in collected_items.items():
             self.db.add_item(user_id, item_name, quantity)
+        for page_id, quantity in (collected_pages or {}).items():
+            self.db.add_player_page(user_id, page_id, quantity)
         self.grant_dao_marks(user_id)
 
     # -- PvP: /pvp ---------------------------------------------------------------
