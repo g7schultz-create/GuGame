@@ -262,6 +262,14 @@ CULTIVATION_BOOST_PILL_DURATION_SECONDS_PER_TIER = 5 * 60
 
 QI_MULTIPLIER_PILL_BONUS_PER_TIER = 0.05
 
+# Tier 8 Qi Multiplier Pill specifically (not the shared TIER_8_POTENCY_MULTIPLIER every pill
+# type gets) -- 2026-08-17, explicit request: the finished pill's own permanent bonus (+0.60
+# under the shared 1.5x multiplier alone) was worth LESS than what the Tier 8 recipe's own
+# ingredients are worth used/sold elsewhere -- crafting it was a net loss of value, not a
+# reward. Own dedicated multiplier so Cultivation Boost/Aptitude Enhancing's Tier 8 potency
+# (which nobody complained about) stays exactly as tuned.
+QI_MULTIPLIER_PILL_TIER_8_POTENCY_MULTIPLIER = 6.0  # +2.40 permanent qi_multiplier at Tier 8 (was +0.60) -- a real capstone payoff for its rare White Heaven recipe
+
 ESSENCE_RESTORATION_PILL_PERCENT_PER_TIER = 0.05
 
 APTITUDE_ENHANCING_PILL_CHANCE_PER_TIER = 0.05
@@ -289,6 +297,10 @@ def _potency_tier(tier: int) -> float:
     return tier * TIER_8_POTENCY_MULTIPLIER if tier == 8 else tier
 
 
+def _qi_multiplier_potency_tier(tier: int) -> float:
+    return tier * QI_MULTIPLIER_PILL_TIER_8_POTENCY_MULTIPLIER if tier == 8 else tier
+
+
 def _use_cultivation_boost_pill(tier: int):
     def use(db: GameDatabase, user_id: int) -> str:
         bonus = CULTIVATION_BOOST_PILL_MULTIPLIER_PER_TIER * _potency_tier(tier)
@@ -311,7 +323,7 @@ def _use_cultivation_boost_pill(tier: int):
 
 def _use_qi_multiplier_pill(tier: int):
     def use(db: GameDatabase, user_id: int) -> str:
-        bonus = QI_MULTIPLIER_PILL_BONUS_PER_TIER * _potency_tier(tier)
+        bonus = QI_MULTIPLIER_PILL_BONUS_PER_TIER * _qi_multiplier_potency_tier(tier)
         new_multiplier = db.add_qi_multiplier(user_id, bonus)
         return f"Your aperture widens permanently — **+{bonus:.2f}** qi multiplier (now x{new_multiplier:.2f})."
     return use
@@ -412,14 +424,16 @@ def _use_healing_pill(tier: int):
 
 def alchemy_pill_effect_text(pill_type: str, tier: int) -> str:
     """Human-readable numeric effect of a craftable pill at a given tier — mirrors the exact
-    math each pill's `use` callback above applies (including Tier 8's own potency multiplier,
-    via the same shared _potency_tier), for display in /alchemy before crafting."""
+    math each pill's `use` callback above applies (including Tier 8's own potency multiplier —
+    the shared _potency_tier for every type except Qi Multiplier, which uses its own bigger
+    _qi_multiplier_potency_tier instead, see that constant's own comment), for display in
+    /alchemy before crafting."""
     if pill_type == "Cultivation Boost":
         bonus = CULTIVATION_BOOST_PILL_MULTIPLIER_PER_TIER * _potency_tier(tier)
         duration = CULTIVATION_BOOST_PILL_DURATION_SECONDS_BASE + CULTIVATION_BOOST_PILL_DURATION_SECONDS_PER_TIER * tier
         return f"+{bonus:.2f} qi multiplier for {duration // 60} minutes."
     if pill_type == "Qi Multiplier":
-        bonus = QI_MULTIPLIER_PILL_BONUS_PER_TIER * _potency_tier(tier)
+        bonus = QI_MULTIPLIER_PILL_BONUS_PER_TIER * _qi_multiplier_potency_tier(tier)
         return f"Permanently +{bonus:.2f} qi multiplier."
     if pill_type == "Aptitude Enhancing":
         chance = min(APTITUDE_ENHANCING_PILL_MAX_CHANCE, APTITUDE_ENHANCING_PILL_CHANCE_PER_TIER * _potency_tier(tier))
