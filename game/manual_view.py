@@ -1,4 +1,6 @@
 import asyncio
+import csv
+import io
 
 import discord
 
@@ -185,7 +187,12 @@ class ManualView(GameView):
         return callback
 
     def _build_pages_tab(self):
-        # Row 1: studied/unstudied filter
+        # Row 1: studied/unstudied filter, plus Export CSV -- row 4 below is already at
+        # Discord's 5-button cap (Study/Refine/Dismantle 1/Study All/Refine All), but row 1
+        # only uses 3 of 5, so Export lives here instead rather than needing to restructure
+        # row 4. Exports every owned page regardless of the current filter (the whole
+        # collection, same "ignore the active view, export everything you own" convention
+        # InventoryView's own Export CSV button already uses).
         for key, label in (("all", "All"), ("studied", "📖 Studied"), ("unstudied", "❓ Unstudied")):
             button = discord.ui.Button(label=label, row=1)
             is_active = key == self.page_studied_filter
@@ -193,6 +200,10 @@ class ManualView(GameView):
             button.disabled = is_active
             button.callback = self._make_studied_filter_callback(key)
             self.add_item(button)
+
+        export_button = discord.ui.Button(label="Export CSV", emoji="📄", style=discord.ButtonStyle.secondary, row=1)
+        export_button.callback = self._on_export_pages_csv
+        self.add_item(export_button)
 
         # Row 2: tier filter, nested under whichever studied filter is active -- tier-only
         # (not Rank+Category like the Assemble tab) so Study All/Refine All below can act on
@@ -432,6 +443,30 @@ class ManualView(GameView):
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
+
+    def _build_pages_csv(self) -> discord.File:
+        rows = []
+        for page_id, info in self._owned_pages().items():
+            page = manual_data.PAGES.get(page_id)
+            if page is None:
+                continue
+            rows.append((
+                page.rank, page.category, page.name, ", ".join(page.tags),
+                info["quantity"], "Yes" if info["studied"] else "No", info["refinement_level"],
+            ))
+        rows.sort(key=lambda r: (r[0], r[1], r[2]))
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(["Rank", "Category", "Page", "Tags", "Quantity", "Studied", "Refinement Level"])
+        writer.writerows(rows)
+        data = io.BytesIO(buffer.getvalue().encode("utf-8"))
+        return discord.File(data, filename=f"{self.display_name}_manual_pages.csv")
+
+    async def _on_export_pages_csv(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        file = await asyncio.to_thread(self._build_pages_csv)
+        await interaction.followup.send(content="Your manual pages, exported.", file=file, ephemeral=True)
 
     async def _on_study(self, interaction: discord.Interaction):
         ok, message = await asyncio.to_thread(self.game.study_page, self.user_id, self.display_name, self.selected_page_id)
