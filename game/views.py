@@ -6,7 +6,7 @@ from typing import Optional
 
 import discord
 
-from . import avatar, chargen, combat, equipment, gathering, items, professions, realms
+from . import avatar, chargen, combat, equipment, gathering, items, monsters, professions, realms
 from .base_view import GameView
 from .character_class import get_character_class
 from .character_data import PHYSIQUE_TIERS, ROOT_TIERS
@@ -323,11 +323,17 @@ class ProfileView(GameView):
             ),
             inline=False,
         )
+        # Dodge is now a relative speed contest (see combat.dodge_chance's own docstring) --
+        # there's no single "your dodge chance" number without an opponent to compare against,
+        # so this previews it against a same-realm hunt encounter's own SPD, the most natural
+        # reference point for "what dodge actually feels like right now."
+        great_realm_index = realms.STAGES[p["realm_index"]].great_realm_index
+        reference_monster_spd = monsters.HUNT_MONSTERS_BY_REALM[great_realm_index][0].spd_stat
         embed.add_field(
             name="What they do",
             value=(
                 f"🎯 Hit Chance: **{combat.hit_chance(atk) * 100:.0f}%**\n"
-                f"🏃 Dodge Chance: **{combat.dodge_chance(spd) * 100:.0f}%**\n"
+                f"🏃 Dodge Chance: **{combat.dodge_chance(spd, reference_monster_spd) * 100:.0f}%** (vs a same-realm hunt encounter's SPD — a relative speed contest, not a fixed number)\n"
                 f"🍀 Crit Chance: **{combat.crit_chance(luck) * 100:.0f}%** (x{combat.CRIT_DAMAGE_MULTIPLIER:.1f} damage)\n"
                 f"⚔️ Damage: **~{format_number(str_ * combat.DAMAGE_PER_STR, decimals=0)}** before enemy DEF\n"
                 f"🛡️ Damage Reduction: **{format_number(combat.damage_reduction(def_), decimals=1)}** flat, off incoming hits"

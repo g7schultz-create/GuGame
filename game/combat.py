@@ -2,7 +2,8 @@
 Combat stat formulas:
 
     ATK -> attacker's chance to hit at all, PLUS a secondary contribution to damage
-    SPD -> defender's chance to dodge a hit that landed
+    SPD -> a relative speed contest: the defender's chance to dodge a hit that landed,
+           based on their SPD relative to the ATTACKER's own SPD (not an absolute number)
     LCK -> attacker's chance to land a critical hit
     STR -> the primary stat behind damage dealt on a non-crit hit
     DEF -> flat damage reduction
@@ -13,6 +14,20 @@ second job ATK effectively stops mattering within the first couple of realm brea
 no matter how much bigger the number gets from there. DAMAGE_PER_ATK gives it somewhere to
 keep contributing at STR_stat's secondary rate, so growing it (via breakthroughs or gear)
 keeps paying off well past the point hit chance itself saturates.
+
+Dodge had the exact same problem, worse: DODGE_CHANCE_PER_SPD (0.01/point) against an
+ABSOLUTE spd_stat meant any real player maxed out MAX_DODGE_CHANCE within the first realm or
+two (55 SPD to cap — trivial when spd_stat reaches the tens of thousands by the endgame),
+making SPD investment past that point (gear, Gu, pills, breakthroughs) completely wasted for
+dodge specifically. 2026-08-17, explicit request ("dodge and speed stat matters"): reworked
+into a RATIO against the ATTACKER's own SPD (mirrors hunt.py/raid.py/pvp_view.py's own
+FLEE_CHANCE_PER_SPD_DIFF formula's "relative speed contest" framing, but ratio- rather than
+difference-based, since a raw difference saturates just as fast once both sides' SPD reaches
+real-player magnitude — verified against live player/monster SPD gaps, which already run into
+the tens of thousands). A ratio is scale-invariant: doubling YOUR OWN spd_stat only helps if
+it also grows relative to whatever's attacking you, so it never trivially saturates purely
+from realm-driven absolute growth on both sides at once, and always has room to keep mattering
+regardless of how large the raw numbers get.
 
 All constants below are tunable.
 """
@@ -25,14 +40,22 @@ HIT_CHANCE_PER_ATK = 0.01
 MIN_HIT_CHANCE = 0.50
 MAX_HIT_CHANCE = 0.99
 
-BASE_DODGE_CHANCE = 0.05
-DODGE_CHANCE_PER_SPD = 0.01
+BASE_DODGE_CHANCE = 0.05  # dodge chance when defender_spd == attacker_spd exactly (an even speed matchup)
+DODGE_RATIO_SCALE = 0.55  # multiplies the (defender-attacker)/(defender+attacker) ratio, which
+                          # ranges -1 (attacker's SPD completely dominates) to +1 (defender's
+                          # does) -- e.g. a defender with 2x the attacker's SPD lands around
+                          # 23% dodge, 10x lands around 50%, asymptotically approaching
+                          # MAX_DODGE_CHANCE only at an extreme (never realm-growth-trivial) edge
 MIN_DODGE_CHANCE = 0.0
 MAX_DODGE_CHANCE = 0.60
 MONSTER_MAX_DODGE_CHANCE = 0.10  # separate, lower cap for monsters/raid bosses dodging a
                                  # player's attack — players felt like too many hits were
                                  # whiffing against high-SPD monsters; player-vs-player and
-                                 # monster-vs-player dodge still use the normal MAX_DODGE_CHANCE
+                                 # monster-vs-player dodge still use the normal MAX_DODGE_CHANCE.
+                                 # Kept as a safety valve even under the new ratio formula (which
+                                 # already naturally suppresses monster dodge on its own, since
+                                 # real players consistently outscale their own realm's hunt
+                                 # monster SPD by a wide margin) rather than removed outright.
 
 BASE_CRIT_CHANCE = 0.05
 CRIT_CHANCE_PER_LUCK = 0.01
@@ -53,8 +76,10 @@ def hit_chance(atk_stat: int) -> float:
     return max(MIN_HIT_CHANCE, min(MAX_HIT_CHANCE, BASE_HIT_CHANCE + atk_stat * HIT_CHANCE_PER_ATK))
 
 
-def dodge_chance(spd_stat: int) -> float:
-    return max(MIN_DODGE_CHANCE, min(MAX_DODGE_CHANCE, BASE_DODGE_CHANCE + spd_stat * DODGE_CHANCE_PER_SPD))
+def dodge_chance(defender_spd: int, attacker_spd: int) -> float:
+    total = defender_spd + attacker_spd
+    ratio = (defender_spd - attacker_spd) / total if total > 0 else 0.0
+    return max(MIN_DODGE_CHANCE, min(MAX_DODGE_CHANCE, BASE_DODGE_CHANCE + DODGE_RATIO_SCALE * ratio))
 
 
 def crit_chance(luck_stat: int) -> float:
@@ -115,7 +140,7 @@ def resolve_attack(
         if random.random() >= hit_chance(attacker_stats["atk_stat"]):
             return AttackResult(hit=False, dodged=False, crit=False, damage=0)
 
-        if random.random() < min(max_dodge_chance, dodge_chance(defender_stats["spd_stat"]) + dodge_chance_bonus):
+        if random.random() < min(max_dodge_chance, dodge_chance(defender_stats["spd_stat"], attacker_stats["spd_stat"]) + dodge_chance_bonus):
             return AttackResult(hit=True, dodged=True, crit=False, damage=0)
 
     if ignore_chance > 0 and random.random() < ignore_chance:
