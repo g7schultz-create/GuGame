@@ -163,6 +163,9 @@ class GameDatabase:
         # independent charge: a player with both Mythic Physique AND a chosen avatar soul
         # gets two separate saves, not a shared one.
         "last_avatar_fatal_block_date": "TEXT DEFAULT NULL",
+        # Divine Physique's "Divine Aegis" passive (see try_use_daily_divine_breakthrough_boost)
+        # -- same one-per-UTC-day pattern as last_fatal_hit_negated_date, on its own column.
+        "last_divine_breakthrough_boost_date": "TEXT DEFAULT NULL",
         # Void Star Root's "once daily, a search that would give nothing is upgraded to a
         # minor find" (see try_use_daily_search_upgrade) — same daily-flag pattern as above.
         "last_search_upgrade_date": "TEXT DEFAULT NULL",
@@ -1819,6 +1822,23 @@ class GameDatabase:
         con.close()
         return True
 
+    def try_use_daily_divine_breakthrough_boost(self, user_id: int) -> bool:
+        """Divine Physique's "Divine Aegis" — once per UTC day, the next breakthrough attempt
+        gets a real success-chance boost (see GameManager.attempt_breakthrough). Same
+        one-per-UTC-day pattern as try_use_daily_fatal_hit_negation just above."""
+        today = time.strftime("%Y-%m-%d", time.gmtime())
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute("SELECT last_divine_breakthrough_boost_date FROM players WHERE user_id = ?", (user_id,))
+        row = cur.fetchone()
+        if row and row["last_divine_breakthrough_boost_date"] == today:
+            con.close()
+            return False
+        cur.execute("UPDATE players SET last_divine_breakthrough_boost_date = ? WHERE user_id = ?", (today, user_id))
+        con.commit()
+        con.close()
+        return True
+
     def try_use_daily_avatar_fatal_block(self, user_id: int) -> bool:
         """Nascent Soul Avatar's own once-daily fatal-blow shield — same one-per-UTC-day
         pattern as try_use_daily_fatal_hit_negation just above, on its own separate column
@@ -2242,17 +2262,21 @@ class GameDatabase:
     BASE_HP_REGEN_PERCENT_PER_HOUR = 0.05  # 5%/hour at Body Tempering (Early)
     HP_REGEN_PERCENT_PER_REALM = 0.01  # +1%/hour per realm_index step reached
     MAX_HP_REGEN_PERCENT_PER_HOUR = 0.50  # cap so max realm isn't an instant full heal
+    COMMON_PHYSIQUE_HP_REGEN_BONUS = 0.03  # "Vital Recovery" -- see character_data.PHYSIQUE_TIERS["Common"]
 
     def settle_hp_regen(self, user_id: int):
         """Bank any real-time HP regen since the last settlement and return the fresh player row."""
         con = self.connect()
         cur = con.cursor()
         now = int(time.time())
-        cur.execute("SELECT hp, max_hp, realm_index, last_restore_ts FROM players WHERE user_id = ?", (user_id,))
+        cur.execute("SELECT hp, max_hp, realm_index, last_restore_ts, physique_tier FROM players WHERE user_id = ?", (user_id,))
         row = cur.fetchone()
         last_ts = row["last_restore_ts"] or 0
         elapsed_seconds = max(0, now - last_ts) if last_ts else 0
-        rate = min(self.MAX_HP_REGEN_PERCENT_PER_HOUR, self.BASE_HP_REGEN_PERCENT_PER_HOUR + row["realm_index"] * self.HP_REGEN_PERCENT_PER_REALM)
+        rate = self.BASE_HP_REGEN_PERCENT_PER_HOUR + row["realm_index"] * self.HP_REGEN_PERCENT_PER_REALM
+        if row["physique_tier"] == "Common":
+            rate += self.COMMON_PHYSIQUE_HP_REGEN_BONUS
+        rate = min(self.MAX_HP_REGEN_PERCENT_PER_HOUR, rate)
         regen = (elapsed_seconds / 3600.0) * row["max_hp"] * rate
         new_hp = min(row["max_hp"], row["hp"] + regen)
         cur.execute("UPDATE players SET hp = ?, last_restore_ts = ? WHERE user_id = ?", (round(new_hp), now, user_id))

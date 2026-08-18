@@ -435,6 +435,14 @@ class GameManager:
             chargen.get_path(player["cultivation_path"]),
         )
 
+    UNCOMMON_PHYSIQUE_QI_COST_REDUCTION_PCT = 0.08  # "Efficient Aperture" -- see character_data.PHYSIQUE_TIERS["Uncommon"]
+
+    def _breakthrough_qi_required(self, player: dict, physique_tier) -> float:
+        qi_required = realms.qi_required_for_next(player["realm_index"])
+        if physique_tier and physique_tier.name == "Uncommon":
+            qi_required *= (1 - self.UNCOMMON_PHYSIQUE_QI_COST_REDUCTION_PCT)
+        return qi_required
+
     def breakthrough_status(self, user_id: int, name: str):
         """Realm/chance/qi info for display — doesn't attempt anything."""
         player = self.db.get_or_create_player(user_id, name)
@@ -446,13 +454,14 @@ class GameManager:
             "player": player,
             "realm_name": realms.realm_name(player["realm_index"]),
             "next_realm_name": None if realms.is_max_realm(player["realm_index"]) else realms.realm_name(player["realm_index"] + 1),
-            "qi_required": realms.qi_required_for_next(player["realm_index"]),
+            "qi_required": self._breakthrough_qi_required(player, physique_tier),
             "chance": chance,
             "at_max_realm": realms.is_max_realm(player["realm_index"]),
         }
 
     EPIC_PHYSIQUE_BREAKTHROUGH_BUFF_PCT = 0.10
     EPIC_PHYSIQUE_BREAKTHROUGH_BUFF_DURATION_SECONDS = 600  # 10 minutes
+    DIVINE_PHYSIQUE_BREAKTHROUGH_BOOST_PCT = 0.20  # "Divine Aegis" -- see character_data.PHYSIQUE_TIERS["Divine"]
 
     def attempt_breakthrough(self, user_id: int, name: str):
         player, _ = self.db.settle_qi(user_id)  # bank latest qi before checking
@@ -461,7 +470,7 @@ class GameManager:
         if realms.is_max_realm(player["realm_index"]):
             return {"outcome": "max_realm", "player": player}
 
-        qi_required = realms.qi_required_for_next(player["realm_index"])
+        qi_required = self._breakthrough_qi_required(player, physique_tier)
         if player["qi"] < qi_required:
             return {"outcome": "insufficient_qi", "player": player, "qi_required": qi_required}
 
@@ -471,6 +480,15 @@ class GameManager:
         # always-on addition — unlike the once-daily accessory boost just below, it applies
         # every attempt for as long as the manual stays equipped.
         chance = min(1.0, chance + equip_bonuses.get("breakthrough_success_pct", 0))
+        # Divine Physique's "Divine Aegis" — once per UTC day, the first attempt gets a real
+        # chance boost (not previewed in breakthrough_status, same as Mythic's fatal-hit save
+        # not being previewed either — it's a use-it-or-lose-it daily charge, not a standing
+        # bonus). Checked/consumed here rather than through consume_pending_breakthrough_boost
+        # below since that mechanism is for externally-triggered (accessory) boosts that get
+        # manually armed in advance; this one self-arms once per day with no activation step.
+        divine_boost_used = physique_tier is not None and physique_tier.name == "Divine" and self.db.try_use_daily_divine_breakthrough_boost(user_id)
+        if divine_boost_used:
+            chance = min(1.0, chance + self.DIVINE_PHYSIQUE_BREAKTHROUGH_BOOST_PCT)
         # An activated breakthrough-boost accessory/artifact (Blood-Debt Ring, Empty
         # Aperture Ring, Ring of the Ten-Thousand-Trial Survivor at 10 stacks, ...) — see
         # activate_accessory_artifact — applies here and is consumed on this attempt
@@ -643,6 +661,7 @@ class GameManager:
             "godly_stat_grown": godly_stat_grown,
             "godly_stat_bonus": godly_stat_bonus,
             "epic_vigor_granted": epic_vigor_granted,
+            "divine_boost_used": divine_boost_used,
             "red_lotus_retried": red_lotus_retried,
             "boundless_foundation_stat": boundless_foundation_stat,
             "dao_marks_granted": dao_marks_granted,

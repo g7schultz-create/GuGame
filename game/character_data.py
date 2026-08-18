@@ -1280,7 +1280,8 @@ PHYSIQUE_TIERS: Dict[str, Tier] = {
     "Common": Tier(
         name="Common",
         emoji="⚪",
-        display_bonuses=["+5% Main Stat", "+2% HP", "+2% DEF"],
+        display_bonuses=["+5% Main Stat", "+2% HP", "+2% DEF", "+3%/hr Passive HP Regen"],
+        passive="Recovers HP passively 3 percentage points faster per hour while out of combat (see GameDatabase.settle_hp_regen).",
         stat_bonuses={"str_pct": 0.05, "hp_pct": 0.02, "def_pct": 0.02},
         names=[
             "Iron Skin Body", "Swift Foot Body", "Strong Bone Body", "Healthy Spirit Body",
@@ -1292,7 +1293,8 @@ PHYSIQUE_TIERS: Dict[str, Tier] = {
     "Uncommon": Tier(
         name="Uncommon",
         emoji="🟢",
-        display_bonuses=["+10% Main Stat", "+5% HP", "+5% DEF", "+5% Breakthrough Stat Growth"],
+        display_bonuses=["+10% Main Stat", "+5% HP", "+5% DEF", "-8% Breakthrough Qi Cost"],
+        passive="Breakthroughs cost 8% less Qi (see GameManager._breakthrough_qi_required).",
         stat_bonuses={"str_pct": 0.10, "hp_pct": 0.05, "def_pct": 0.05},
         names=[
             "Spring Tendon Body", "Steel Bone Body", "Golden Blood Body", "Flowing Muscle Body",
@@ -1354,8 +1356,11 @@ PHYSIQUE_TIERS: Dict[str, Tier] = {
     "Divine": Tier(
         name="Divine",
         emoji="🌈",
-        display_bonuses=["+75% Main Stat", "+40% HP", "+35% DEF", "+40% Stat Growth", "+30 Luck"],
-        passive="+10% Cultivation Speed, +10% Breakthrough Chance, +20% Qi Recovery, +10% Tribulation Success",
+        display_bonuses=["+75% Main Stat", "+40% HP", "+35% DEF", "+40% Stat Growth", "+30 Luck", "Once/Day: +20% Breakthrough Chance"],
+        passive=(
+            "+10% Cultivation Speed, +10% Breakthrough Chance, +20% Qi Recovery, +10% Tribulation Success. "
+            "Divine Aegis: once per day, your next breakthrough attempt gains +20% success chance."
+        ),
         stat_bonuses={
             "str_pct": 0.75, "hp_pct": 0.40, "def_pct": 0.35, "luck_flat": 30,
             "cultivation_speed_pct": 0.10, "breakthrough_chance_pct": 0.10, "qi_recovery_pct": 0.20,

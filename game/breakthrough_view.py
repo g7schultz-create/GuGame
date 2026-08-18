@@ -65,6 +65,12 @@ def build_breakthrough_result_embed(display_name: str, result: dict, game) -> di
     )
     embed.add_field(name="🎲 Chance", value=f"{result['chance'] * 100:.1f}%", inline=True)
     embed.add_field(name="💠 Qi Spent", value=format_number(result['qi_cost']), inline=True)
+    if result.get("divine_boost_used"):
+        embed.add_field(
+            name="🛡️ Divine Aegis",
+            value=f"Your Divine Physique empowers this attempt — +{game.DIVINE_PHYSIQUE_BREAKTHROUGH_BOOST_PCT * 100:.0f}% success chance (already included above)!",
+            inline=False,
+        )
     if success:
         growth_text = " • ".join(
             f"{chargen.STAT_LABELS[key]} +{format_number(amount)}" for key, amount in result["power_growth"].items()
