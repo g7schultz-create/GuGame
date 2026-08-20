@@ -36,9 +36,21 @@ BASE_LOOT_RANGES = {
 BASE_ESSENCE_PILL_RANGE = (1, 2)
 
 
+MAX_ESSENCE_PILL_TIER = 7  # Essence Restoration Pill is only ever registered for tiers 1-7
+                           # (see items.py's own dedicated registration loop -- it was
+                           # deliberately moved out of Alchemist crafting into a rare-drop-only
+                           # item, capped there). `tier` here otherwise tracks a player's own
+                           # _player_location_rank, which now reaches 8 since Dao Realm shipped
+                           # as an 8th Great Realm -- passing 8 straight through used to build
+                           # the name of a pill that was never actually registered ("Essence
+                           # Restoration Pill (T8)"), a phantom item a Dao Realm player's
+                           # Split Body could actually grant. Herb/Beast Core aren't capped
+                           # here since those genuinely do scale to Tier 8.
+
+
 def roll_split_body_loot(tier: int, avatar_level: int, rng: Optional[random.Random] = None) -> Dict[str, int]:
     """Returns {item_name: quantity} for a completed /split_body mission's guaranteed bundle.
-    `tier` should be GameManager._player_location_rank(player) (1-7); `avatar_level` scales
+    `tier` should be GameManager._player_location_rank(player) (1-8); `avatar_level` scales
     every quantity via avatar.AVATAR_LEVEL_MULTIPLIER."""
     r = rng or random
     multiplier = avatar.AVATAR_LEVEL_MULTIPLIER.get(avatar_level, 1.0)
@@ -48,7 +60,7 @@ def roll_split_body_loot(tier: int, avatar_level: int, rng: Optional[random.Rand
         name = name_template.format(tier=tier) if "{tier}" in name_template else name_template
         loot[name] = max(1, round(r.randint(lo, hi) * multiplier))
 
-    essence_pill_name = items.alchemy_pill_name("Essence Restoration", tier)
+    essence_pill_name = items.alchemy_pill_name("Essence Restoration", min(tier, MAX_ESSENCE_PILL_TIER))
     lo, hi = BASE_ESSENCE_PILL_RANGE
     loot[essence_pill_name] = max(1, round(r.randint(lo, hi) * multiplier))
 
