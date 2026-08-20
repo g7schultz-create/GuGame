@@ -583,6 +583,12 @@ class RaidView(TeamBattleEngine, GameView):
     def _build_components(self):
         self.clear_items()
         active = self.status == "fighting"
+        # Anti-macro button shuffling is scoped to White Heaven raids only (see
+        # ui_utils.add_shuffled) -- per explicit request, since White Heaven raids are the ones
+        # that actually pay out Primeval Essence Crystals worth macro-farming; every other
+        # combat view (hunt/battlefield/pvp/Inheritance Ground, and non-White-Heaven raids)
+        # went back to a plain fixed button order.
+        is_white_heaven_raid = self.enemies[0].monster.realm == "White Heaven"
         # Joining closes once the raid actually starts (see _on_join's own comment) -- the
         # button is removed entirely once fighting begins (not just disabled), so it's
         # UI-invisible rather than a dead greyed-out control to click on.
@@ -621,8 +627,11 @@ class RaidView(TeamBattleEngine, GameView):
         class_button = discord.ui.Button(label="Class Ability", emoji="🎭", style=discord.ButtonStyle.success, row=1, disabled=not active)
         class_button.callback = self._on_class_ability
         row1_buttons.append(class_button)
-        # Anti-macro: randomized on-screen order every render -- see ui_utils.add_shuffled.
-        add_shuffled(self, row1_buttons)
+        if is_white_heaven_raid:
+            add_shuffled(self, row1_buttons)
+        else:
+            for button in row1_buttons:
+                self.add_item(button)
 
         target_options = [
             discord.SelectOption(label=f"{e.monster.name} — {max(0, e.hp):.0f}/{e.max_hp:.0f} HP", value=str(idx), emoji="👑" if idx == 0 else "🐗")
@@ -669,7 +678,11 @@ class RaidView(TeamBattleEngine, GameView):
         potion_button = discord.ui.Button(label="Use Potion/Pill", emoji="🧪", style=discord.ButtonStyle.success, row=3, disabled=not active)
         potion_button.callback = self._on_open_potion_menu
         row3_buttons.append(potion_button)
-        add_shuffled(self, row3_buttons)
+        if is_white_heaven_raid:
+            add_shuffled(self, row3_buttons)
+        else:
+            for button in row3_buttons:
+                self.add_item(button)
 
     def build_embed(self) -> discord.Embed:
         if self.status == "starting":

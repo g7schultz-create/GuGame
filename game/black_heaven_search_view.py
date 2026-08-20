@@ -66,10 +66,11 @@ class AbandonBlackHeavenSearchView(GameView):
 
 
 class BlackHeavenSearchLobbyView(GameView):
-    """leader + invitees (2 required, 1 optional) -- direct mirror of
-    InheritanceGroundLobbyView's own accept/decline shape, plus one real addition: every
-    invitee must currently be present in Black Heaven (re-checked fresh at accept time, not
-    just invite time, since up to 5 minutes can pass)."""
+    """leader + invitees (first up to 2 required, any 3rd optional -- cog.py only actually
+    requires member1, so a 2-person team has exactly 1 required invitee and 0 optional) --
+    direct mirror of InheritanceGroundLobbyView's own accept/decline shape, plus one real
+    addition: every invitee must currently be present in Black Heaven (re-checked fresh at
+    accept time, not just invite time, since up to 5 minutes can pass)."""
 
     def __init__(self, game, leader: discord.Member, invitees: list):
         super().__init__(timeout=300)
@@ -222,7 +223,8 @@ class BlackHeavenSearchLobbyView(GameView):
             ),
             color=discord.Color.dark_purple(),
         )
-        embed.set_footer(text="Both required invitees must Accept to begin. The leader can Cancel. Expires in 5 min.")
+        required_text = "The required invitee must" if len(self._required_ids()) == 1 else "All required invitees must"
+        embed.set_footer(text=f"{required_text} Accept to begin. The leader can Cancel. Expires in 5 min.")
         return embed
 
 

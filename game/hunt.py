@@ -18,7 +18,7 @@ from .raid import (
     INSPIRE_STR_BONUS_PCT,
 )
 from .raid import DEFEND_ALLY_DAMAGE_REDUCTION as _BRACE_EXTRA_REDUCTION
-from .ui_utils import add_shuffled, format_number, render_bar
+from .ui_utils import format_number, render_bar
 
 FLEE_BASE_CHANCE = 0.5
 FLEE_CHANCE_PER_SPD_DIFF = 0.02
@@ -1036,8 +1036,8 @@ class HuntView(GameView):
         )
         empower_button.callback = self._on_toggle_empower
         row0_buttons.append(empower_button)
-        # Anti-macro: randomized on-screen order every render -- see ui_utils.add_shuffled.
-        add_shuffled(self, row0_buttons)
+        for button in row0_buttons:
+            self.add_item(button)
 
         row1_buttons = []
         gu = self._equipped_gu()
@@ -1063,7 +1063,8 @@ class HuntView(GameView):
         )
         class_button.callback = self._on_class_ability
         row1_buttons.append(class_button)
-        add_shuffled(self, row1_buttons)
+        for button in row1_buttons:
+            self.add_item(button)
 
         equipped_gu_name = self.game.get_equipped(self.user_id).get("gu_ability")
         inventory = self.game.get_inventory(self.user_id)

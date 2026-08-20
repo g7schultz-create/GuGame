@@ -30,7 +30,7 @@ from .raid import (
     INSPIRE_STR_BONUS_PCT,
 )
 from .raid import DEFEND_ALLY_DAMAGE_REDUCTION as _BRACE_EXTRA_REDUCTION
-from .ui_utils import add_shuffled, format_number, render_bar
+from .ui_utils import format_number, render_bar
 
 GUARD_DAMAGE_REDUCTION = 0.5
 POTION_USE_CAP = 5  # a longer fight than a normal hunt, so a slightly higher cap
@@ -594,8 +594,8 @@ class BattlefieldView(GameView):
         )
         empower_button.callback = self._on_toggle_empower
         row0_buttons.append(empower_button)
-        # Anti-macro: randomized on-screen order every render -- see ui_utils.add_shuffled.
-        add_shuffled(self, row0_buttons)
+        for button in row0_buttons:
+            self.add_item(button)
 
         row1_buttons = []
         class_button = discord.ui.Button(
@@ -612,7 +612,8 @@ class BattlefieldView(GameView):
         )
         soul_projection_button.callback = self._on_soul_projection
         row1_buttons.append(soul_projection_button)
-        add_shuffled(self, row1_buttons)
+        for button in row1_buttons:
+            self.add_item(button)
 
         inventory = self.game.get_inventory(self.user_id)
         usable = [

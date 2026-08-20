@@ -1363,12 +1363,12 @@ class GameCog(commands.Cog):
 
     @app_commands.command(
         name="inheritance_ground",
-        description="Invite 2-3 others into an inheritance ground (leave blank to run it solo)",
+        description="Invite 1-3 others into an inheritance ground (leave blank to run it solo)",
     )
     @app_commands.describe(
-        member1="First required teammate (leave blank along with member2 to run solo)",
-        member2="Second required teammate (leave blank along with member1 to run solo)",
-        member3="Optional 4th teammate (only used alongside member1/member2)",
+        member1="First teammate -- the only one required for a real (non-solo) team",
+        member2="Optional 2nd teammate",
+        member3="Optional 3rd teammate",
     )
     @app_commands.guilds(GUILD)
     async def inheritance_ground(
@@ -1376,13 +1376,14 @@ class GameCog(commands.Cog):
         member2: Optional[discord.Member] = None, member3: Optional[discord.Member] = None,
     ):
         leader = interaction.user
-        # Solo mode: leaving BOTH member1/member2 blank skips the invite lobby entirely and
-        # starts immediately as a 1-person team -- everything downstream (the bubble board,
-        # battles, Final Trial, betrayal) already tolerates any team size, so this needs no
-        # gameplay changes, just a shortcut around the lobby, for anyone who can't round up
-        # teammates. Giving exactly one of the two is ambiguous (a real team invite needs
-        # both), so that's refused rather than guessed at.
-        if member1 is None and member2 is None:
+        # Solo mode: leaving member1 blank skips the invite lobby entirely and starts
+        # immediately as a 1-person team -- everything downstream (the bubble board, battles,
+        # Final Trial, betrayal) already tolerates any team size, so this needs no gameplay
+        # changes, just a shortcut around the lobby, for anyone who can't round up teammates.
+        # A real team invite only needs member1 -- member2/member3 are both optional on top of
+        # it (2026-08-18, explicit request: "can be done with 2 people" -- previously member2
+        # was wrongly required alongside member1, blocking a 2-person team entirely).
+        if member1 is None:
             leader_player = await asyncio.to_thread(self.game.get_player_stats, leader.id, leader.display_name)
             if not leader_player["character_confirmed"]:
                 await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
@@ -1415,19 +1416,12 @@ class GameCog(commands.Cog):
             view.message = await interaction.original_response()
             return
 
-        if member1 is None or member2 is None:
-            await interaction.response.send_message(
-                "Pick both `member1` and `member2` for a real team, or leave both blank to start solo for testing.",
-                ephemeral=True,
-            )
-            return
-
-        invitees = [member1, member2] + ([member3] if member3 else [])
+        invitees = [m for m in (member1, member2, member3) if m is not None]
         if any(m.bot for m in invitees):
             await interaction.response.send_message("You can't invite a bot.", ephemeral=True)
             return
         if len({leader.id, *[m.id for m in invitees]}) != len(invitees) + 1:
-            await interaction.response.send_message("Pick 2-3 different teammates — not yourself, and not each other twice.", ephemeral=True)
+            await interaction.response.send_message("Pick 1-3 different teammates — not yourself, and not each other twice.", ephemeral=True)
             return
 
         leader_player = await asyncio.to_thread(self.game.get_player_stats, leader.id, leader.display_name)
@@ -1474,12 +1468,12 @@ class GameCog(commands.Cog):
 
     @app_commands.command(
         name="search_black_heaven",
-        description="Pop a 20-bubble board with up to 3 others already in Black Heaven (leave blank to run solo)",
+        description="Pop a 20-bubble board with 1-3 others already in Black Heaven (leave blank to run solo)",
     )
     @app_commands.describe(
-        member1="First required teammate, must already be in Black Heaven (leave blank along with member2 to run solo)",
-        member2="Second required teammate, must already be in Black Heaven (leave blank along with member1 to run solo)",
-        member3="Optional 4th teammate, must already be in Black Heaven",
+        member1="First teammate, must already be in Black Heaven -- the only one required for a real (non-solo) team",
+        member2="Optional 2nd teammate, must already be in Black Heaven",
+        member3="Optional 3rd teammate, must already be in Black Heaven",
     )
     @app_commands.guilds(GUILD)
     async def search_black_heaven(
@@ -1487,10 +1481,11 @@ class GameCog(commands.Cog):
         member2: Optional[discord.Member] = None, member3: Optional[discord.Member] = None,
     ):
         leader = interaction.user
-        # Solo mode: leaving BOTH member1/member2 blank skips the invite lobby entirely and
-        # starts immediately as a 1-person team -- mirrors /inheritance_ground's own solo
-        # bypass exactly.
-        if member1 is None and member2 is None:
+        # Solo mode: leaving member1 blank skips the invite lobby entirely and starts
+        # immediately as a 1-person team -- mirrors /inheritance_ground's own solo bypass
+        # exactly. A real team invite only needs member1 -- member2/member3 are both optional
+        # on top of it (2026-08-18, explicit request: "can be done with 2 people").
+        if member1 is None:
             leader_player = await asyncio.to_thread(self.game.get_player_stats, leader.id, leader.display_name)
             if not leader_player["character_confirmed"]:
                 await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
@@ -1531,19 +1526,12 @@ class GameCog(commands.Cog):
             view.message = await interaction.original_response()
             return
 
-        if member1 is None or member2 is None:
-            await interaction.response.send_message(
-                "Pick both `member1` and `member2` for a real team, or leave both blank to start solo.",
-                ephemeral=True,
-            )
-            return
-
-        invitees = [member1, member2] + ([member3] if member3 else [])
+        invitees = [m for m in (member1, member2, member3) if m is not None]
         if any(m.bot for m in invitees):
             await interaction.response.send_message("You can't invite a bot.", ephemeral=True)
             return
         if len({leader.id, *[m.id for m in invitees]}) != len(invitees) + 1:
-            await interaction.response.send_message("Pick 2-3 different teammates — not yourself, and not each other twice.", ephemeral=True)
+            await interaction.response.send_message("Pick 1-3 different teammates — not yourself, and not each other twice.", ephemeral=True)
             return
 
         leader_player = await asyncio.to_thread(self.game.get_player_stats, leader.id, leader.display_name)

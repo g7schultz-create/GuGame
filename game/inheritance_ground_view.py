@@ -33,7 +33,7 @@ from .team_battle import (
     FREEZE_STR_MULTIPLIER, GUARD_DAMAGE_REDUCTION, INSPIRE_DEF_BONUS_PCT, INSPIRE_DURATION_ROUNDS,
     INSPIRE_STR_BONUS_PCT, RaidEnemy, TeamBattleEngine,
 )
-from .ui_utils import add_shuffled, format_number, render_bar
+from .ui_utils import format_number, render_bar
 
 BETRAYAL_DECISION_SECONDS = 60
 BATTLE_ROUND_TIMEOUT_SECONDS = 30  # matches raid.ROUND_TIMEOUT_SECONDS's own pacing
@@ -83,15 +83,17 @@ class AbandonInheritanceGroundView(GameView):
 
 
 class InheritanceGroundLobbyView(GameView):
-    """leader + invitees (2 required, 1 optional) -- each invitee gets their own Accept/Decline
-    gated to their own user_id (same check dao_companion_view.DaoCompanionRequestView.accept
-    uses), tracked here rather than as separate messages so the leader sees one live roster."""
+    """leader + invitees (first up to 2 required, any 3rd optional -- cog.py only actually
+    requires member1, so a 2-person team has exactly 1 required invitee and 0 optional) -- each
+    invitee gets their own Accept/Decline gated to their own user_id (same check dao_companion_
+    view.DaoCompanionRequestView.accept uses), tracked here rather than as separate messages so
+    the leader sees one live roster."""
 
     def __init__(self, game, leader: discord.Member, invitees: list, ground_key: str):
         super().__init__(timeout=300)
         self.game = game
         self.leader = leader
-        self.invitees = invitees  # [discord.Member, ...], first 2 required, 3rd (if any) optional
+        self.invitees = invitees  # [discord.Member, ...] -- first 2 (or fewer) required, any 3rd optional
         self.ground_key = ground_key
         self.responses = {m.id: "pending" for m in invitees}
         self.resolved = False
@@ -217,7 +219,8 @@ class InheritanceGroundLobbyView(GameView):
             description=f"_{ground['flavor']}_\n\n" + "\n".join(lines),
             color=discord.Color.dark_gold(),
         )
-        embed.set_footer(text="Both required invitees must Accept to begin. Expires in 5 min.")
+        required_text = "The required invitee must" if len(self._required_ids()) == 1 else "All required invitees must"
+        embed.set_footer(text=f"{required_text} Accept to begin. Expires in 5 min.")
         return embed
 
 
@@ -385,8 +388,8 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             class_button = discord.ui.Button(label="Class Ability", emoji="🎭", style=discord.ButtonStyle.success, row=0)
             class_button.callback = self._on_class_ability
             row0_buttons.append(class_button)
-            # Anti-macro: randomized on-screen order every render -- see ui_utils.add_shuffled.
-            add_shuffled(self, row0_buttons)
+            for button in row0_buttons:
+                self.add_item(button)
 
             row1_buttons = []
             gu_button = discord.ui.Button(label="Use Gu Ability", emoji="🐛", style=discord.ButtonStyle.primary, row=1)
@@ -404,7 +407,8 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             potion_button = discord.ui.Button(label="Use Potion/Pill", emoji="🧪", style=discord.ButtonStyle.success, row=1)
             potion_button.callback = self._on_open_potion_menu
             row1_buttons.append(potion_button)
-            add_shuffled(self, row1_buttons)
+            for button in row1_buttons:
+                self.add_item(button)
         elif self.phase == "pre_trial":
             button = discord.ui.Button(label="Face the Trial", emoji="⚔️", style=discord.ButtonStyle.danger)
             button.callback = self._on_face_trial
@@ -450,8 +454,8 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             class_button = discord.ui.Button(label="Class Ability", emoji="🎭", style=discord.ButtonStyle.success, row=0)
             class_button.callback = self._on_duel_class_ability
             duel_row0_buttons.append(class_button)
-            # Anti-macro: randomized on-screen order every render -- see ui_utils.add_shuffled.
-            add_shuffled(self, duel_row0_buttons)
+            for button in duel_row0_buttons:
+                self.add_item(button)
 
             duel_row1_buttons = []
             gu_button = discord.ui.Button(label="Use Gu Ability", emoji="🐛", style=discord.ButtonStyle.primary, row=1)
@@ -469,7 +473,8 @@ class InheritanceGroundView(TeamBattleEngine, GameView):
             potion_button = discord.ui.Button(label="Use Potion/Pill", emoji="🧪", style=discord.ButtonStyle.success, row=1)
             potion_button.callback = self._on_open_potion_menu
             duel_row1_buttons.append(potion_button)
-            add_shuffled(self, duel_row1_buttons)
+            for button in duel_row1_buttons:
+                self.add_item(button)
         # "trial_result" and "resolved" phases have no buttons -- purely display states.
 
     # -- intro -----------------------------------------------------------------------------

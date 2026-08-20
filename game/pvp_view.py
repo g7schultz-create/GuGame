@@ -7,7 +7,7 @@ from . import chargen, combat
 from .base_view import GameView
 from .equipment import EQUIPMENT
 from .items import ITEMS
-from .ui_utils import add_shuffled, format_number, render_bar
+from .ui_utils import format_number, render_bar
 
 FLEE_BASE_CHANCE = 0.5
 FLEE_CHANCE_PER_SPD_DIFF = 0.02
@@ -428,8 +428,8 @@ class PvPView(GameView):
         )
         empower_button.callback = self._on_toggle_empower
         row0_buttons.append(empower_button)
-        # Anti-macro: randomized on-screen order every render -- see ui_utils.add_shuffled.
-        add_shuffled(self, row0_buttons)
+        for button in row0_buttons:
+            self.add_item(button)
 
         row1_buttons = []
         gu = self._equipped_gu()
@@ -449,7 +449,8 @@ class PvPView(GameView):
             )
             killer_move_button.callback = self._on_killer_move
             row1_buttons.append(killer_move_button)
-        add_shuffled(self, row1_buttons)
+        for button in row1_buttons:
+            self.add_item(button)
 
         inventory = self.game.get_inventory(self.user_id)
         usable = [
