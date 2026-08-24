@@ -74,9 +74,14 @@ WORLD_BOSS_ATTACKS_PER_COOLDOWN = 5
 # back to the original first-tried value this constant was once walked back from (20,000,000
 # -> 2,500,000 -> 1,500,000 -> 10,000,000). Raised again to 100,000,000 (2026-08-09, user's
 # explicit request), then to 500,000,000 (2026-08-11, user's explicit request), then to
-# 2,000,000,000 (2026-08-15, user's explicit request) -- ongoing live-ops tuning either way,
-# not a one-time number.
-WORLD_BOSS_MAX_HP = 2_000_000_000
+# 2,000,000,000 (2026-08-15, user's explicit request). Raised again to 50,000,000,000
+# (2026-08-21, user-reported live damage: a top player was hitting 1,100,000,000 in a single
+# flurry -- 55% of the old 2B ceiling in ONE button click, worse than the exact ratio that
+# triggered every earlier raise above, and now compounded by the just-shipped rank-tier reward
+# rework, which is supposed to reward a real multi-round, multi-contributor fight rather than
+# whoever clicks first. 50B puts that same 1.1B hit back down around ~2%, the same rough ratio
+# earlier raises targeted -- ongoing live-ops tuning either way, not a one-time number.
+WORLD_BOSS_MAX_HP = 50_000_000_000
 # Low on purpose -- a real fight's monster would scale DEF/SPD to be dangerous, but "every
 # cultivation realm" being able to meaningfully participate (the doc's own stated goal) means
 # even a fresh character's attack needs to land and deal more than the MIN_DAMAGE=1 floor.
