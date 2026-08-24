@@ -306,25 +306,88 @@ def roll_world_boss_loot(boss_key: str, contribution_scale: float = 1.0) -> dict
         # Beast Core quantity bumped 10x (1-2 -> 10-20). Gu split out of the old combined
         # equipment+Gu pool into its own two picks (instead of being diluted 50/50 inside one
         # merged option) to weight "high tier Gu" noticeably higher, per explicit request.
+        # 2026-08-21 loot pool rework: tier ceiling raised 7 -> 8 (every other endgame reward
+        # source -- Grotto, White Heaven, /explore -- now treats Tier 8 as the real top of the
+        # ladder; Legendary topping out at 7 read as behind), stones range nudged up to match.
         reward = random.choice([
-            _stones(15000, 40000),
-            _tiered_material("Beast Core", 5, 7, 10, 20),
+            _stones(15000, 50000),
+            _tiered_material("Beast Core", 5, 8, 10, 20),
             _item(random.choice(GENERIC_EQUIPMENT_POOL)),
             _item(random.choice(GENERIC_GU_POOL)),
             _item(random.choice(GENERIC_GU_POOL)),
             {"kind": "accessory_roll"},
         ])
     else:  # Mythic
+        # 2026-08-21: added a real stones option -- every OTHER band already has one as a
+        # fallback, but Mythic never did, meaning the single biggest loot band could never
+        # hand out a big currency payout at all, only items/accessories. Sized well above
+        # Legendary's own ceiling to stay the top of the ladder.
         reward = random.choice([
             {"kind": "boss_exclusive"},
             _item(equipment.gu_item_name(random.choice(_EXISTING_CANON_ULTRA_RARE_GU), "Immortal")),
             {"kind": "accessory_roll"},
+            _stones(80000, 150000),
         ])
 
     if reward.get("kind") == "stones":
         reward["amount"] = round(reward["amount"] * max(0.5, contribution_scale))
     reward["band"] = band
     return reward
+
+
+# -- Contribution rank tiers (2026-08-21, explicit request: "worth it for people to attack
+# based on rankings") -- everything above (guaranteed stones, the damage-weighted lottery) was
+# already damage-SHARE-based, but every other per-contributor roll (Essence Restoration Pill,
+# Qi Ascension Pill, avatar gear, manual page) was flat/equal for every contributor regardless
+# of rank -- a 1-damage tap got the exact same 85% avatar-gear roll as the #1 damage dealer.
+# These tiers, keyed off PLACEMENT (contributors are already damage-sorted DESC, see
+# GameDatabase.get_world_boss_contributors), give top ranks a real, visible reason to climb
+# beyond their own linear stone share.
+RANK_TIER_TOP1 = "top1"
+RANK_TIER_TOP3 = "top3"
+RANK_TIER_TOP10 = "top10"
+RANK_TIER_PARTICIPANT = "participant"
+
+RANK_TIER_LABELS = {
+    RANK_TIER_TOP1: "🥇 #1 Damage", RANK_TIER_TOP3: "🥈 Top 3", RANK_TIER_TOP10: "🏅 Top 10", RANK_TIER_PARTICIPANT: "Participant",
+}
+
+
+def contribution_rank_tier(rank: int) -> str:
+    if rank == 1:
+        return RANK_TIER_TOP1
+    if rank <= 3:
+        return RANK_TIER_TOP3
+    if rank <= 10:
+        return RANK_TIER_TOP10
+    return RANK_TIER_PARTICIPANT
+
+
+# Extra INDEPENDENT rolls per tier for each of the 3 rare-item mechanics (Essence Restoration
+# Pill, Qi Ascension Pill, manual page) -- on top of the 1 baseline roll every contributor
+# already gets, at that mechanic's own existing odds (unchanged). Multiple hits across the
+# extra rolls all stack (see GameManager._end_world_boss) rather than only the best one
+# counting, so climbing tiers is strictly better, never a wash.
+EXTRA_RARE_ROLLS_BY_TIER = {
+    RANK_TIER_TOP1: 3, RANK_TIER_TOP3: 2, RANK_TIER_TOP10: 1, RANK_TIER_PARTICIPANT: 0,
+}
+
+# Avatar gear chance per tier -- WORLD_BOSS_AVATAR_GEAR_CHANCE (0.85) is the participant
+# baseline; top ranks climb toward (and #1 lands exactly on) a guarantee. Gear's own TIER is
+# already fixed at avatar_gear.MAX_TIER for everyone (nothing higher to give), so chance is
+# the only lever available here.
+AVATAR_GEAR_CHANCE_BY_TIER = {
+    RANK_TIER_TOP1: 1.00, RANK_TIER_TOP3: 0.95, RANK_TIER_TOP10: 0.90, RANK_TIER_PARTICIPANT: 0.85,
+}
+
+# A bonus roll of the SAME 5-tier loot band table the damage-weighted lottery already draws
+# from (see roll_world_boss_loot) -- fully independent of and additional to the lottery, which
+# is unchanged. This is the direct "better loot pool, worth ranking for" lever: #1 always gets
+# one, Top 3 usually does, Top 10 sometimes does, and a plain participant never does (their own
+# shot at the loot pool is still the damage-weighted lottery, same as before).
+BONUS_LOOT_ROLL_CHANCE_BY_TIER = {
+    RANK_TIER_TOP1: 1.00, RANK_TIER_TOP3: 0.60, RANK_TIER_TOP10: 0.25, RANK_TIER_PARTICIPANT: 0.0,
+}
 
 
 # -- Guaranteed rewards -- every participant gets stones scaled by their % of total damage

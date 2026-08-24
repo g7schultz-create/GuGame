@@ -6860,55 +6860,82 @@ class GameManager:
         (the doc's own "ticket" formula, see world_boss.weighted_lottery_winner) each for
         their own bonus item roll. Marks the boss row's status either way. Returns a summary
         dict for the caller (e.g. the /raidboss attack response, or the spawn-loop
-        announcement) to report."""
+        announcement) to report.
+
+        2026-08-21 rework ("worth it for people to attack based on rankings"): contributors is
+        already damage-sorted DESC (see GameDatabase.get_world_boss_contributors), so each
+        contributor's list POSITION is their real placement -- world_boss.contribution_rank_tier
+        turns that into a tier (top1/top3/top10/participant) that scales the 3 rare-roll
+        mechanics (extra independent rolls -- hits stack, they don't just replace the baseline
+        one), the avatar-gear chance, and a brand-new bonus loot-band roll on top of the
+        unchanged lottery below."""
         boss = self.db.get_world_boss(boss_instance_id)
         contributors = self.db.get_world_boss_contributors(boss_instance_id)
         total_damage = sum(c["damage_dealt"] for c in contributors)
 
         guaranteed_summaries = []
-        for c in contributors:
+        for rank, c in enumerate(contributors, start=1):
+            tier = world_boss.contribution_rank_tier(rank)
+            extra_rolls = world_boss.EXTRA_RARE_ROLLS_BY_TIER[tier]
             stones = world_boss.guaranteed_reward_stones(c["damage_dealt"], total_damage)
             if stones > 0:
                 self.db.add_spirit_stones(c["user_id"], stones)
-            # Essence Restoration Pill: rare bonus roll for every contributor, independent of
-            # the lottery draw below (see items.roll_essence_restoration_pill_drop's own
-            # docstring for why this pill moved here instead of the Alchemist craft table).
-            essence_pill = roll_essence_restoration_pill_drop()
-            pill_name, pill_qty = essence_pill if essence_pill else (None, 0)
-            if pill_name:
-                self.db.add_item(c["user_id"], pill_name, pill_qty)
-            # Qi Ascension Pill: same "rare bonus roll for every contributor" shape as the
+            # Essence Restoration Pill: rare bonus roll for every contributor (1 baseline +
+            # extra_rolls for a top rank), independent of the lottery draw below (see items.
+            # roll_essence_restoration_pill_drop's own docstring for why this pill moved here
+            # instead of the Alchemist craft table). Every hit across the extra rolls stacks.
+            essence_pills = []
+            for _ in range(1 + extra_rolls):
+                hit = roll_essence_restoration_pill_drop()
+                if hit:
+                    essence_pills.append(hit)
+                    self.db.add_item(c["user_id"], hit[0], hit[1])
+            # Qi Ascension Pill: same "1 baseline + extra_rolls for a top rank" shape as the
             # Essence Restoration Pill roll just above, one of only three drop sources for
             # this pill (the other two are /search_forgotten_blessed_land and /explore -- see
             # items.roll_qi_ascension_pill_drop's own docstring for why it's this narrow).
-            qi_ascension_pill = items.roll_qi_ascension_pill_drop()
-            qi_ascension_pill_name, qi_ascension_pill_qty = qi_ascension_pill if qi_ascension_pill else (None, 0)
-            if qi_ascension_pill_name:
-                self.db.add_item(c["user_id"], qi_ascension_pill_name, qi_ascension_pill_qty)
+            qi_ascension_pills = []
+            for _ in range(1 + extra_rolls):
+                hit = items.roll_qi_ascension_pill_drop()
+                if hit:
+                    qi_ascension_pills.append(hit)
+                    self.db.add_item(c["user_id"], hit[0], hit[1])
             # Nascent Soul Avatar gear (see game/avatar_gear.py) — World Boss is this
             # system's "commonly" source (every contributor gets an independent roll, unlike
             # the single damage-weighted lottery winner below), gated on the avatar being
             # unlocked at all so a sub-Nascent-Soul contributor never rolls for gear they
-            # can't use. source_tier=5 (fixed), mirroring how the existing world-boss
-            # accessory roll below already hardcodes source_rank=7 ("always endgame-scale").
+            # can't use. Chance now scales by rank tier (world_boss.AVATAR_GEAR_CHANCE_BY_TIER)
+            # instead of the old flat WORLD_BOSS_AVATAR_GEAR_CHANCE for everyone -- gear's own
+            # TIER stays fixed at avatar_gear.MAX_TIER regardless of rank (nothing higher to give).
             avatar_gear_grant = None
-            if self.is_avatar_unlocked(c["user_id"], c["name"]) and random.random() < self.WORLD_BOSS_AVATAR_GEAR_CHANCE:
+            if self.is_avatar_unlocked(c["user_id"], c["name"]) and random.random() < world_boss.AVATAR_GEAR_CHANCE_BY_TIER[tier]:
                 avatar_gear_grant = self.roll_and_grant_avatar_gear(c["user_id"], c["name"], "world_boss", avatar_gear.MAX_TIER)
             # Manual page: rare bonus roll for every contributor (see world_boss.
-            # roll_manual_page_rank's own docstring for the exact odds), same independent-
-            # per-contributor shape as the pill/avatar-gear rolls just above.
-            manual_page_grant = None
-            page_rank = world_boss.roll_manual_page_rank()
-            if page_rank is not None:
-                page = random.choice([p for p in manual_data.PAGES.values() if p.rank == page_rank])
-                self.db.add_player_page(c["user_id"], page.page_id, 1)
-                manual_page_grant = {"rank": page_rank, "name": page.name}
+            # roll_manual_page_rank's own docstring for the exact odds), same "1 baseline +
+            # extra_rolls" shape as the pill rolls above -- every hit stacks.
+            manual_pages = []
+            for _ in range(1 + extra_rolls):
+                page_rank = world_boss.roll_manual_page_rank()
+                if page_rank is not None:
+                    page = random.choice([p for p in manual_data.PAGES.values() if p.rank == page_rank])
+                    self.db.add_player_page(c["user_id"], page.page_id, 1)
+                    manual_pages.append({"rank": page_rank, "name": page.name})
+            # Bonus loot-band roll (world_boss.BONUS_LOOT_ROLL_CHANCE_BY_TIER) -- an extra,
+            # independent shot at the SAME 5-tier band table the damage-weighted lottery below
+            # draws from, gated purely on RANK rather than damage-weighted luck. #1 always gets
+            # one; a plain participant never does (their own shot at this pool is still the
+            # lottery, unchanged).
+            bonus_loot_text = None
+            if random.random() < world_boss.BONUS_LOOT_ROLL_CHANCE_BY_TIER[tier]:
+                contribution_scale = (c["damage_dealt"] / total_damage) if total_damage else 0
+                bonus_reward = world_boss.roll_world_boss_loot(boss["boss_key"], contribution_scale)
+                bonus_loot_text = self._resolve_world_boss_reward(c["user_id"], c["name"], boss["boss_key"], bonus_reward)
             self.db.mark_world_boss_contributor_rewarded(boss_instance_id, c["user_id"])
             guaranteed_summaries.append({
                 "user_id": c["user_id"], "name": c["name"], "damage_dealt": c["damage_dealt"],
-                "stones": stones, "essence_pill": pill_name, "essence_pill_quantity": pill_qty,
-                "qi_ascension_pill": qi_ascension_pill_name, "qi_ascension_pill_quantity": qi_ascension_pill_qty,
-                "avatar_gear": avatar_gear_grant, "manual_page": manual_page_grant,
+                "rank": rank, "tier": tier,
+                "stones": stones, "essence_pills": essence_pills, "qi_ascension_pills": qi_ascension_pills,
+                "avatar_gear": avatar_gear_grant, "manual_pages": manual_pages, "bonus_loot_text": bonus_loot_text,
             })
 
         contribution_map = {c["user_id"]: c["damage_dealt"] for c in contributors}

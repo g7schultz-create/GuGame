@@ -223,16 +223,25 @@ class GameCog(commands.Cog):
         lines = [f"**{format_number(end_summary['total_damage'])}** total damage from **{len(end_summary['contributors'])}** cultivator(s)."]
         for winner in end_summary["lottery_winners"]:
             lines.append(f"🎁 Lottery drop goes to **{winner['name']}**: {winner['reward_text']}!")
-        pill_finders = [c["name"] for c in end_summary["contributors"] if c.get("essence_pill")]
+        # 2026-08-21: essence_pill/qi_ascension_pill/manual_page are now LISTS (a top-ranked
+        # contributor's extra rolls can land more than one hit) -- count/list every hit, not
+        # just whether one landed.
+        pill_finders = [c["name"] for c in end_summary["contributors"] if c["essence_pills"]]
         if pill_finders:
             lines.append(f"💧 A rare Essence Restoration Pill also turned up for: **{', '.join(pill_finders)}**!")
-        qi_ascension_finders = [c["name"] for c in end_summary["contributors"] if c.get("qi_ascension_pill")]
+        qi_ascension_finders = [c["name"] for c in end_summary["contributors"] if c["qi_ascension_pills"]]
         if qi_ascension_finders:
             lines.append(f"🌟 A rare Qi Ascension Pill also turned up for: **{', '.join(qi_ascension_finders)}**!")
-        page_finders = [c for c in end_summary["contributors"] if c.get("manual_page")]
+        page_finders = [c for c in end_summary["contributors"] if c["manual_pages"]]
         if page_finders:
-            page_lines = [f"**{c['name']}** ({c['manual_page']['name']}, Rank {c['manual_page']['rank']})" for c in page_finders]
+            page_lines = []
+            for c in page_finders:
+                page_names = ", ".join(f"{p['name']}, Rank {p['rank']}" for p in c["manual_pages"])
+                page_lines.append(f"**{c['name']}** ({page_names})")
             lines.append(f"📜 A rare manual page also turned up for: {', '.join(page_lines)}!")
+        bonus_loot_finders = [c["name"] for c in end_summary["contributors"] if c["bonus_loot_text"]]
+        if bonus_loot_finders:
+            lines.append(f"🎉 A top-rank bonus loot roll also turned up for: **{', '.join(bonus_loot_finders)}**!")
         embed = discord.Embed(
             title=f"{roster['emoji']} {roster['name']} Has Fallen!",
             description="\n".join(lines),
@@ -240,11 +249,13 @@ class GameCog(commands.Cog):
         )
         # end_summary["contributors"] is already damage-sorted DESC (see
         # GameDatabase.get_world_boss_contributors) -- top 10 shown, medals for the top 3.
+        # 2026-08-21: each entry now also carries its own rank tier label (world_boss.
+        # RANK_TIER_LABELS) so the ranking itself makes clear WHY the top spots are worth it.
         contributors = end_summary["contributors"]
         if contributors:
             medals = ["🥇", "🥈", "🥉"]
             ranking_lines = [
-                f"{medals[i] if i < 3 else f'{i + 1}.'} **{c['name']}** — {format_number(c['damage_dealt'])} damage"
+                f"{medals[i] if i < 3 else f'{i + 1}.'} **{c['name']}** — {format_number(c['damage_dealt'])} damage ({world_boss.RANK_TIER_LABELS[c['tier']]})"
                 for i, c in enumerate(contributors[:10])
             ]
             if len(contributors) > 10:
@@ -271,17 +282,25 @@ class GameCog(commands.Cog):
         and a player with DMs closed or who's blocked the bot just silently doesn't get one —
         one failed DM must never stop the rest of the loop or the channel announcement after it."""
         for c in end_summary["contributors"]:
-            lines = [f"⚔️ You dealt **{format_number(c['damage_dealt'])}** damage to **{roster['name']}** before it fell."]
+            # 2026-08-21: rank/tier line first -- makes clear WHY a top-ranked contributor's
+            # rolls below are better than a plain participant's (world_boss.RANK_TIER_LABELS/
+            # contribution_rank_tier).
+            lines = [
+                f"⚔️ You dealt **{format_number(c['damage_dealt'])}** damage to **{roster['name']}** before it fell "
+                f"(#{c['rank']} — {world_boss.RANK_TIER_LABELS[c['tier']]}).",
+            ]
             if c["stones"] > 0:
                 lines.append(f"🪙 You received **{format_number(c['stones'])}** spirit stones.")
-            if c.get("essence_pill"):
-                qty = c.get("essence_pill_quantity", 1)
-                lines.append(f"💧 You also found {qty}x rare **{c['essence_pill']}**!")
-            if c.get("qi_ascension_pill"):
-                qty = c.get("qi_ascension_pill_quantity", 1)
-                lines.append(f"🌟 You also found {qty}x rare **{c['qi_ascension_pill']}**!")
-            if c.get("manual_page"):
-                lines.append(f"📜 You also found a rare **{c['manual_page']['name']}** (Rank {c['manual_page']['rank']} page)!")
+            for pill_name, pill_qty in c["essence_pills"]:
+                lines.append(f"💧 You also found {pill_qty}x rare **{pill_name}**!")
+            for pill_name, pill_qty in c["qi_ascension_pills"]:
+                lines.append(f"🌟 You also found {pill_qty}x rare **{pill_name}**!")
+            for page in c["manual_pages"]:
+                lines.append(f"📜 You also found a rare **{page['name']}** (Rank {page['rank']} page)!")
+            if c["avatar_gear"]:
+                lines.append("👻 You also found Nascent Soul Avatar gear!")
+            if c["bonus_loot_text"]:
+                lines.append(f"🎉 Your **{world_boss.RANK_TIER_LABELS[c['tier']]}** placement earned a bonus loot roll: {c['bonus_loot_text']}!")
             for winner in end_summary["lottery_winners"]:
                 if winner["user_id"] == c["user_id"]:
                     lines.append(f"🎁 You won a damage-weighted lottery drop: {winner['reward_text']}!")
