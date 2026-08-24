@@ -605,6 +605,11 @@ class GameDatabase:
         # as a display-only cache, the id column is authoritative" idiom as gear_id above.
         if "gu_instance_id" not in equipped_columns:
             cur.execute("ALTER TABLE equipped ADD COLUMN gu_instance_id INTEGER")
+        # Nullable pointer into servant_instances (see below) -- set only when a servant_support/
+        # servant_combat slot holds a servant. Same "item_name kept as a display-only cache, the
+        # id column is authoritative" idiom as gear_id/gu_instance_id above.
+        if "servant_instance_id" not in equipped_columns:
+            cur.execute("ALTER TABLE equipped ADD COLUMN servant_instance_id INTEGER")
 
         # The Nascent Soul Avatar's OWN independent gear slots (see game/avatar_gear.py) --
         # a second, separate equip table from `equipped` above. item_name is kept as a
@@ -749,6 +754,24 @@ class GameDatabase:
             item_name TEXT,
             bonus_stat_bonuses TEXT DEFAULT '{}',
             blessing_ticks INTEGER DEFAULT 0,
+            created_ts INTEGER
+        )
+        """)
+
+        # Servants (see game/servants.py / /servant, admin-only preview) -- unlike Gu, every
+        # summoned copy is a real row from the moment it's pulled (no flat-stack phase): star-up
+        # needs per-copy star_level state tracked from pull #1. automation_duty/
+        # automation_next_tick_ts live directly on the instance (a Servant IS both the identity
+        # and the worker at once, unlike Grotto's separately-recruited Ink/Hairy Men).
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS servant_instances (
+            instance_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER,
+            name TEXT,
+            tier INTEGER,
+            star_level INTEGER DEFAULT 1,
+            automation_duty TEXT DEFAULT NULL,
+            automation_next_tick_ts INTEGER DEFAULT 0,
             created_ts INTEGER
         )
         """)
@@ -1517,6 +1540,26 @@ class GameDatabase:
 
         if player["grotto_level"]:
             total_manual_pct += _grotto.grotto_bonuses(player["grotto_level"]).get("cultivation_speed_pct", 0) * 100
+
+        # Servants (see game/servants.py / /servant, admin-only preview) -- a Support-slotted
+        # servant flavored around cultivation_speed_pct (servants.SUPPORT_KEYS_OUTSIDE_GENERIC_
+        # POOL) rides this SAME capped pool, not GameManager.compute_equipment_bonuses' generic
+        # display-only pool -- the same "_qi_rate_components is the real hook" mistake this
+        # comment trail already documents for avatar gear/soul, Gu Pet, and Grotto above.
+        from . import servants as _servants
+
+        cur.execute(
+            "SELECT servant_instance_id FROM equipped WHERE user_id = ? AND slot_key = ? AND servant_instance_id IS NOT NULL",
+            (user_id, _servants.SLOT_KEY_SUPPORT),
+        )
+        support_row = cur.fetchone()
+        if support_row:
+            servant_row = cur.execute(
+                "SELECT name, star_level FROM servant_instances WHERE instance_id = ?", (support_row["servant_instance_id"],)
+            ).fetchone()
+            servant = _servants.SERVANT_CATALOG.get(servant_row["name"]) if servant_row else None
+            if servant and servant.support_bonus_key == "cultivation_speed_pct":
+                total_manual_pct += _servants.support_special_pct(servant, servant_row["star_level"]) * 100
 
         player_rank = _realms.STAGES[player["realm_index"]].great_realm_index + 1
         soft_cap = _search_data.CULTIVATION_SOFT_CAP_BY_PLAYER_RANK.get(player_rank, 100)
@@ -4421,6 +4464,193 @@ class GameDatabase:
         ).fetchall()
         con.close()
         return [self._hairy_man_row_to_dict(row) for row in rows]
+
+    # -- Servants (see game/servants.py / /servant) ------------------------------------------
+
+    @staticmethod
+    def _servant_instance_row_to_dict(row) -> dict:
+        return {
+            "instance_id": row["instance_id"], "owner_id": row["owner_id"], "name": row["name"],
+            "tier": row["tier"], "star_level": row["star_level"],
+            "automation_duty": row["automation_duty"], "automation_next_tick_ts": row["automation_next_tick_ts"],
+            "created_ts": row["created_ts"],
+        }
+
+    def create_servant_instance(self, owner_id: int, name: str, tier: int, star_level: int = 1) -> int:
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute(
+            "INSERT INTO servant_instances (owner_id, name, tier, star_level, created_ts) VALUES (?, ?, ?, ?, ?)",
+            (owner_id, name, tier, star_level, int(time.time())),
+        )
+        con.commit()
+        instance_id = cur.lastrowid
+        con.close()
+        return instance_id
+
+    def get_servant_instance(self, instance_id: int) -> Optional[dict]:
+        con = self.connect()
+        row = con.execute("SELECT * FROM servant_instances WHERE instance_id = ?", (instance_id,)).fetchone()
+        con.close()
+        return self._servant_instance_row_to_dict(row) if row else None
+
+    def get_player_servant_instances(self, owner_id: int) -> list:
+        con = self.connect()
+        rows = con.execute("SELECT * FROM servant_instances WHERE owner_id = ? ORDER BY instance_id", (owner_id,)).fetchall()
+        con.close()
+        return [self._servant_instance_row_to_dict(row) for row in rows]
+
+    def delete_servant_instance(self, instance_id: int):
+        con = self.connect()
+        con.execute("DELETE FROM servant_instances WHERE instance_id = ?", (instance_id,))
+        con.commit()
+        con.close()
+
+    def set_servant_instance_star(self, instance_id: int, star_level: int):
+        con = self.connect()
+        con.execute("UPDATE servant_instances SET star_level = ? WHERE instance_id = ?", (star_level, instance_id))
+        con.commit()
+        con.close()
+
+    def count_distinct_servant_names(self, owner_id: int) -> int:
+        """For the collection bonus (see servants.collection_bonus_pct) -- distinct NAMES
+        owned, so duplicate/star-up-fuel copies of the same servant don't count twice."""
+        con = self.connect()
+        row = con.execute("SELECT COUNT(DISTINCT name) AS c FROM servant_instances WHERE owner_id = ?", (owner_id,)).fetchone()
+        con.close()
+        return row["c"] if row else 0
+
+    def set_equipped_servant(self, user_id: int, slot_key: str, instance_id: int, display_name: str):
+        """Like set_equipped_gu_instance, but for a servant_instances row in one of the two
+        Servant slots (servants.SLOT_KEY_SUPPORT/SLOT_KEY_COMBAT)."""
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute("SELECT 1 FROM equipped WHERE user_id = ? AND slot_key = ?", (user_id, slot_key))
+        if cur.fetchone() is None:
+            cur.execute(
+                "INSERT INTO equipped (user_id, slot_key, item_name, gear_id, accessory_instance_id, gu_instance_id, servant_instance_id) VALUES (?, ?, ?, NULL, NULL, NULL, ?)",
+                (user_id, slot_key, display_name, instance_id),
+            )
+        else:
+            cur.execute(
+                "UPDATE equipped SET item_name = ?, gear_id = NULL, accessory_instance_id = NULL, gu_instance_id = NULL, servant_instance_id = ? WHERE user_id = ? AND slot_key = ?",
+                (display_name, instance_id, user_id, slot_key),
+            )
+        con.commit()
+        con.close()
+
+    def get_equipped_servant_instance_ids(self, user_id: int) -> dict:
+        """{slot_key: instance_id} for only the Servant slots currently holding a servant --
+        parallel to get_equipped_gu_instance_ids."""
+        con = self.connect()
+        cur = con.execute(
+            "SELECT slot_key, servant_instance_id FROM equipped WHERE user_id = ? AND servant_instance_id IS NOT NULL",
+            (user_id,),
+        )
+        rows = cur.fetchall()
+        con.close()
+        return {row["slot_key"]: row["servant_instance_id"] for row in rows}
+
+    def set_servant_automation(self, instance_id: int, duty: str, next_tick_ts: int):
+        con = self.connect()
+        con.execute("UPDATE servant_instances SET automation_duty = ?, automation_next_tick_ts = ? WHERE instance_id = ?", (duty, next_tick_ts, instance_id))
+        con.commit()
+        con.close()
+
+    def clear_servant_automation(self, instance_id: int):
+        con = self.connect()
+        con.execute("UPDATE servant_instances SET automation_duty = NULL, automation_next_tick_ts = 0 WHERE instance_id = ?", (instance_id,))
+        con.commit()
+        con.close()
+
+    def set_servant_next_tick(self, instance_id: int, next_tick_ts: int):
+        con = self.connect()
+        con.execute("UPDATE servant_instances SET automation_next_tick_ts = ? WHERE instance_id = ?", (next_tick_ts, instance_id))
+        con.commit()
+        con.close()
+
+    def get_servant_automation_pending(self, now: int) -> list:
+        """Every servant instance across every player with an automation duty assigned whose
+        automation_next_tick_ts has elapsed -- used only by the background check_and_complete_
+        servant_automation sweep."""
+        con = self.connect()
+        rows = con.execute(
+            "SELECT * FROM servant_instances WHERE automation_duty IS NOT NULL AND automation_next_tick_ts <= ?", (now,)
+        ).fetchall()
+        con.close()
+        return [self._servant_instance_row_to_dict(row) for row in rows]
+
+    def count_player_automated_servants(self, owner_id: int) -> int:
+        con = self.connect()
+        row = con.execute(
+            "SELECT COUNT(*) AS c FROM servant_instances WHERE owner_id = ? AND automation_duty IS NOT NULL", (owner_id,)
+        ).fetchone()
+        con.close()
+        return row["c"] if row else 0
+
+    def spend_essence_pills_any_tier(self, user_id: int, count: int) -> bool:
+        """Spends `count` Essence Restoration Pills toward a Servant summon, ANY tier, lowest
+        tier first (preserves a player's higher-tier pills for their own healing use). Atomic:
+        refuses (no partial deduction) unless the SUM across all 7 tiers covers `count` --
+        see servants.SUMMON_COST_ESSENCE_PILLS. Item names must match items.alchemy_pill_name(
+        "Essence Restoration", tier) exactly."""
+        con = self.connect()
+        cur = con.cursor()
+        rows = cur.execute(
+            "SELECT item_name, quantity FROM inventory WHERE user_id = ? AND item_name LIKE 'Essence Restoration Pill (T%)'",
+            (user_id,),
+        ).fetchall()
+        owned = {row["item_name"]: row["quantity"] for row in rows}
+        remaining = count
+        to_spend = []
+        for tier in range(1, 8):
+            if remaining <= 0:
+                break
+            item_name = f"Essence Restoration Pill (T{tier})"
+            have = owned.get(item_name, 0)
+            if have <= 0:
+                continue
+            take = min(have, remaining)
+            to_spend.append((item_name, take))
+            remaining -= take
+        if remaining > 0:
+            con.close()
+            return False
+        for item_name, quantity in to_spend:
+            cur.execute("UPDATE inventory SET quantity = quantity - ? WHERE user_id = ? AND item_name = ?", (quantity, user_id, item_name))
+        cur.execute("DELETE FROM inventory WHERE user_id = ? AND quantity <= 0", (user_id,))
+        con.commit()
+        con.close()
+        return True
+
+    def spend_any_manual_pages(self, user_id: int, count: int) -> bool:
+        """Spends `count` manual pages toward a Servant summon, ANY page/rank, greedily from
+        whichever stack has the MOST duplicates first (protects a player's single-copy pages,
+        which they may still need for manual assembly). Atomic: refuses (no partial deduction)
+        unless the sum across every owned page covers `count`."""
+        con = self.connect()
+        cur = con.cursor()
+        rows = cur.execute("SELECT id, page_id, quantity FROM player_pages WHERE user_id = ? ORDER BY quantity DESC", (user_id,)).fetchall()
+        remaining = count
+        to_spend = []
+        for row in rows:
+            if remaining <= 0:
+                break
+            take = min(row["quantity"], remaining)
+            to_spend.append((row["id"], row["quantity"], take))
+            remaining -= take
+        if remaining > 0:
+            con.close()
+            return False
+        for row_id, have, take in to_spend:
+            new_qty = have - take
+            if new_qty > 0:
+                cur.execute("UPDATE player_pages SET quantity = ? WHERE id = ?", (new_qty, row_id))
+            else:
+                cur.execute("DELETE FROM player_pages WHERE id = ?", (row_id,))
+        con.commit()
+        con.close()
+        return True
 
     # -- Accessories/artifacts (see accessories_data.py) -----------------------------------
 

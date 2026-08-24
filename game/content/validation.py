@@ -728,6 +728,39 @@ def validate_gu_pet_content() -> List[str]:
     return errors
 
 
+def validate_servants() -> List[str]:
+    """Checks game/servants.py's static catalog (see /servant, admin-only preview): every
+    tier 1-7 has at least one entry, every name's tier matches its SERVANTS_BY_TIER bucket,
+    within_tier_weight is positive, base_stats only uses real foundation-stat keys, and every
+    support_bonus_key is either a real GameManager.SPECIAL_BONUS_KEYS entry or one of
+    servants.SUPPORT_KEYS_OUTSIDE_GENERIC_POOL (the yield/cultivation keys wired directly at
+    their own consumption sites instead -- see GameManager._servant_yield_bonus and
+    database.py's _qi_rate_components)."""
+    from .. import servants
+    from ..manager import GameManager
+
+    errors: List[str] = []
+    known_special_keys = set(GameManager.SPECIAL_BONUS_KEYS)
+    known_stat_keys = {"str_stat", "atk_stat", "hp", "spd_stat", "def_stat", "qi_stat", "luck_stat"}
+
+    for tier in range(1, 8):
+        if not servants.SERVANTS_BY_TIER.get(tier):
+            errors.append(f"[servants] Tier {tier} has no servants in SERVANTS_BY_TIER.")
+
+    for name, servant in servants.SERVANT_CATALOG.items():
+        if name not in servants.SERVANTS_BY_TIER.get(servant.tier, []):
+            errors.append(f"[servants] '{name}' has tier {servant.tier} but isn't listed under SERVANTS_BY_TIER[{servant.tier}].")
+        if servant.within_tier_weight <= 0:
+            errors.append(f"[servants] '{name}': within_tier_weight ({servant.within_tier_weight}) should be positive.")
+        for key in servant.base_stats:
+            if key not in known_stat_keys:
+                errors.append(f"[servants] '{name}': base_stats has unknown stat key '{key}'.")
+        if servant.support_bonus_key not in known_special_keys and servant.support_bonus_key not in servants.SUPPORT_KEYS_OUTSIDE_GENERIC_POOL:
+            errors.append(f"[servants] '{name}': support_bonus_key '{servant.support_bonus_key}' isn't a known SPECIAL_BONUS_KEYS entry or a SUPPORT_KEYS_OUTSIDE_GENERIC_POOL key.")
+
+    return errors
+
+
 def validate_all_content() -> List[str]:
     errors: List[str] = []
     errors.extend(validate_monsters())
@@ -741,6 +774,7 @@ def validate_all_content() -> List[str]:
     errors.extend(validate_root_specs())
     errors.extend(validate_physique_specs())
     errors.extend(validate_gu_pet_content())
+    errors.extend(validate_servants())
     return errors
 
 

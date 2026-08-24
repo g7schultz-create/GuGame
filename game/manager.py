@@ -13,8 +13,8 @@ from . import (
     accessories_data, accessories_gen, alchemy, avatar, avatar_gear, black_heaven, blacksmith, canon_gu, chargen,
     combat, dao_companion, dao_essences, dao_paths, discovery_gen, equipment, exploration, gathering, grotto, gu_pet,
     gu_pet_images, gu_types, inheritance_ground_data, items, killer_move_gen, manual_data, manual_gen, monsters,
-    professions, realms, search_data, sects, split_body, tournament, treasure_hunt, white_heaven, world_boss,
-    world_regions,
+    professions, realms, search_data, sects, servants, split_body, tournament, treasure_hunt, white_heaven,
+    world_boss, world_regions,
 )
 from .content.monsters import blood_sea_ancestor
 from .content.monsters import black_heaven as black_heaven_monsters
@@ -1855,6 +1855,201 @@ class GameManager:
             completed.append({"user_id": owner_id, "name": player["name"], "item_name": instance["item_name"], "message": message, "maxed": maxed})
         return completed
 
+    # -- Servants (see game/servants.py / /servant, admin-only preview) ----------------------
+
+    def summon_servant(self, user_id: int, currency: str, count: int = 1):
+        """Rolls `count` servants, paid for via one of servants.SUMMON_CURRENCIES (alternatives,
+        not a simultaneous multi-currency cost). Spends atomically BEFORE any roll happens --
+        refuses outright if funds are short, never a partial deduction. Returns
+        (ok, message, rolled) where rolled is a list of (name, tier) tuples."""
+        if currency not in servants.SUMMON_CURRENCIES:
+            return False, "Not a valid currency.", []
+        unit_cost = servants.SUMMON_CURRENCY_COST[currency]
+        total_cost = unit_cost * count
+        if currency == servants.CURRENCY_STONES:
+            if not self.db.spend_spirit_stones(user_id, total_cost):
+                return False, f"Not enough spirit stones — need {format_number(total_cost)}.", []
+        elif currency == servants.CURRENCY_ESSENCE_CRYSTALS:
+            if not self.db.remove_item(user_id, servants.PRIMEVAL_ESSENCE_CRYSTAL, total_cost):
+                return False, f"Not enough Primeval Essence Crystals — need {total_cost}.", []
+        elif currency == servants.CURRENCY_ESSENCE_PILLS:
+            if not self.db.spend_essence_pills_any_tier(user_id, total_cost):
+                return False, f"Not enough Essence Restoration Pills (any tier) — need {total_cost}.", []
+        else:  # manual_pages
+            if not self.db.spend_any_manual_pages(user_id, total_cost):
+                return False, f"Not enough manual pages (any rank) — need {total_cost}.", []
+        rolled = []
+        for _ in range(count):
+            name = servants.roll_servant()
+            servant = servants.SERVANT_CATALOG[name]
+            self.db.create_servant_instance(user_id, name, servant.tier)
+            rolled.append((name, servant.tier))
+        return True, f"Summoned {count} servant(s)!", rolled
+
+    def get_player_servants(self, user_id: int) -> list:
+        """Read-only -- for /servant's Roster/Star Up/Equip tabs."""
+        return self.db.get_player_servant_instances(user_id)
+
+    def get_equipped_servants(self, user_id: int) -> dict:
+        """Read-only -- {servants.SLOT_KEY_SUPPORT/SLOT_KEY_COMBAT: instance dict or None} for
+        /servant's Equip tab."""
+        equipped_ids = self.db.get_equipped_servant_instance_ids(user_id)
+        return {
+            slot_key: self.db.get_servant_instance(equipped_ids[slot_key]) if slot_key in equipped_ids else None
+            for slot_key in servants.SERVANT_SLOT_KEYS
+        }
+
+    def get_servant_collection_bonus_pct(self, user_id: int) -> float:
+        """Read-only -- for /servant's Roster tab header."""
+        return servants.collection_bonus_pct(self.db.count_distinct_servant_names(user_id))
+
+    def star_up_servant(self, user_id: int, keep_instance_id: int, consume_instance_ids: list):
+        """Consumes exact-name duplicates as fuel to advance keep's star level by one -- keep's
+        own instance_id (and therefore its equip/automation state) never changes. See
+        servants.STAR_UP_DUPLICATES_REQUIRED."""
+        keep = self.db.get_servant_instance(keep_instance_id)
+        if keep is None or keep["owner_id"] != user_id:
+            return False, "That servant isn't yours."
+        if keep["star_level"] >= servants.MAX_STAR_LEVEL:
+            return False, f"**{keep['name']}** is already at the maximum star level."
+        required = servants.STAR_UP_DUPLICATES_REQUIRED[keep["star_level"]]
+        if len(consume_instance_ids) != required:
+            return False, f"Star-up from ★{keep['star_level']} needs exactly {required} duplicate(s)."
+        consumed = []
+        for instance_id in consume_instance_ids:
+            if instance_id == keep_instance_id:
+                return False, "Can't consume the servant you're starring up."
+            instance = self.db.get_servant_instance(instance_id)
+            if instance is None or instance["owner_id"] != user_id:
+                return False, "One of those duplicates isn't yours."
+            if instance["name"] != keep["name"]:
+                return False, f"One of those duplicates isn't **{keep['name']}**."
+            consumed.append(instance)
+        for instance in consumed:
+            self.db.delete_servant_instance(instance["instance_id"])
+        new_star = keep["star_level"] + 1
+        self.db.set_servant_instance_star(keep_instance_id, new_star)
+        return True, f"**{keep['name']}** advances to ★{new_star}!"
+
+    def evolve_servant(self, user_id: int, instance_id: int):
+        """A maxed (★7) T5/T6 servant evolves into a freshly-rolled T6/T7 named servant -- a
+        full identity swap (see servants.roll_named_servant), not a fixed mapping. Equip/
+        automation state carries forward onto the new instance."""
+        instance = self.db.get_servant_instance(instance_id)
+        if instance is None or instance["owner_id"] != user_id:
+            return False, "That servant isn't yours."
+        if not servants.can_evolve(instance["tier"], instance["star_level"]):
+            return False, f"**{instance['name']}** can't evolve yet — needs to be ★{servants.MAX_STAR_LEVEL} at Tier 5 or 6."
+        new_tier = instance["tier"] + 1
+        new_name = servants.roll_named_servant(new_tier)
+
+        equipped_slot_key = None
+        for slot_key, equipped_instance_id in self.db.get_equipped_servant_instance_ids(user_id).items():
+            if equipped_instance_id == instance_id:
+                equipped_slot_key = slot_key
+                break
+        was_automated = instance["automation_duty"]
+        automation_next_tick_ts = instance["automation_next_tick_ts"]
+
+        old_name = instance["name"]
+        self.db.delete_servant_instance(instance_id)
+        new_instance_id = self.db.create_servant_instance(user_id, new_name, new_tier, star_level=1)
+        if equipped_slot_key:
+            self.db.set_equipped_servant(user_id, equipped_slot_key, new_instance_id, new_name)
+        if was_automated:
+            self.db.set_servant_automation(new_instance_id, was_automated, automation_next_tick_ts)
+
+        return True, f"**{old_name}** evolves into **{new_name}** (Tier {new_tier})!"
+
+    def equip_servant(self, user_id: int, slot_key: str, instance_id: int):
+        if slot_key not in servants.SERVANT_SLOT_KEYS:
+            return False, "Not a valid servant slot."
+        instance = self.db.get_servant_instance(instance_id)
+        if instance is None or instance["owner_id"] != user_id:
+            return False, "That servant isn't yours."
+        self.db.set_equipped_servant(user_id, slot_key, instance_id, instance["name"])
+        slot_label = "Combat" if slot_key == servants.SLOT_KEY_COMBAT else "Support"
+        return True, f"**{instance['name']}** equipped to {slot_label}."
+
+    def unequip_servant(self, user_id: int, slot_key: str):
+        if slot_key not in servants.SERVANT_SLOT_KEYS:
+            return False, "Not a valid servant slot."
+        self.db.clear_equipped(user_id, slot_key)
+        return True, "Servant unequipped."
+
+    def assign_servant_duty(self, user_id: int, instance_id: int, duty: str):
+        if duty not in servants.AUTOMATION_DUTIES:
+            return False, "Not a valid duty."
+        instance = self.db.get_servant_instance(instance_id)
+        if instance is None or instance["owner_id"] != user_id:
+            return False, "That servant isn't yours."
+        if instance["automation_duty"] is not None:
+            return False, f"**{instance['name']}** is already on duty."
+        if self.db.count_player_automated_servants(user_id) >= servants.MAX_AUTOMATION_SERVANTS:
+            return False, f"You already have the maximum {servants.MAX_AUTOMATION_SERVANTS} servants on automation duty."
+        next_tick_ts = int(time.time()) + servants.AUTOMATION_TICK_INTERVAL_SECONDS
+        self.db.set_servant_automation(instance_id, duty, next_tick_ts)
+        return True, f"**{instance['name']}** begins working the {duty} duty."
+
+    def unassign_servant_duty(self, user_id: int, instance_id: int):
+        instance = self.db.get_servant_instance(instance_id)
+        if instance is None or instance["owner_id"] != user_id:
+            return False, "That servant isn't yours."
+        self.db.clear_servant_automation(instance_id)
+        return True, f"**{instance['name']}** stops working."
+
+    def check_and_complete_servant_automation(self) -> list:
+        """Periodic sweep (see cog.py's servant_automation_tick) -- for every servant whose
+        automation_next_tick_ts has elapsed, calls the EXISTING start_mining_vein/
+        start_gathering_patch/harvest_all_farm on the player's behalf (no reimplemented yield
+        logic). Always reschedules for another attempt, win or miss -- unlike Ink Men running out
+        of page duplicates, a mine/gather/farm cycle is always eventually available again, so a
+        servant never goes idle here (a same-cycle collision with the player's own manual /mine
+        or /gather is rare and harmless: MINE/GATHER_COOLDOWN_SECONDS are both 900, dwarfed by
+        the 24h tick interval, so it just skips to next cycle). Farm duty is harvest-only in this
+        pass -- it does not auto-replant emptied plots (see servants.py's own module comment)."""
+        completed = []
+        now = int(time.time())
+        for instance in self.db.get_servant_automation_pending(now):
+            owner_id = instance["owner_id"]
+            player = self.db.get_player_row(owner_id)
+            if player is None:
+                self.db.clear_servant_automation(instance["instance_id"])
+                continue
+            duty = instance["automation_duty"]
+            success = False
+            if duty == servants.DUTY_MINE:
+                result = self.start_mining_vein(owner_id, player["name"])
+                if result["ok"]:
+                    self.collect_mining_vein(owner_id, {node["item_name"]: node["quantity"] for node in result["nodes"]})
+                    success = True
+            elif duty == servants.DUTY_GATHER:
+                result = self.start_gathering_patch(owner_id, player["name"])
+                if result["ok"]:
+                    self.collect_gathering_patch(owner_id, {node["item_name"]: node["quantity"] for node in result["nodes"]})
+                    success = True
+            else:  # farm
+                result = self.harvest_all_farm(owner_id, player["name"])
+                success = result["plots_harvested"] > 0
+            self.db.set_servant_next_tick(instance["instance_id"], now + servants.AUTOMATION_TICK_INTERVAL_SECONDS)
+            completed.append({"user_id": owner_id, "name": player["name"], "servant_name": instance["name"], "duty": duty, "success": success})
+        return completed
+
+    def _servant_yield_bonus(self, user_id: int, key: str) -> float:
+        """Mirrors _grotto_yield_bonus's own shape -- mine/gather/farm have no generic bonus
+        pool, so a Support-slotted servant flavored around gathering (servants.YIELD_BONUS_KEYS)
+        needs this same direct read instead of riding compute_equipment_bonuses."""
+        instance_id = self.db.get_equipped_servant_instance_ids(user_id).get(servants.SLOT_KEY_SUPPORT)
+        if instance_id is None:
+            return 0.0
+        instance = self.db.get_servant_instance(instance_id)
+        if instance is None:
+            return 0.0
+        servant = servants.SERVANT_CATALOG.get(instance["name"])
+        if servant is None or servant.support_bonus_key != key:
+            return 0.0
+        return servants.support_special_pct(servant, instance["star_level"])
+
     # Special stat_bonuses keys that aren't flat foundation stats — each fed straight
     # through to combat.resolve_attack (via hunt.py/raid.py), the qi-rate system, or
     # somewhere else specific (see canon_gu.py's docstring for where the newer ones go).
@@ -1969,6 +2164,7 @@ class GameManager:
         instance_gear_ids = self.db.get_equipped_gear_ids(user_id)
         accessory_ids = self.db.get_equipped_accessory_ids(user_id)
         gu_instance_ids = self.db.get_equipped_gu_instance_ids(user_id)
+        servant_instance_ids = self.db.get_equipped_servant_instance_ids(user_id)
         for slot_key, item_name in self.db.get_equipped(user_id).items():
             if slot_key in instance_gear_ids:
                 crafted = self.db.get_crafted_gear(instance_gear_ids[slot_key])
@@ -1991,6 +2187,24 @@ class GameManager:
                 if gu_instance:
                     for key, value in gu_instance["bonus_stat_bonuses"].items():
                         stat_bonuses[key] = stat_bonuses.get(key, 0) + value
+                power_mult = 1.0
+            elif slot_key in servant_instance_ids:
+                # Servant (see game/servants.py / /servant, admin-only preview) -- Combat slot
+                # is a pure stat stick at full scaled base_stats; Support slot trades half of
+                # that for its own themed support_bonus_key at full value. A yield-flavored
+                # support_bonus_key (servants.YIELD_BONUS_KEYS) is excluded here -- mine/gather/
+                # farm don't read this pool at all, see GameManager._servant_yield_bonus.
+                servant_instance = self.db.get_servant_instance(servant_instance_ids[slot_key])
+                servant = servants.SERVANT_CATALOG.get(servant_instance["name"]) if servant_instance else None
+                if servant and servant_instance:
+                    stat_bonuses = servants.scaled_stat_bonuses(servant, servant_instance["star_level"])
+                    if slot_key == servants.SLOT_KEY_SUPPORT:
+                        stat_bonuses = {key: value * servants.SUPPORT_STAT_FRACTION for key, value in stat_bonuses.items()}
+                        if servant.support_bonus_key not in servants.SUPPORT_KEYS_OUTSIDE_GENERIC_POOL:
+                            pct = servants.support_special_pct(servant, servant_instance["star_level"])
+                            stat_bonuses[servant.support_bonus_key] = stat_bonuses.get(servant.support_bonus_key, 0) + pct
+                else:
+                    stat_bonuses = {}
                 power_mult = 1.0
             else:
                 gear = equipment.EQUIPMENT.get(item_name)
@@ -2048,6 +2262,15 @@ class GameManager:
         # and mine/gather/farm yield don't read this pool at all.
         if player_row and player_row["grotto_level"]:
             special["alchemy_success_pct"] = special.get("alchemy_success_pct", 0) + grotto.grotto_bonuses(player_row["grotto_level"]).get("alchemy_success_pct", 0)
+        # Servant collection bonus (see game/servants.py) -- a passive % just for owning
+        # distinct servants beyond the 2 equipped slots, rewarding breadth even unequipped.
+        # Rides the generic pool (no mine/gather/farm-style direct wiring needed) since both
+        # keys it touches are already SPECIAL_BONUS_KEYS entries consumed elsewhere.
+        if player_row:
+            collection_pct = servants.collection_bonus_pct(self.db.count_distinct_servant_names(user_id))
+            if collection_pct:
+                special["stone_reward_bonus_pct"] = special.get("stone_reward_bonus_pct", 0) + collection_pct
+                special["loot_chance_bonus_pct"] = special.get("loot_chance_bonus_pct", 0) + collection_pct
         if player_row:
             for pct_key, flat_key in equipment.CRAFTED_GEAR_PCT_TO_FLAT.items():
                 pct = crafted_pct_totals[pct_key]
@@ -3945,7 +4168,7 @@ class GameManager:
         yield_mult = (
             professions.yield_multiplier(player["miner_rank"])
             * self._region_bonus_dict(player).get("gather_yield_multiplier", 1.0)
-            * (1 + self._trait_bonus(player, "mining_yield_pct") + self._grotto_yield_bonus(player))
+            * (1 + self._trait_bonus(player, "mining_yield_pct") + self._grotto_yield_bonus(player) + self._servant_yield_bonus(user_id, "mining_yield_pct"))
         )
         nodes = []
         for _ in range(self.MINE_VEIN_NODE_COUNT):
@@ -3978,7 +4201,7 @@ class GameManager:
         yield_mult = (
             professions.yield_multiplier(player["gatherer_rank"])
             * self._region_bonus_dict(player).get("gather_yield_multiplier", 1.0)
-            * (1 + self._trait_bonus(player, "herb_yield_pct") + self._grotto_yield_bonus(player))
+            * (1 + self._trait_bonus(player, "herb_yield_pct") + self._grotto_yield_bonus(player) + self._servant_yield_bonus(user_id, "herb_yield_pct"))
         )
         nodes = []
         for _ in range(self.GATHER_PATCH_NODE_COUNT):
@@ -4270,6 +4493,7 @@ class GameManager:
         tier = slot["tier"]
         multiplier = professions.yield_multiplier(overview["player"]["farmer_rank"]) * (
             1 + self._trait_bonus(overview["player"], "herb_yield_pct") + self._grotto_yield_bonus(overview["player"])
+            + self._servant_yield_bonus(user_id, "herb_yield_pct")
         )
         quantity = max(1, round(random.randint(*self.FARM_BASE_YIELD_RANGE) * multiplier))
         item_name = f"Tier {tier} Herb"

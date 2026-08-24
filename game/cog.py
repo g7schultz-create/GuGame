@@ -20,6 +20,7 @@ from .equipment_view import EquipmentView
 from .avatar_view import AvatarView
 from .gu_pet_view import GuPetView
 from .grotto_view import GrottoView
+from .servant_view import ServantView
 from .dao_companion_view import DaoCompanionView
 from .split_body_view import SplitBodyView
 from .hunt import AbandonHuntView, HuntView
@@ -134,6 +135,7 @@ class GameCog(commands.Cog):
         self.black_heaven_tick.start()
         self.world_region_travel_tick.start()
         self.grotto_tick.start()
+        self.servant_automation_tick.start()
 
     async def cog_unload(self):
         self.world_boss_tick.cancel()
@@ -146,6 +148,7 @@ class GameCog(commands.Cog):
         self.black_heaven_tick.cancel()
         self.world_region_travel_tick.cancel()
         self.grotto_tick.cancel()
+        self.servant_automation_tick.cancel()
 
     # World Boss respawn scheduler (see world_boss.py's own module docstring) -- checks every
     # 5 minutes whether the current boss expired and/or a fresh one is due; GameManager.
@@ -559,6 +562,31 @@ class GameCog(commands.Cog):
         except discord.HTTPException:
             pass
 
+    # Servants (see game/servants.py / /servant, admin-only preview) -- a servant on automation
+    # duty triggers one real mine/gather/farm cycle per real day; the sweep itself runs on the
+    # same 5-minute cadence as every other tick loop, same "cheap and idempotent" idea as
+    # GROTTO_TICK_INTERVAL_SECONDS above.
+    SERVANT_AUTOMATION_TICK_INTERVAL_SECONDS = 300
+
+    @tasks.loop(seconds=SERVANT_AUTOMATION_TICK_INTERVAL_SECONDS)
+    async def servant_automation_tick(self):
+        for completed in await asyncio.to_thread(self.game.check_and_complete_servant_automation):
+            await self._dm_servant_automation_complete(completed)
+
+    @servant_automation_tick.before_loop
+    async def _before_servant_automation_tick(self):
+        await self.bot.wait_until_ready()
+
+    async def _dm_servant_automation_complete(self, completed: dict):
+        """Best-effort, same shape as _dm_ink_man_complete/_dm_hairy_man_complete."""
+        try:
+            user = self.bot.get_user(completed["user_id"]) or await self.bot.fetch_user(completed["user_id"])
+            duty_label = completed["duty"].title()
+            outcome = "completed a cycle" if completed["success"] else "found nothing ready (will try again tomorrow)"
+            await user.send(f"⚙️ Your servant **{completed['servant_name']}** ({duty_label} duty) {outcome}.")
+        except discord.HTTPException:
+            pass
+
     async def _announce_tournament_signup_open(self, opened: dict):
         """Best-effort channel ping when maybe_open_tournament auto-opens a fresh signup --
         mirrors _announce_world_boss_spawn's own shape. Without this, nobody would know a
@@ -753,6 +781,25 @@ class GameCog(commands.Cog):
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
         view = GrottoView(interaction.user.id, self.game, interaction.user.display_name)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
+        view.message = await interaction.original_response()
+
+    @app_commands.command(name="servant", description="[Admin] Servant gacha/collection system (testing preview)")
+    @app_commands.guilds(GUILD)
+    async def servant(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+            return
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
+        if not player["character_confirmed"]:
+            await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
+            return
+        await asyncio.to_thread(
+            self.db.log_admin_action,
+            interaction.user.id, interaction.user.display_name, interaction.user.id, interaction.user.display_name, "servant_open", "",
+        )
+        view = ServantView(interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
