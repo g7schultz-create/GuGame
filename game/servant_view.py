@@ -1,5 +1,5 @@
 """
-ServantView -- the /servant menu (admin-only preview, see cog.py). Summon tab: roll for new
+ServantView -- the /servant menu. Summon tab: roll for new
 servants (see GameManager.summon_servant). Roster tab: browse owned instances by tier + the
 collection bonus. Star Up tab: consume exact-name duplicates to advance a servant's star level,
 or evolve a maxed T5/T6 servant into a fresh T6/T7 named identity (see GameManager.
@@ -20,15 +20,10 @@ import discord
 
 from . import servants
 from .base_view import GameView
-from .equipment import SPECIAL_STAT_TEXT
-from .ui_utils import format_number
+from .equipment import SPECIAL_STAT_TEXT, FOUNDATION_STAT_LABELS
+from .ui_utils import format_number, format_duration
 
 PAGE_SIZE = 25
-
-STAT_LABELS = {
-    "str_stat": "STR", "atk_stat": "ATK", "hp": "HP", "spd_stat": "SPD",
-    "def_stat": "DEF", "qi_stat": "QI", "luck_stat": "Luck",
-}
 
 CURRENCY_LABELS = {
     servants.CURRENCY_STONES: "Spirit Stones",
@@ -41,25 +36,28 @@ DUTY_LABELS = {servants.DUTY_MINE: "Mine", servants.DUTY_GATHER: "Gather", serva
 
 def _format_bonus_line(key: str, value: float) -> str:
     formatter = SPECIAL_STAT_TEXT.get(key)
-    return formatter(value) if formatter else f"{key}: {value:g}"
+    if formatter:
+        return formatter(value)
+    if key in FOUNDATION_STAT_LABELS:
+        return f"{FOUNDATION_STAT_LABELS[key]} +{value:g}"
+    return f"{key}: {value:g}"
 
 
 def _instance_label(instance: dict) -> str:
     return f"{servants.TIER_EMOJI.get(instance['tier'], '')} #{instance['instance_id']} {instance['name']} (T{instance['tier']} ★{instance['star_level']} Lv{instance['level']})"
 
 
-def _maybe_set_thumbnail(embed: discord.Embed, name: str):
-    """Sets the embed's thumbnail to this servant's image_url, if the catalog entry has one
-    filled in -- every catalog entry ships with image_url=None until real art is supplied, so
-    this is a no-op today and starts working the moment servants.py's entries are filled in."""
+def _maybe_set_image(embed: discord.Embed, name: str):
+    """Sets the embed's large image (not the small corner thumbnail) to this servant's
+    image_url, if the catalog entry has one filled in."""
     servant = servants.SERVANT_CATALOG.get(name)
     if servant and servant.image_url:
-        embed.set_thumbnail(url=servant.image_url)
+        embed.set_image(url=servant.image_url)
 
 
 def _stats_text(servant, star_level: int, level: int = 1, affinity_seconds: int = 0) -> str:
     bonuses = servants.scaled_stat_bonuses(servant, star_level, level, affinity_seconds)
-    return ", ".join(f"{STAT_LABELS.get(k, k)} +{v:g}" for k, v in bonuses.items()) or "—"
+    return ", ".join(_format_bonus_line(k, v) for k, v in bonuses.items()) or "—"
 
 
 class ServantView(GameView):
@@ -88,6 +86,7 @@ class ServantView(GameView):
 
         self.selected_level_id: int = None
         self.level_page = 0
+        self.level_tier_filter: int = None
 
         self.selected_slot = servants.SLOT_KEY_SUPPORT
         self.selected_equip_id: int = None
@@ -280,16 +279,40 @@ class ServantView(GameView):
             star_up_button.callback = self._on_star_up
             self.add_item(star_up_button)
 
+            star_up_all_button = discord.ui.Button(label="Star Up All", emoji="⏫", style=discord.ButtonStyle.primary, row=4)
+            star_up_all_button.callback = self._on_star_up_all
+            self.add_item(star_up_all_button)
+
+    def _level_filtered(self, instances: list) -> list:
+        candidates = [i for i in instances if i["level"] < servants.SERVANT_MAX_LEVEL]
+        if self.level_tier_filter is not None:
+            candidates = [i for i in candidates if i["tier"] == self.level_tier_filter]
+        return sorted(candidates, key=lambda i: (i["tier"], i["name"], i["level"]))
+
     def _build_level_components(self):
         """Level's own independent servant picker -- deliberately NOT shared with Star Up's
         keep select, so any owned servant with Level headroom is reachable here regardless of
-        whether it also happens to be star-up/evolve eligible."""
+        whether it also happens to be star-up/evolve eligible. A tier filter (row2, a compact
+        Select rather than Roster's button-grid -- this tab already needs 2 more rows for the
+        instance picker itself and its actions, no room left for a 2-row tier grid too) narrows
+        the picker below it."""
         instances = self.game.get_player_servants(self.user_id)
         by_id = {i["instance_id"]: i for i in instances}
-        candidates = sorted(
-            (i for i in instances if i["level"] < servants.SERVANT_MAX_LEVEL),
-            key=lambda i: (i["tier"], i["name"], i["level"]),
-        )
+
+        tier_counts = {t: 0 for t in range(1, 8)}
+        for i in instances:
+            if i["level"] < servants.SERVANT_MAX_LEVEL:
+                tier_counts[i["tier"]] += 1
+        tier_options = [discord.SelectOption(label=f"All Tiers — {sum(tier_counts.values())}", value="all", default=self.level_tier_filter is None)]
+        for t in range(1, 8):
+            tier_options.append(discord.SelectOption(
+                label=f"T{t} — {tier_counts[t]}", value=str(t), emoji=servants.TIER_EMOJI[t], default=(self.level_tier_filter == t),
+            ))
+        tier_select = discord.ui.Select(placeholder="Filter by tier...", options=tier_options, row=2)
+        tier_select.callback = self._on_pick_level_tier
+        self.add_item(tier_select)
+
+        candidates = self._level_filtered(instances)
         shown, self.level_page, total_pages = self._paginate(candidates, self.level_page)
         if self.selected_level_id not in by_id:
             self.selected_level_id = None
@@ -300,17 +323,17 @@ class ServantView(GameView):
         ]
         level_select = discord.ui.Select(
             placeholder="Choose a servant to level up..." + (f" (page {self.level_page + 1}/{total_pages})" if total_pages > 1 else ""),
-            options=level_options or [discord.SelectOption(label="Every servant is already max Level", value="none")],
-            disabled=not level_options, row=2,
+            options=level_options or [discord.SelectOption(label="Nothing at this filter to level up", value="none")],
+            disabled=not level_options, row=3,
         )
         level_select.callback = self._on_pick_level_instance
         self.add_item(level_select)
 
         if total_pages > 1:
-            prev_button = discord.ui.Button(label="◀ Prev", row=3, disabled=self.level_page == 0)
+            prev_button = discord.ui.Button(label="◀ Prev", row=4, disabled=self.level_page == 0)
             prev_button.callback = self._make_level_page_callback(-1)
             self.add_item(prev_button)
-            next_button = discord.ui.Button(label="Next ▶", row=3, disabled=self.level_page >= total_pages - 1)
+            next_button = discord.ui.Button(label="Next ▶", row=4, disabled=self.level_page >= total_pages - 1)
             next_button.callback = self._make_level_page_callback(1)
             self.add_item(next_button)
 
@@ -470,6 +493,14 @@ class ServantView(GameView):
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
 
+    async def _on_star_up_all(self, interaction: discord.Interaction):
+        if self.selected_keep_id:
+            _, self.last_result = await asyncio.to_thread(self.game.star_up_all, self.user_id, self.selected_keep_id)
+        self.selected_consume_ids = []
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
     async def _on_evolve(self, interaction: discord.Interaction):
         if self.selected_keep_id:
             _, self.last_result = await asyncio.to_thread(self.game.evolve_servant, self.user_id, self.selected_keep_id)
@@ -481,8 +512,18 @@ class ServantView(GameView):
 
     # -- callbacks: level -------------------------------------------------------------------
 
-    async def _on_pick_level_instance(self, interaction: discord.Interaction):
+    async def _on_pick_level_tier(self, interaction: discord.Interaction):
         select = next(child for child in self.children if isinstance(child, discord.ui.Select) and child.row == 2)
+        value = select.values[0]
+        self.level_tier_filter = None if value == "all" else int(value)
+        self.level_page = 0
+        self.selected_level_id = None
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _on_pick_level_instance(self, interaction: discord.Interaction):
+        select = next(child for child in self.children if isinstance(child, discord.ui.Select) and child.row == 3)
         self.selected_level_id = int(select.values[0])
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
@@ -603,7 +644,7 @@ class ServantView(GameView):
         embed = discord.Embed(
             title=f"🎴 {self.display_name}'s Servant Summon",
             description=(
-                "**[Admin Preview]** Roll for a servant across 7 tiers "
+                "Roll for a servant across 7 tiers "
                 "(T1 36.9% · T2 26% · T3 18% · T4 12% · T5 6% · T6 1% · T7 0.1%).\n\n"
                 f"Currency: **{CURRENCY_LABELS[self.selected_currency]}** "
                 f"({servants.SUMMON_CURRENCY_COST[self.selected_currency]}/summon)"
@@ -614,7 +655,7 @@ class ServantView(GameView):
             lines = "\n".join(f"{servants.TIER_EMOJI.get(tier, '')} **{name}** (Tier {tier})" for name, tier in self.last_rolled)
             embed.add_field(name="Pull Results", value=lines, inline=False)
             if len(self.last_rolled) == 1:
-                _maybe_set_thumbnail(embed, self.last_rolled[0][0])
+                _maybe_set_image(embed, self.last_rolled[0][0])
         return embed
 
     def _roster_embed(self) -> discord.Embed:
@@ -673,7 +714,7 @@ class ServantView(GameView):
                 lines.append(f"★{keep['star_level']} → ★{keep['star_level'] + 1}: choose **{required}** duplicate(s) below (you own {dupes_owned}).")
 
             embed.add_field(name=keep["name"], value="\n".join(lines), inline=False)
-            _maybe_set_thumbnail(embed, keep["name"])
+            _maybe_set_image(embed, keep["name"])
         return embed
 
     def _level_embed(self) -> discord.Embed:
@@ -698,7 +739,10 @@ class ServantView(GameView):
             else:
                 lines.append("Level maxed.")
             embed.add_field(name=keep["name"], value="\n".join(lines), inline=False)
-            _maybe_set_thumbnail(embed, keep["name"])
+            _maybe_set_image(embed, keep["name"])
+        else:
+            filter_label = servants.tier_label(self.level_tier_filter) if self.level_tier_filter else "All Tiers"
+            embed.add_field(name="Filter", value=f"Showing **{filter_label}** — pick a servant below.", inline=False)
         return embed
 
     def _equip_embed(self) -> discord.Embed:
@@ -727,7 +771,7 @@ class ServantView(GameView):
         # listed first and is the more "battle-facing" of the two.
         primary = equipped.get(servants.SLOT_KEY_COMBAT) or equipped.get(servants.SLOT_KEY_SUPPORT)
         if primary:
-            _maybe_set_thumbnail(embed, primary["name"])
+            _maybe_set_image(embed, primary["name"])
         return embed
 
     def _automation_embed(self) -> discord.Embed:
@@ -754,3 +798,82 @@ class ServantView(GameView):
                 lines.append(f"{_instance_label(i)} — {DUTY_LABELS.get(i['automation_duty'], i['automation_duty'])} duty{bonus_text}")
             embed.add_field(name="On Duty", value="\n".join(lines), inline=False)
         return embed
+
+
+class ViewServantView(GameView):
+    """/view_servant -- a focused, image-forward display of your Combat and Support servants
+    (each its own embed with a large image, since one embed only gets one big image slot) plus
+    a Dual Cultivate button (see GameManager.dual_cultivate) for an instant qi + essence burst,
+    gated on having a servant equipped in BOTH slots and scaled by their combined investment."""
+
+    def __init__(self, user_id: int, game, display_name: str):
+        super().__init__(timeout=180)
+        self.user_id = user_id
+        self.game = game
+        self.display_name = display_name
+        self.last_result: str = None
+        self._build_components()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("Run `/view_servant` yourself to see your own servants.", ephemeral=True)
+            return False
+        return True
+
+    def _build_components(self):
+        self.clear_items()
+        button = discord.ui.Button(label="Dual Cultivate", emoji="🌀", style=discord.ButtonStyle.success, row=0)
+        button.callback = self._on_dual_cultivate
+        self.add_item(button)
+
+    async def _on_dual_cultivate(self, interaction: discord.Interaction):
+        result = await asyncio.to_thread(self.game.dual_cultivate, self.user_id, self.display_name)
+        if result["ok"]:
+            self.last_result = (
+                f"🌀 Dual Cultivate! +{format_number(result['qi_gained'])} qi, "
+                f"+{format_number(result['essence_restored'])} essence "
+                f"({result['essence']}/{result['max_essence']})."
+            )
+        elif "reason" in result:
+            self.last_result = result["reason"]
+        else:
+            self.last_result = f"Dual Cultivate is on cooldown — {format_duration(result['remaining_seconds'])} remaining."
+        await asyncio.to_thread(self._build_components)
+        embeds = await asyncio.to_thread(self.build_embeds)
+        await interaction.response.edit_message(embeds=embeds, view=self)
+
+    def _slot_embed(self, slot_key: str, label: str, emoji: str, instance) -> discord.Embed:
+        if instance is None:
+            return discord.Embed(
+                title=f"{emoji} {label} — Empty",
+                description="Equip a servant via `/servant`'s Equip tab.",
+                color=discord.Color.dark_gray(),
+            )
+        servant = servants.SERVANT_CATALOG.get(instance["name"])
+        affinity_seconds = instance.get("current_affinity_seconds", 0)
+        lines = [f"{servants.tier_label(instance['tier'])} · ★{instance['star_level']} · Level {instance['level']}/{servants.SERVANT_MAX_LEVEL}"]
+        if affinity_seconds:
+            mult = servants.affinity_multiplier(affinity_seconds)
+            lines.append(f"Affinity: {affinity_seconds / 86400:.1f}d equipped (+{(mult - 1) * 100:.1f}% bonus)")
+        if servant:
+            lines.append(_stats_text(servant, instance["star_level"], instance["level"], affinity_seconds) if slot_key == servants.SLOT_KEY_COMBAT else "")
+            if slot_key == servants.SLOT_KEY_SUPPORT:
+                half_text = ", ".join(
+                    _format_bonus_line(k, v * servants.SUPPORT_STAT_FRACTION)
+                    for k, v in servants.scaled_stat_bonuses(servant, instance["star_level"], instance["level"], affinity_seconds).items()
+                )
+                lines.append(half_text)
+                lines.append(_format_bonus_line(servant.support_bonus_key, servants.support_special_pct(servant, instance["star_level"], instance["level"], affinity_seconds)))
+        embed = discord.Embed(title=f"{emoji} {label}: {instance['name']}", description="\n".join(line for line in lines if line), color=discord.Color.gold())
+        if servant and servant.image_url:
+            embed.set_image(url=servant.image_url)
+        return embed
+
+    def build_embeds(self) -> list:
+        equipped = self.game.get_equipped_servants(self.user_id)
+        combat_embed = self._slot_embed(servants.SLOT_KEY_COMBAT, "Combat", "⚔️", equipped.get(servants.SLOT_KEY_COMBAT))
+        support_embed = self._slot_embed(servants.SLOT_KEY_SUPPORT, "Support", "🛡️", equipped.get(servants.SLOT_KEY_SUPPORT))
+        embeds = [combat_embed, support_embed]
+        if self.last_result:
+            embeds[-1].add_field(name="Result", value=self.last_result, inline=False)
+        return embeds

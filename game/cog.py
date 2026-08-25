@@ -20,7 +20,7 @@ from .equipment_view import EquipmentView
 from .avatar_view import AvatarView
 from .gu_pet_view import GuPetView
 from .grotto_view import GrottoView
-from .servant_view import ServantView
+from .servant_view import ServantView, ViewServantView
 from .dao_companion_view import DaoCompanionView
 from .split_body_view import SplitBodyView
 from .hunt import AbandonHuntView, HuntView
@@ -562,7 +562,7 @@ class GameCog(commands.Cog):
         except discord.HTTPException:
             pass
 
-    # Servants (see game/servants.py / /servant, admin-only preview) -- a servant on automation
+    # Servants (see game/servants.py / /servant) -- a servant on automation
     # duty triggers one real mine/gather/farm cycle per real day; the sweep itself runs on the
     # same 5-minute cadence as every other tick loop, same "cheap and idempotent" idea as
     # GROTTO_TICK_INTERVAL_SECONDS above.
@@ -787,23 +787,28 @@ class GameCog(commands.Cog):
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         view.message = await interaction.original_response()
 
-    @app_commands.command(name="servant", description="[Admin] Servant gacha/collection system (testing preview)")
+    @app_commands.command(name="servant", description="Summon, star up, level, equip, and automate Servants")
     @app_commands.guilds(GUILD)
     async def servant(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
-            return
         player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
         if not player["character_confirmed"]:
             await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
             return
-        await asyncio.to_thread(
-            self.db.log_admin_action,
-            interaction.user.id, interaction.user.display_name, interaction.user.id, interaction.user.display_name, "servant_open", "",
-        )
         view = ServantView(interaction.user.id, self.game, interaction.user.display_name)
         embed = await asyncio.to_thread(view.build_embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
+        view.message = await interaction.original_response()
+
+    @app_commands.command(name="view_servant", description="View your Combat/Support servants large + Dual Cultivate for a qi/essence burst")
+    @app_commands.guilds(GUILD)
+    async def view_servant(self, interaction: discord.Interaction):
+        player = await asyncio.to_thread(self.game.get_player_stats, interaction.user.id, interaction.user.display_name)
+        if not player["character_confirmed"]:
+            await interaction.response.send_message(NOT_CONFIRMED_MESSAGE, ephemeral=True)
+            return
+        view = ViewServantView(interaction.user.id, self.game, interaction.user.display_name)
+        embeds = await asyncio.to_thread(view.build_embeds)
+        await interaction.response.send_message(embeds=embeds, view=view, ephemeral=False)
         view.message = await interaction.original_response()
 
     @app_commands.command(name="verify", description="Assign yourself a Discord role matching your current cultivation rank")
@@ -1867,6 +1872,13 @@ class GameCog(commands.Cog):
                     cd_line("Burst (i dc)", "💞", cooldowns["dc_burst_remaining"]),
                     cd_line("Essence Exchange", "💧", cooldowns["essence_exchange_remaining"]),
                 ]),
+                inline=False,
+            )
+
+        if cooldowns["dual_cultivate_eligible"]:
+            embed.add_field(
+                name="Servants",
+                value=cd_line("Dual Cultivate (/view_servant)", "🌀", cooldowns["dual_cultivate_remaining"]),
                 inline=False,
             )
 

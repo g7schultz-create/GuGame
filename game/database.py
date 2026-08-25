@@ -154,6 +154,9 @@ class GameDatabase:
         "last_pvp_ts": "INTEGER DEFAULT 0",
         "last_rest_ts": "INTEGER DEFAULT 0",
         "last_meditate_ts": "INTEGER DEFAULT 0",
+        # /view_servant's Dual Cultivate button (see GameManager.dual_cultivate) -- requires a
+        # servant equipped in BOTH Combat and Support.
+        "last_dual_cultivate_ts": "INTEGER DEFAULT 0",
         # Mythic Physique's "ignore the first fatal hit each day" passive (see
         # try_use_daily_fatal_hit_negation) — the UTC calendar date (YYYY-MM-DD) it was last
         # used, so a fresh date means the negation is available again.
@@ -758,7 +761,7 @@ class GameDatabase:
         )
         """)
 
-        # Servants (see game/servants.py / /servant, admin-only preview) -- unlike Gu, every
+        # Servants (see game/servants.py / /servant) -- unlike Gu, every
         # summoned copy is a real row from the moment it's pulled (no flat-stack phase): star-up
         # needs per-copy star_level state tracked from pull #1. automation_duty/
         # automation_next_tick_ts live directly on the instance (a Servant IS both the identity
@@ -1552,7 +1555,7 @@ class GameDatabase:
         if player["grotto_level"]:
             total_manual_pct += _grotto.grotto_bonuses(player["grotto_level"]).get("cultivation_speed_pct", 0) * 100
 
-        # Servants (see game/servants.py / /servant, admin-only preview) -- a Support-slotted
+        # Servants (see game/servants.py / /servant) -- a Support-slotted
         # servant flavored around cultivation_speed_pct (servants.SUPPORT_KEYS_OUTSIDE_GENERIC_
         # POOL) rides this SAME capped pool, not GameManager.compute_equipment_bonuses' generic
         # display-only pool -- the same "_qi_rate_components is the real hook" mistake this
@@ -5096,7 +5099,7 @@ class GameDatabase:
         "last_world_region_change_ts", "last_teach_ts", "last_personal_teach_ts",
         "personal_last_taught_ts", "last_world_boss_attack_ts", "treasure_hunt_last_ts",
         "last_black_heaven_search_ts", "last_inheritance_ground_ts", "last_dc_burst_ts",
-        "last_killer_move_swap_ts", "last_gu_pet_mode_switch_ts",
+        "last_killer_move_swap_ts", "last_gu_pet_mode_switch_ts", "last_dual_cultivate_ts",
     ]
 
     def reset_all_cooldowns(self, user_id: int):

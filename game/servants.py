@@ -1,6 +1,6 @@
 """
-Servants -- a Reverend-Insanity-inspired gacha/collection system. Admin-only for now (see
-/servant in cog.py) while the design is validated against real play. T1-T5 are generic
+Servants -- a Reverend-Insanity-inspired gacha/collection system (see /servant, /view_servant
+in cog.py). T1-T5 are generic
 cultivator archetypes (e.g. "Qi Condensation Gu Apprentice"); T6-T7 are specific named characters (e.g.
 "Fang Yuan") drawn loosely from the reference doc's own cast -- exact names/flavor are a
 placeholder roster, meant to be confirmed/replaced later, not final art-of-record.
@@ -20,7 +20,7 @@ import random
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from . import avatar
+from . import avatar, equipment
 
 # One distinct color-circle emoji per tier, for at-a-glance scanning in the Roster/Star Up/
 # Equip/Automation selects and embeds -- T1 (common) through T7 (rarest).
@@ -43,17 +43,26 @@ class Servant:
     image_url: Optional[str] = None  # left None throughout -- filled in later by hand
 
 
-# Level-1(★1) foundation-stat point budget per tier -- scaled by STAR_STAT_MULTIPLIER per star
-# level (see scaled_stat_bonuses), same tapering-growth idea as every other tiered magnitude
-# table in this codebase (grotto.GROTTO_LEVEL_MULTIPLIER, avatar.AVATAR_LEVEL_MULTIPLIER).
-TIER_STAT_BUDGET: Dict[int, int] = {1: 6, 2: 12, 3: 22, 4: 40, 5: 75, 6: 160, 7: 350}
+# Level-1 (★1) foundation-stat PERCENTAGE budget per tier -- a flat stat bonus goes stale at
+# high realms (a maxed T7's flat +245 QI is noise against a Spirit Severing+ player's real qi_
+# stat), so Combat/Support stat bonuses are expressed as a % of the player's OWN stat instead,
+# the exact mechanism Gu items already use for this same reason (see equipment.py's
+# CRAFTED_GEAR_PCT_TO_FLAT / foundation_stats_to_pct docstring -- "instead of flat stats
+# specifically so it can't be outgrown"). Scaled by STAR_STAT_MULTIPLIER/LEVEL_STAT_MULTIPLIER/
+# affinity_multiplier per instance (see scaled_stat_bonuses) -- up to ~8x at full investment,
+# so a maxed T7 reaches ~44% total (0.055 * 8.0), a maxed T1 reaches ~4% (0.005 * 8.0).
+TIER_STAT_BUDGET_PCT: Dict[int, float] = {1: 0.005, 2: 0.008, 3: 0.012, 4: 0.018, 5: 0.026, 6: 0.038, 7: 0.055}
 
 
-def _stats(tier: int, primary: str, secondary: Optional[str] = None) -> Dict[str, float]:
-    budget = TIER_STAT_BUDGET[tier]
+def _stats(primary: str, secondary: Optional[str] = None) -> Dict[str, float]:
+    """A servant's fixed 70/30 relative weight between its two stats -- NOT a magnitude by
+    itself. The real percentage comes from TIER_STAT_BUDGET_PCT * star/level/affinity,
+    converted via equipment.foundation_stats_to_pct at read time (see scaled_stat_bonuses),
+    which also re-weights by GEAR_POWER_WEIGHTS so e.g. a flat "hp" weight and a "def_stat"
+    weight don't come out equally strong just because they were split 70/30 here."""
     if secondary:
-        return {primary: round(budget * 0.7), secondary: round(budget * 0.3)}
-    return {primary: budget}
+        return {primary: 0.7, secondary: 0.3}
+    return {primary: 1.0}
 
 
 SERVANT_CATALOG: Dict[str, Servant] = {}
@@ -67,28 +76,28 @@ def _register(*rows: Servant):
 # -- Tier 1-5: generic cultivator archetypes -------------------------------------------------
 
 _register(
-    Servant("Fog Valley Disciple", 1, "Outer Sect Disciple", "A minor disciple from a fog-shrouded valley sect, still finding their Dao.", _stats(1, "qi_stat", "luck_stat"), "cultivation_speed_pct", 30, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629599/Fog%20Valley%20Disciple.png"),
-    Servant("Green Bull Clan Warrior", 1, "Clan Warrior", "A young warrior of the Green Bull Clan, blooded in border skirmishes.", _stats(1, "str_stat", "atk_stat"), "stone_reward_bonus_pct", 30, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629623/Green%20Bull%20Clan%20Warrior.png"),
-    Servant("Wild Root Scavenger", 1, "Wilderness Scavenger", "Survives on the fringes of civilization, foraging rare roots and herbs.", _stats(1, "spd_stat", "luck_stat"), "loot_chance_bonus_pct", 25, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629633/Wild%20Root%20Scavenger.png"),
-    Servant("Qi Condensation Gu Apprentice", 1, "Gu Apprentice", "A cultivator at the Qi Condensation realm, only just beginning to sense the Gu world's true scale.", _stats(1, "hp", "qi_stat"), "essence_regen_pct", 25, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629645/Qi%20Condensation%20Gu%20Apprentice.png"),
+    Servant("Fog Valley Disciple", 1, "Outer Sect Disciple", "A minor disciple from a fog-shrouded valley sect, still finding their Dao.", _stats("qi_stat", "luck_stat"), "cultivation_speed_pct", 30, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629599/Fog%20Valley%20Disciple.png"),
+    Servant("Green Bull Clan Warrior", 1, "Clan Warrior", "A young warrior of the Green Bull Clan, blooded in border skirmishes.", _stats("str_stat", "atk_stat"), "stone_reward_bonus_pct", 30, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629623/Green%20Bull%20Clan%20Warrior.png"),
+    Servant("Wild Root Scavenger", 1, "Wilderness Scavenger", "Survives on the fringes of civilization, foraging rare roots and herbs.", _stats("spd_stat", "luck_stat"), "loot_chance_bonus_pct", 25, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629633/Wild%20Root%20Scavenger.png"),
+    Servant("Qi Condensation Gu Apprentice", 1, "Gu Apprentice", "A cultivator at the Qi Condensation realm, only just beginning to sense the Gu world's true scale.", _stats("hp", "qi_stat"), "essence_regen_pct", 25, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629645/Qi%20Condensation%20Gu%20Apprentice.png"),
 
-    Servant("Rank Three Sect Elder", 2, "Sect Elder", "An elder of a minor sect, steady and well-versed in Gu lore.", _stats(2, "def_stat", "hp"), "mining_yield_pct", 25, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629657/Rank%20Three%20Sect%20Elder.png"),
-    Servant("Beast-Blood Warrior", 2, "Beast-Blood Warrior", "Has refined a beast-blood Gu into their own body, gaining ferocious strength.", _stats(2, "atk_stat", "str_stat"), "herb_yield_pct", 25, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629668/Beast-Blood%20Warrior.png"),
-    Servant("Foundation Establishment Gu Master", 2, "Gu Master", "A Gu Master at the Foundation Establishment realm, commanding a modest collection of refined Gu.", _stats(2, "qi_stat", "atk_stat"), "cultivation_speed_pct", 20, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629679/Foundation%20Establishment%20Gu%20Master.png"),
-    Servant("Iron Fist Ancestor", 2, "Clan Ancestor", "A retired clan champion, fists still capable of shattering stone.", _stats(2, "str_stat", "def_stat"), "stone_reward_bonus_pct", 20, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629709/Iron%20Fist%20Ancestor.png"),
+    Servant("Rank Three Sect Elder", 2, "Sect Elder", "An elder of a minor sect, steady and well-versed in Gu lore.", _stats("def_stat", "hp"), "mining_yield_pct", 25, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629657/Rank%20Three%20Sect%20Elder.png"),
+    Servant("Beast-Blood Warrior", 2, "Beast-Blood Warrior", "Has refined a beast-blood Gu into their own body, gaining ferocious strength.", _stats("atk_stat", "str_stat"), "herb_yield_pct", 25, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629668/Beast-Blood%20Warrior.png"),
+    Servant("Foundation Establishment Gu Master", 2, "Gu Master", "A Gu Master at the Foundation Establishment realm, commanding a modest collection of refined Gu.", _stats("qi_stat", "atk_stat"), "cultivation_speed_pct", 20, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629679/Foundation%20Establishment%20Gu%20Master.png"),
+    Servant("Iron Fist Ancestor", 2, "Clan Ancestor", "A retired clan champion, fists still capable of shattering stone.", _stats("str_stat", "def_stat"), "stone_reward_bonus_pct", 20, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629709/Iron%20Fist%20Ancestor.png"),
 
-    Servant("Rank Four Sect Master", 3, "Sect Master", "Leads a mid-sized sect, balancing politics and cultivation.", _stats(3, "hp", "def_stat"), "loot_chance_bonus_pct", 20, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629725/Rank%20Four%20Sect%20Master.png"),
-    Servant("Core Formation Gu Immortal", 3, "Gu Immortal", "A Gu Immortal at the Core Formation realm, their Dao Marks beginning to stabilize.", _stats(3, "qi_stat", "luck_stat"), "essence_regen_pct", 20, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629736/Core%20Formation%20Gu%20Immortal.png"),
-    Servant("Blood Sea Vanguard", 3, "Blood Sea Vanguard", "A vanguard fighter of the Blood Sea faction, fast and merciless.", _stats(3, "atk_stat", "spd_stat"), "mining_yield_pct", 15, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629747/Blood%20Sea%20Vanguard.png"),
-    Servant("Pseudo Nascent Soul Ancestor", 3, "Clan Ancestor", "An ancestor whose foundation has only just stabilized at the threshold of Nascent Soul.", _stats(3, "def_stat", "qi_stat"), "herb_yield_pct", 15, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787631409/8c4ae36e-4024-4156-91ea-997f025c06fd.png"),
+    Servant("Rank Four Sect Master", 3, "Sect Master", "Leads a mid-sized sect, balancing politics and cultivation.", _stats("hp", "def_stat"), "loot_chance_bonus_pct", 20, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629725/Rank%20Four%20Sect%20Master.png"),
+    Servant("Core Formation Gu Immortal", 3, "Gu Immortal", "A Gu Immortal at the Core Formation realm, their Dao Marks beginning to stabilize.", _stats("qi_stat", "luck_stat"), "essence_regen_pct", 20, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629736/Core%20Formation%20Gu%20Immortal.png"),
+    Servant("Blood Sea Vanguard", 3, "Blood Sea Vanguard", "A vanguard fighter of the Blood Sea faction, fast and merciless.", _stats("atk_stat", "spd_stat"), "mining_yield_pct", 15, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629747/Blood%20Sea%20Vanguard.png"),
+    Servant("Pseudo Nascent Soul Ancestor", 3, "Clan Ancestor", "An ancestor whose foundation has only just stabilized at the threshold of Nascent Soul.", _stats("def_stat", "qi_stat"), "herb_yield_pct", 15, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787631409/8c4ae36e-4024-4156-91ea-997f025c06fd.png"),
 
-    Servant("Rank Five Small Clan Ancestor", 4, "Clan Ancestor", "The pillar of a small clan, their strength a matter of local legend.", _stats(4, "hp", "str_stat"), "cultivation_speed_pct", 15, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629780/Rank%20Five%20Small%20Clan%20Ancestor.png"),
-    Servant("Nascent Soul Gu Immortal", 4, "Gu Immortal", "A Gu Immortal at the Nascent Soul realm, wielding a well-rounded Gu collection.", _stats(4, "qi_stat", "atk_stat"), "stone_reward_bonus_pct", 15, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629806/Nascent%20Soul%20Gu%20Immortal.png"),
-    Servant("Frost Sect Elder Ancestor", 4, "Sect Elder Ancestor", "An elder ancestor of a frost-aligned sect, cold and unshakeable.", _stats(4, "def_stat", "spd_stat"), "loot_chance_bonus_pct", 10, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629820/Frost%20Sect%20Elder%20Ancestor.png"),
+    Servant("Rank Five Small Clan Ancestor", 4, "Clan Ancestor", "The pillar of a small clan, their strength a matter of local legend.", _stats("hp", "str_stat"), "cultivation_speed_pct", 15, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629780/Rank%20Five%20Small%20Clan%20Ancestor.png"),
+    Servant("Nascent Soul Gu Immortal", 4, "Gu Immortal", "A Gu Immortal at the Nascent Soul realm, wielding a well-rounded Gu collection.", _stats("qi_stat", "atk_stat"), "stone_reward_bonus_pct", 15, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629806/Nascent%20Soul%20Gu%20Immortal.png"),
+    Servant("Frost Sect Elder Ancestor", 4, "Sect Elder Ancestor", "An elder ancestor of a frost-aligned sect, cold and unshakeable.", _stats("def_stat", "spd_stat"), "loot_chance_bonus_pct", 10, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629820/Frost%20Sect%20Elder%20Ancestor.png"),
 
-    Servant("Rank Five Great Clan Ancestor", 5, "Great Clan Ancestor", "The founding pillar of a great clan, revered across the region.", _stats(5, "hp", "def_stat"), "essence_regen_pct", 10, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629832/Rank%20Five%20Great%20Clan%20Ancestor.png"),
-    Servant("Spirit Severing Gu Immortal", 5, "Gu Immortal", "A Gu Immortal at the Spirit Severing realm, their Dao Marks nearly complete.", _stats(5, "qi_stat", "str_stat"), "mining_yield_pct", 10, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629843/Spirit%20Severing%20Gu%20Immortal.png"),
-    Servant("True Ancestor of a Thousand Gu", 5, "True Ancestor", "Has refined a thousand Gu across their long, storied life.", _stats(5, "atk_stat", "luck_stat"), "herb_yield_pct", 6, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629851/True%20Ancestor%20of%20a%20Thousand%20Gu.png"),
+    Servant("Rank Five Great Clan Ancestor", 5, "Great Clan Ancestor", "The founding pillar of a great clan, revered across the region.", _stats("hp", "def_stat"), "essence_regen_pct", 10, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629832/Rank%20Five%20Great%20Clan%20Ancestor.png"),
+    Servant("Spirit Severing Gu Immortal", 5, "Gu Immortal", "A Gu Immortal at the Spirit Severing realm, their Dao Marks nearly complete.", _stats("qi_stat", "str_stat"), "mining_yield_pct", 10, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629843/Spirit%20Severing%20Gu%20Immortal.png"),
+    Servant("True Ancestor of a Thousand Gu", 5, "True Ancestor", "Has refined a thousand Gu across their long, storied life.", _stats("atk_stat", "luck_stat"), "herb_yield_pct", 6, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629851/True%20Ancestor%20of%20a%20Thousand%20Gu.png"),
 )
 
 # -- Tier 6-7: specific named characters -- PLACEHOLDER roster, confirm final names/spelling
@@ -97,16 +106,16 @@ _register(
 # roughly 0.1% * 8% = 0.008% of ALL summons, meaningfully rarer than a common T6 name. ---------
 
 _register(
-    Servant("Weeping Blood Trench Ancestor", 6, "Trench Ancestor", "A fearsome ancestor of the Weeping Blood Trench, wreathed in old grudges.", _stats(6, "hp", "atk_stat"), "cultivation_speed_pct", 26, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629860/Weeping%20Blood%20Trench%20Ancestor.png"),
-    Servant("Gu Yue Qing Shu", 6, "Gu Immortal Elder", "A brilliant, calculating Gu Immortal Elder, rarely caught off guard.", _stats(6, "qi_stat", "luck_stat"), "cultivation_speed_pct", 24, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629904/Gu%20Yue%20Qing%20Shu.png"),
-    Servant("Nine Distortion Wolf Ancestor", 6, "Wolf Clan Ancestor", "Leader of the Nine Distortion Wolf pack, blindingly fast in a hunt.", _stats(6, "spd_stat", "atk_stat"), "stone_reward_bonus_pct", 20, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629869/Nine%20Distortion%20Wolf%20Ancestor.png"),
-    Servant("Meng Hu", 6, "Wolf King", "The Wolf King, brash and overwhelmingly powerful in a straight fight.", _stats(6, "str_stat", "atk_stat"), "loot_chance_bonus_pct", 16, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629877/Meng%20Hu.png"),
-    Servant("Chi You Furnace Ancestor", 6, "Furnace Ancestor", "Wields a body tempered like a furnace, radiating battle intent.", _stats(6, "atk_stat", "hp"), "cultivation_speed_pct", 14, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629896/Chi%20You%20Furnace%20Ancestor.png"),
+    Servant("Weeping Blood Trench Ancestor", 6, "Trench Ancestor", "A fearsome ancestor of the Weeping Blood Trench, wreathed in old grudges.", _stats("hp", "atk_stat"), "cultivation_speed_pct", 26, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629860/Weeping%20Blood%20Trench%20Ancestor.png"),
+    Servant("Gu Yue Qing Shu", 6, "Gu Immortal Elder", "A brilliant, calculating Gu Immortal Elder, rarely caught off guard.", _stats("qi_stat", "luck_stat"), "cultivation_speed_pct", 24, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629904/Gu%20Yue%20Qing%20Shu.png"),
+    Servant("Nine Distortion Wolf Ancestor", 6, "Wolf Clan Ancestor", "Leader of the Nine Distortion Wolf pack, blindingly fast in a hunt.", _stats("spd_stat", "atk_stat"), "stone_reward_bonus_pct", 20, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629869/Nine%20Distortion%20Wolf%20Ancestor.png"),
+    Servant("Meng Hu", 6, "Wolf King", "The Wolf King, brash and overwhelmingly powerful in a straight fight.", _stats("str_stat", "atk_stat"), "loot_chance_bonus_pct", 16, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629877/Meng%20Hu.png"),
+    Servant("Chi You Furnace Ancestor", 6, "Furnace Ancestor", "Wields a body tempered like a furnace, radiating battle intent.", _stats("atk_stat", "hp"), "cultivation_speed_pct", 14, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629896/Chi%20You%20Furnace%20Ancestor.png"),
 
-    Servant("Wu Yong", 7, "Scheme Immortal", "A master of long cons and longer memories, always several moves ahead.", _stats(7, "luck_stat", "qi_stat"), "loot_chance_bonus_pct", 38, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629912/Wu%20Yong.png"),
-    Servant("Bai Ning Bing", 7, "Frost Immortal", "An icy, calculating Gu Immortal, feared for her patience as much as her power.", _stats(7, "qi_stat", "def_stat"), "essence_regen_pct", 32, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629888/Bai%20Ning%20Bing.png"),
-    Servant("Hei Lou Lan", 7, "Gu Immortal Elder", "A reserved, unshakeable Gu Immortal Elder, said to have weathered calamities that broke lesser cultivators.", _stats(7, "hp", "def_stat"), "mining_yield_pct", 22, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629935/Hei%20Lou%20Lan.png"),
-    Servant("Fang Yuan", 7, "Grand Supreme Elder Gu Immortal", "The rarest of the rare -- a Gu Immortal whose foresight spans centuries.", _stats(7, "qi_stat", "atk_stat"), "stone_reward_bonus_pct", 8, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629923/Fang%20Yuan.png"),
+    Servant("Wu Yong", 7, "Scheme Immortal", "A master of long cons and longer memories, always several moves ahead.", _stats("luck_stat", "qi_stat"), "loot_chance_bonus_pct", 38, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629912/Wu%20Yong.png"),
+    Servant("Bai Ning Bing", 7, "Frost Immortal", "An icy, calculating Gu Immortal, feared for her patience as much as her power.", _stats("qi_stat", "def_stat"), "essence_regen_pct", 32, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629888/Bai%20Ning%20Bing.png"),
+    Servant("Hei Lou Lan", 7, "Gu Immortal Elder", "A reserved, unshakeable Gu Immortal Elder, said to have weathered calamities that broke lesser cultivators.", _stats("hp", "def_stat"), "mining_yield_pct", 22, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629935/Hei%20Lou%20Lan.png"),
+    Servant("Fang Yuan", 7, "Grand Supreme Elder Gu Immortal", "The rarest of the rare -- a Gu Immortal whose foresight spans centuries.", _stats("qi_stat", "atk_stat"), "stone_reward_bonus_pct", 8, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629923/Fang%20Yuan.png"),
 )
 
 
@@ -151,15 +160,12 @@ CURRENCY_ESSENCE_CRYSTALS = "essence_crystals"
 CURRENCY_BEAST_CORES = "beast_cores"
 SUMMON_CURRENCIES = (CURRENCY_STONES, CURRENCY_ESSENCE_CRYSTALS, CURRENCY_BEAST_CORES)
 
-# Retuned 2026-08-24 against a REAL live spirit-stones leaderboard (top player ~38.9M stones) --
-# the original 5,000 let the richest player buy ~7,800 pulls (effectively unlimited spam, would
-# statistically farm multiple T7s through sheer volume). 100,000 keeps even a whale's spree
-# bounded (~390 pulls, ~39% expected chance at a single T7) while most solidly-progressed
-# players can only afford a small handful -- a real, felt cost per pull. Essence Crystals scaled
-# by the same ~20x factor so it can't quietly become the "actually cheap" loophole currency.
-SUMMON_COST_STONES = 100_000
-SUMMON_COST_ESSENCE_CRYSTALS = 1000  # "Primeval Essence Crystal" -- flat untiered Materials item
-SUMMON_COST_BEAST_CORES = 20         # "Tier {N} Beast Core", any tier, spent lowest-tier-first
+# Retuned 2026-08-24, explicit request: 10,000 stones / 10 essence crystals / 10 beast cores --
+# a deliberate step down from the earlier 100,000/1,000/20 leaderboard-calibrated pass, meant to
+# make pulls come more often rather than stay a rare whale-only event.
+SUMMON_COST_STONES = 10_000
+SUMMON_COST_ESSENCE_CRYSTALS = 10   # "Primeval Essence Crystal" -- flat untiered Materials item
+SUMMON_COST_BEAST_CORES = 10        # "Tier {N} Beast Core", any tier, spent lowest-tier-first
 
 SUMMON_CURRENCY_COST = {
     CURRENCY_STONES: SUMMON_COST_STONES,
@@ -233,9 +239,47 @@ def current_affinity_seconds(instance: dict, now: int) -> int:
     return base + max(0, now - equipped_since)
 
 
+# luck_stat has no _pct equivalent anywhere in this codebase (equipment.CRAFTED_GEAR_PCT_TO_FLAT
+# doesn't cover it -- same gap Gu items already have), so foundation_stats_to_pct would pass it
+# straight through UNCHANGED, freezing it at its raw catalog weight forever instead of scaling
+# with tier/star/level/affinity like every other stat. Scaled here as a flat number instead,
+# using the same budget/mult stack everything else uses so it still grows with investment --
+# tuned so a fully-invested (★7/Lv10/max affinity) T7 servant with luck as its PRIMARY stat
+# lands in the low hundreds.
+LUCK_FLAT_SCALE = 1000
+
+
 def scaled_stat_bonuses(servant: Servant, star_level: int, level: int = 1, affinity_seconds: int = 0) -> Dict[str, float]:
+    """Returns stat_bonuses-shaped PERCENTAGES (str_pct/atk_pct/hp_pct/spd_pct/def_pct/qi_pct --
+    see equipment.CRAFTED_GEAR_PCT_TO_FLAT) for every stat except luck_stat (see
+    LUCK_FLAT_SCALE), not flat numbers -- compute_equipment_bonuses' existing crafted_pct_totals
+    resolution (the same one Gu/blacksmith % stats already go through) converts these into a
+    real flat delta against the player's OWN base stat at read time, so this stays meaningful at
+    every realm instead of going stale like a flat bonus would.
+
+    servant.base_stats' weights (0.7/0.3, see _stats) are pre-divided by each stat's own
+    equipment.GEAR_POWER_WEIGHTS entry before being handed to foundation_stats_to_pct, which
+    multiplies by that SAME weight again internally -- without this, a servant pairing a
+    "cheap" stat (hp/qi_stat, weight 0.1) as primary against an "expensive" one (str/atk/def/
+    spd, weight 1.0) as secondary would have the split silently INVERT (the cheap stat's 0.1x
+    reweight makes it lose to the expensive stat's 0.3 share even at 0.7 nominal weight) --
+    this cancels that out so the catalog's declared 70/30 emphasis always holds exactly,
+    regardless of which two stats a given servant happens to pair."""
     mult = STAR_STAT_MULTIPLIER[star_level] * LEVEL_STAT_MULTIPLIER.get(level, 1.0) * affinity_multiplier(affinity_seconds)
-    return {key: value * mult for key, value in servant.base_stats.items()}
+    budget = TIER_STAT_BUDGET_PCT[servant.tier] * mult
+
+    result: Dict[str, float] = {}
+    pct_input: Dict[str, float] = {}
+    for stat, weight in servant.base_stats.items():
+        if stat == "luck_stat":
+            result["luck_stat"] = round(weight * budget * LUCK_FLAT_SCALE, 1)
+        else:
+            gear_weight = equipment.GEAR_POWER_WEIGHTS.get(stat, 1.0) or 1.0
+            pct_input[stat] = weight / gear_weight
+    if pct_input:
+        pct_weight_sum = sum(w for stat, w in servant.base_stats.items() if stat != "luck_stat")
+        result.update(equipment.foundation_stats_to_pct(pct_input, budget * pct_weight_sum))
+    return result
 
 
 # Support slot's own themed utility % -- scales with tier (bigger at T6/T7), star level, servant

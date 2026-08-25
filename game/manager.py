@@ -1855,7 +1855,7 @@ class GameManager:
             completed.append({"user_id": owner_id, "name": player["name"], "item_name": instance["item_name"], "message": message, "maxed": maxed})
         return completed
 
-    # -- Servants (see game/servants.py / /servant, admin-only preview) ----------------------
+    # -- Servants (see game/servants.py / /servant) ----------------------
 
     def summon_servant(self, user_id: int, currency: str, count: int = 1):
         """Rolls `count` servants, paid for via one of servants.SUMMON_CURRENCIES (alternatives,
@@ -1938,6 +1938,36 @@ class GameManager:
         new_star = keep["star_level"] + 1
         self.db.set_servant_instance_star(keep_instance_id, new_star)
         return True, f"**{keep['name']}** advances to ★{new_star}!"
+
+    def star_up_all(self, user_id: int, keep_instance_id: int):
+        """One-click bulk version of star_up_servant -- repeatedly stars up keep_instance_id
+        using currently-owned exact-name duplicates, advancing as many star levels as available
+        dupes allow right now. Reuses star_up_servant's own validation/consumption for each
+        individual step (one source of truth), so it stops cleanly at MAX_STAR_LEVEL or the
+        first step it can't afford."""
+        stars_gained = 0
+        while True:
+            keep = self.db.get_servant_instance(keep_instance_id)
+            if keep is None or keep["owner_id"] != user_id:
+                return False, "That servant isn't yours."
+            if keep["star_level"] >= servants.MAX_STAR_LEVEL:
+                break
+            required = servants.STAR_UP_DUPLICATES_REQUIRED[keep["star_level"]]
+            dupes = [
+                i for i in self.db.get_player_servant_instances(user_id)
+                if i["name"] == keep["name"] and i["instance_id"] != keep_instance_id
+            ]
+            if len(dupes) < required:
+                break
+            consume_ids = [d["instance_id"] for d in dupes[:required]]
+            ok, _ = self.star_up_servant(user_id, keep_instance_id, consume_ids)
+            if not ok:
+                break
+            stars_gained += 1
+        if stars_gained == 0:
+            return False, "Not enough duplicates for even one more star-up."
+        final = self.db.get_servant_instance(keep_instance_id)
+        return True, f"**{final['name']}** advances {stars_gained} star(s) to ★{final['star_level']}!"
 
     def evolve_servant(self, user_id: int, instance_id: int):
         """A maxed (★7) T5/T6 servant evolves into a freshly-rolled T6/T7 named servant -- a
@@ -2139,6 +2169,61 @@ class GameManager:
         affinity = servants.current_affinity_seconds(instance, int(time.time()))
         return servants.support_special_pct(servant, instance["star_level"], instance["level"], affinity)
 
+    def combined_servant_power(self, user_id: int) -> Optional[float]:
+        """Sum of both equipped servants' own Tier/Star/Level/Affinity investment (the exact
+        TIER_STAT_BUDGET_PCT-based budget scaled_stat_bonuses computes per servant) -- None if
+        either Combat or Support is empty. Used by dual_cultivate (see /view_servant) to scale
+        its burst with how invested the equipped pair actually is, not just whether a pair
+        exists at all."""
+        equipped = self.get_equipped_servants(user_id)
+        combat = equipped.get(servants.SLOT_KEY_COMBAT)
+        support = equipped.get(servants.SLOT_KEY_SUPPORT)
+        if combat is None or support is None:
+            return None
+        total = 0.0
+        for instance in (combat, support):
+            servant = servants.SERVANT_CATALOG.get(instance["name"])
+            if servant is None:
+                continue
+            mult = (
+                servants.STAR_STAT_MULTIPLIER[instance["star_level"]]
+                * servants.LEVEL_STAT_MULTIPLIER.get(instance["level"], 1.0)
+                * servants.affinity_multiplier(instance.get("current_affinity_seconds", 0))
+            )
+            total += servants.TIER_STAT_BUDGET_PCT[servant.tier] * mult
+        return total
+
+    # /view_servant's Dual Cultivate button -- requires a servant equipped in BOTH Combat and
+    # Support. Mirrors /meditate's own "instant qi + essence, minutes-equivalent at the
+    # player's real effective rate" mechanism exactly (see meditate()), just bigger and gated
+    # behind owning a real Combat+Support pair, scaled further by combined_servant_power.
+    DUAL_CULTIVATE_COOLDOWN_SECONDS = 6 * 3600
+    DUAL_CULTIVATE_QI_MINUTES_BASE = 60
+    DUAL_CULTIVATE_ESSENCE_PERCENT_BASE = 0.20
+
+    def dual_cultivate(self, user_id: int, name: str) -> dict:
+        """Returns {"ok": False, "reason": ...} (no servant pair equipped), {"ok": False,
+        "remaining_seconds": ...} (on cooldown), or {"ok": True, "qi_gained", "qi",
+        "essence_restored", "essence", "max_essence", "power_bonus_pct"}."""
+        player = self.db.get_or_create_player(user_id, name)
+        power = self.combined_servant_power(user_id)
+        if power is None:
+            return {"ok": False, "reason": "You need a servant equipped in BOTH Combat and Support to Dual Cultivate — see `/servant`'s Equip tab."}
+        remaining = self._check_cooldown(player, "last_dual_cultivate_ts", self.DUAL_CULTIVATE_COOLDOWN_SECONDS)
+        if remaining > 0:
+            return {"ok": False, "remaining_seconds": remaining}
+        effective_rate = self.db.get_qi_status(user_id)["effective_rate_per_minute"]
+        qi_gained = effective_rate * self.DUAL_CULTIVATE_QI_MINUTES_BASE * (1 + power)
+        new_qi = self.db.add_qi(user_id, qi_gained)
+        essence_percent = self.DUAL_CULTIVATE_ESSENCE_PERCENT_BASE * (1 + power)
+        essence_restored, essence, max_essence = self.db.restore_essence_percent(user_id, essence_percent)
+        self.db.set_timestamp_column(user_id, "last_dual_cultivate_ts", int(time.time()))
+        return {
+            "ok": True, "qi_gained": qi_gained, "qi": new_qi,
+            "essence_restored": essence_restored, "essence": essence, "max_essence": max_essence,
+            "power_bonus_pct": power,
+        }
+
     # Special stat_bonuses keys that aren't flat foundation stats — each fed straight
     # through to combat.resolve_attack (via hunt.py/raid.py), the qi-rate system, or
     # somewhere else specific (see canon_gu.py's docstring for where the newer ones go).
@@ -2278,7 +2363,7 @@ class GameManager:
                         stat_bonuses[key] = stat_bonuses.get(key, 0) + value
                 power_mult = 1.0
             elif slot_key in servant_instance_ids:
-                # Servant (see game/servants.py / /servant, admin-only preview) -- Combat slot
+                # Servant (see game/servants.py / /servant) -- Combat slot
                 # is a pure stat stick at full scaled base_stats; Support slot trades half of
                 # that for its own themed support_bonus_key at full value. A yield-flavored
                 # support_bonus_key (servants.YIELD_BONUS_KEYS) is excluded here -- mine/gather/
@@ -4163,6 +4248,11 @@ class GameManager:
             # for "the" personal teach cooldown anymore — /cd shows a ready/on-cooldown
             # breakdown instead, see _personal_teach_readiness.
             "personal_teach_readiness": self._personal_teach_readiness(user_id),
+            # /view_servant's Dual Cultivate -- only meaningful once BOTH Combat and Support
+            # slots are filled (same "only show gated features once relevant" convention as
+            # has_dao_companion above).
+            "dual_cultivate_eligible": self.combined_servant_power(user_id) is not None,
+            "dual_cultivate_remaining": self._check_cooldown(player, "last_dual_cultivate_ts", self.DUAL_CULTIVATE_COOLDOWN_SECONDS),
         }
 
     def _personal_teach_readiness(self, master_id: int) -> dict:
