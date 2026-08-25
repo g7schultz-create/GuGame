@@ -1,15 +1,18 @@
 """
 ServantView -- the /servant menu. Summon tab: roll for new
 servants (see GameManager.summon_servant). Roster tab: browse owned instances by tier + the
-collection bonus. Star Up tab: consume exact-name duplicates to advance a servant's star level,
-or evolve a maxed T5/T6 servant into a fresh T6/T7 named identity (see GameManager.
-star_up_servant/evolve_servant). Level tab: feed materials to advance a servant's Level,
+collection bonus. Star Up tab: consume exact-name duplicates to advance a servant's star level
+(1★→7★) via GameManager.star_up_servant. Evolve tab: once a Tier 5/6 servant is maxed at ★7, it
+shows up here to transform into a fresh, randomly-rolled Tier 6/7 named identity, then displays
+exactly what it became (see GameManager.evolve_servant) -- deliberately its own tab rather than a
+button buried in Star Up, since the two are conceptually different actions (fuel duplicates in,
+vs. a one-way identity swap out). Level tab: feed materials to advance a servant's Level,
 independent of Star/duplicates, via its own separate servant picker (see GameManager.
 level_up_servant). Equip tab: assign a servant to the Support or Combat slot (see
 GameManager.equip_servant/unequip_servant). Automation tab: assign a servant to auto-run mining/
 gathering/farming on a daily tick (see GameManager.assign_servant_duty/unassign_servant_duty).
 
-Tabs span 2 rows (3+3) since there are 6 of them -- Discord caps a single ActionRow at 5
+Tabs span 2 rows (4+3) since there are 7 of them -- Discord caps a single ActionRow at 5
 buttons. Every tab's own content is squeezed into the 3 rows left (2-4), so pagination buttons
 usually share a row with their tab's action button(s) rather than getting a dedicated row.
 """
@@ -65,7 +68,7 @@ def _stats_text(servant, star_level: int, level: int = 1, affinity_seconds: int 
 
 class ServantView(GameView):
     TABS = [
-        ("summon", "Summon", "🎴", 0), ("roster", "Roster", "📜", 0), ("star_up", "Star Up", "⭐", 0),
+        ("summon", "Summon", "🎴", 0), ("roster", "Roster", "📜", 0), ("star_up", "Star Up", "⭐", 0), ("evolve", "Evolve", "🌟", 0),
         ("level", "Level", "🔺", 1), ("equip", "Equip", "⚔️", 1), ("automation", "Automation", "⚙️", 1),
     ]
 
@@ -86,6 +89,9 @@ class ServantView(GameView):
         self.selected_keep_id: int = None
         self.selected_consume_ids: list = []
         self.starup_page = 0
+
+        self.selected_evolve_id: int = None
+        self.evolve_page = 0
 
         self.selected_level_id: int = None
         self.level_page = 0
@@ -125,6 +131,8 @@ class ServantView(GameView):
             self._build_roster_components()
         elif self.active_tab == "star_up":
             self._build_star_up_components()
+        elif self.active_tab == "evolve":
+            self._build_evolve_components()
         elif self.active_tab == "level":
             self._build_level_components()
         elif self.active_tab == "equip":
@@ -221,13 +229,14 @@ class ServantView(GameView):
         for i in instances:
             name_counts[i["name"]] = name_counts.get(i["name"], 0) + 1
 
-        # Only list servants that can ACTUALLY be starred up or evolved right now -- Leveling
-        # has its own separate tab/picker (see _build_level_components), so it plays no part in
-        # this filter.
-        def has_action(i):
-            return servants.can_evolve(i["tier"], i["star_level"]) or self._has_dupes_for_star_up(i, name_counts)
-
-        keep_candidates = sorted((i for i in instances if has_action(i)), key=lambda i: (-i["tier"], i["name"], -i["star_level"]))
+        # Only list servants that can ACTUALLY be starred up right now -- once a servant is
+        # maxed at ★7, star-up has nothing left to do with it (evolve-eligible T5/T6 servants
+        # move to their own **Evolve** tab; Leveling has its own separate tab/picker too, see
+        # _build_level_components).
+        keep_candidates = sorted(
+            (i for i in instances if self._has_dupes_for_star_up(i, name_counts)),
+            key=lambda i: (-i["tier"], i["name"], -i["star_level"]),
+        )
         shown, self.starup_page, total_pages = self._paginate(keep_candidates, self.starup_page)
         if self.selected_keep_id not in by_id:
             self.selected_keep_id = None
@@ -235,27 +244,22 @@ class ServantView(GameView):
 
         keep_options = [
             discord.SelectOption(
-                label=(_instance_label(i) + (" (ready to evolve)" if servants.can_evolve(i["tier"], i["star_level"]) else ""))[:100],
-                value=str(i["instance_id"]), default=(i["instance_id"] == self.selected_keep_id),
+                label=_instance_label(i)[:100], value=str(i["instance_id"]), default=(i["instance_id"] == self.selected_keep_id),
             )
             for i in shown
         ]
         keep_select = discord.ui.Select(
-            placeholder="Choose a servant to star up/evolve..." + (f" (page {self.starup_page + 1}/{total_pages})" if total_pages > 1 else ""),
-            options=keep_options or [discord.SelectOption(label="No servants ready to star up/evolve", value="none")],
+            placeholder="Choose a servant to star up..." + (f" (page {self.starup_page + 1}/{total_pages})" if total_pages > 1 else ""),
+            options=keep_options or [discord.SelectOption(label="No servants ready to star up", value="none")],
             disabled=not keep_options, row=2,
         )
         keep_select.callback = self._on_pick_keep
         self.add_item(keep_select)
 
         keep = by_id.get(self.selected_keep_id)
-        star_up_viable = keep is not None and not servants.can_evolve(keep["tier"], keep["star_level"]) and self._has_dupes_for_star_up(keep, name_counts)
+        star_up_viable = keep is not None and self._has_dupes_for_star_up(keep, name_counts)
 
-        if keep is not None and servants.can_evolve(keep["tier"], keep["star_level"]):
-            evolve_button = discord.ui.Button(label=f"Evolve {keep['name']}", emoji="🌟", style=discord.ButtonStyle.success, row=3)
-            evolve_button.callback = self._on_evolve
-            self.add_item(evolve_button)
-        elif star_up_viable:
+        if star_up_viable:
             required = servants.STAR_UP_DUPLICATES_REQUIRED[keep["star_level"]]
             dupes = [i for i in instances if i["name"] == keep["name"] and i["instance_id"] != keep["instance_id"]]
             dupe_options = [discord.SelectOption(label=_instance_label(i)[:100], value=str(i["instance_id"])) for i in dupes[:PAGE_SIZE]]
@@ -285,6 +289,47 @@ class ServantView(GameView):
             star_up_all_button = discord.ui.Button(label="Star Up All", emoji="⏫", style=discord.ButtonStyle.primary, row=4)
             star_up_all_button.callback = self._on_star_up_all
             self.add_item(star_up_all_button)
+
+    def _build_evolve_components(self):
+        instances = self.game.get_player_servants(self.user_id)
+        by_id = {i["instance_id"]: i for i in instances}
+
+        # A maxed T5/T6 servant lands here the moment Star Up brings it to ★7 -- this is the
+        # ONLY place evolution happens now (moved out of the Star Up tab, which just handles
+        # duplicate-fueled star advancement).
+        candidates = sorted(
+            (i for i in instances if servants.can_evolve(i["tier"], i["star_level"])),
+            key=lambda i: (-i["tier"], i["name"]),
+        )
+        shown, self.evolve_page, total_pages = self._paginate(candidates, self.evolve_page)
+        if self.selected_evolve_id not in by_id:
+            self.selected_evolve_id = None
+
+        evolve_options = [
+            discord.SelectOption(label=_instance_label(i)[:100], value=str(i["instance_id"]), default=(i["instance_id"] == self.selected_evolve_id))
+            for i in shown
+        ]
+        evolve_select = discord.ui.Select(
+            placeholder="Choose a maxed servant to evolve..." + (f" (page {self.evolve_page + 1}/{total_pages})" if total_pages > 1 else ""),
+            options=evolve_options or [discord.SelectOption(label="No ★7 Tier 5/6 servants ready to evolve", value="none")],
+            disabled=not evolve_options, row=2,
+        )
+        evolve_select.callback = self._on_pick_evolve
+        self.add_item(evolve_select)
+
+        if total_pages > 1:
+            prev_button = discord.ui.Button(label="◀ Prev", row=3, disabled=self.evolve_page == 0)
+            prev_button.callback = self._make_evolve_page_callback(-1)
+            self.add_item(prev_button)
+            next_button = discord.ui.Button(label="Next ▶", row=3, disabled=self.evolve_page >= total_pages - 1)
+            next_button.callback = self._make_evolve_page_callback(1)
+            self.add_item(next_button)
+
+        keep = by_id.get(self.selected_evolve_id)
+        if keep is not None and servants.can_evolve(keep["tier"], keep["star_level"]):
+            evolve_button = discord.ui.Button(label=f"Evolve {keep['name']}", emoji="🌟", style=discord.ButtonStyle.success, row=4)
+            evolve_button.callback = self._on_evolve
+            self.add_item(evolve_button)
 
     def _level_filtered(self, instances: list) -> list:
         candidates = [i for i in instances if i["level"] < servants.SERVANT_MAX_LEVEL]
@@ -463,7 +508,7 @@ class ServantView(GameView):
             await interaction.response.edit_message(embed=embed, view=self)
         return callback
 
-    # -- callbacks: star up / evolve ---------------------------------------------------------
+    # -- callbacks: star up -------------------------------------------------------------------
 
     async def _on_pick_keep(self, interaction: discord.Interaction):
         select = next(child for child in self.children if isinstance(child, discord.ui.Select) and child.row == 2)
@@ -504,15 +549,31 @@ class ServantView(GameView):
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
 
+    # -- callbacks: evolve ----------------------------------------------------------------------
+
+    async def _on_pick_evolve(self, interaction: discord.Interaction):
+        select = next(child for child in self.children if isinstance(child, discord.ui.Select) and child.row == 2)
+        self.selected_evolve_id = int(select.values[0])
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    def _make_evolve_page_callback(self, delta: int):
+        async def callback(interaction: discord.Interaction):
+            self.evolve_page += delta
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
+        return callback
+
     async def _on_evolve(self, interaction: discord.Interaction):
         new_instance_id = None
-        if self.selected_keep_id:
-            _, self.last_result, new_instance_id = await asyncio.to_thread(self.game.evolve_servant, self.user_id, self.selected_keep_id)
+        if self.selected_evolve_id:
+            _, self.last_result, new_instance_id = await asyncio.to_thread(self.game.evolve_servant, self.user_id, self.selected_evolve_id)
         # Select the FRESHLY EVOLVED instance (not None) so the rebuilt embed immediately shows
         # exactly what the servant turned into -- name, tier, stats, and its own portrait --
         # instead of going blank right after such a dramatic identity change.
-        self.selected_keep_id = new_instance_id
-        self.selected_consume_ids = []
+        self.selected_evolve_id = new_instance_id
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -637,6 +698,8 @@ class ServantView(GameView):
             embed = self._roster_embed()
         elif self.active_tab == "star_up":
             embed = self._star_up_embed()
+        elif self.active_tab == "evolve":
+            embed = self._evolve_embed()
         elif self.active_tab == "level":
             embed = self._level_embed()
         elif self.active_tab == "equip":
@@ -708,9 +771,10 @@ class ServantView(GameView):
         embed = discord.Embed(
             title=f"⭐ {self.display_name}'s Star Up",
             description=(
-                "Consume exact-name duplicates to advance a servant's star level (1★→7★). A "
-                "maxed Tier 5/6 servant at ★7 can evolve into a fresh Tier 6/7 named identity "
-                "instead. Leveling (materials, no duplicates needed) lives on its own **Level** tab."
+                "Consume exact-name duplicates to advance a servant's star level (1★→7★). Once "
+                "a Tier 5/6 servant maxes at ★7, find it on the **Evolve** tab to transform it "
+                "into a fresh named identity. Leveling (materials, no duplicates needed) lives "
+                "on its own **Level** tab."
             ),
             color=discord.Color.gold(),
         )
@@ -724,7 +788,7 @@ class ServantView(GameView):
                 lines.append(f"Affinity: {affinity_seconds / 86400:.1f}d equipped (+{(mult - 1) * 100:.1f}% bonus)")
 
             if servants.can_evolve(keep["tier"], keep["star_level"]):
-                lines.append(f"✅ Ready to evolve into a random Tier {keep['tier'] + 1} servant!")
+                lines.append(f"✅ Maxed and ready to evolve! Switch to the **Evolve** tab to turn it into a random Tier {keep['tier'] + 1} servant.")
             elif keep["star_level"] >= servants.MAX_STAR_LEVEL:
                 # Maxed at ★7 with nowhere further to go -- either a non-evolvable tier (T1-4,
                 # T7) or a T5/6 that already evolved. STAR_UP_DUPLICATES_REQUIRED only has keys
@@ -738,6 +802,35 @@ class ServantView(GameView):
 
             embed.add_field(name=keep["name"], value="\n".join(lines), inline=False)
             _maybe_set_image(embed, keep["name"])
+        return embed
+
+    def _evolve_embed(self) -> discord.Embed:
+        embed = discord.Embed(
+            title=f"🌟 {self.display_name}'s Servant Evolution",
+            description=(
+                "A Tier 5 or Tier 6 servant maxed to ★7 shows up here, ready to transform into a "
+                "fresh, randomly-rolled Tier 6/7 named servant -- a full identity swap, not just a "
+                "stat boost. The new servant starts back at ★1 (its Level and Affinity carry over "
+                "unchanged), so you'll need duplicates of its NEW name to star it up again."
+            ),
+            color=discord.Color.gold(),
+        )
+        instances = self.game.get_player_servants(self.user_id)
+        keep = next((i for i in instances if i["instance_id"] == self.selected_evolve_id), None)
+        if keep:
+            lines = [f"{servants.tier_label(keep['tier'])} · ★{keep['star_level']} · Level {keep['level']}/{servants.SERVANT_MAX_LEVEL}"]
+            if servants.can_evolve(keep["tier"], keep["star_level"]):
+                lines.append(f"✅ Ready to evolve into a random Tier {keep['tier'] + 1} servant!")
+            else:
+                lines.append(f"This is what it evolved into: **{keep['name']}**.")
+            embed.add_field(name=keep["name"], value="\n".join(lines), inline=False)
+            _maybe_set_image(embed, keep["name"])
+        else:
+            embed.add_field(
+                name="No servant selected",
+                value="Star a Tier 5 or Tier 6 servant up to ★7 first (see the **Star Up** tab), then pick it here to evolve it.",
+                inline=False,
+            )
         return embed
 
     def _level_embed(self) -> discord.Embed:
