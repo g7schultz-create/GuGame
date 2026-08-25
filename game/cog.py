@@ -582,7 +582,9 @@ class GameCog(commands.Cog):
         try:
             user = self.bot.get_user(completed["user_id"]) or await self.bot.fetch_user(completed["user_id"])
             duty_label = completed["duty"].title()
-            outcome = "completed a cycle" if completed["success"] else "found nothing ready (will try again tomorrow)"
+            bonus_pct = completed.get("yield_bonus_pct", 0)
+            bonus_text = f" (+{bonus_pct * 100:.0f}% yield)" if completed["success"] and bonus_pct else ""
+            outcome = f"completed a cycle{bonus_text}" if completed["success"] else "found nothing ready (will try again tomorrow)"
             await user.send(f"⚙️ Your servant **{completed['servant_name']}** ({duty_label} duty) {outcome}.")
         except discord.HTTPException:
             pass

@@ -2056,12 +2056,28 @@ class GameManager:
         self.db.clear_servant_automation(instance_id)
         return True, f"**{instance['name']}** stops working."
 
+    @staticmethod
+    def _sum_node_quantities(nodes: list) -> dict:
+        """Sums a mine/gather roll's nodes by item_name -- MINE_VEIN_NODE_COUNT/GATHER_PATCH_
+        NODE_COUNT nodes are rolled independently, so two nodes landing on the same tier (and
+        therefore the same item_name) is common; a bare {item_name: quantity for node in nodes}
+        dict comprehension silently DROPS the earlier duplicate's quantity instead of adding it
+        (the exact bug this helper replaces -- MiningVeinView's own self.collected accumulates
+        the same way, see mining_view.py's _on_strike)."""
+        collected: dict = {}
+        for node in nodes:
+            collected[node["item_name"]] = collected.get(node["item_name"], 0) + node["quantity"]
+        return collected
+
     def check_and_complete_servant_automation(self) -> list:
         """Periodic sweep (see cog.py's servant_automation_tick) -- for every servant whose
         automation_next_tick_ts has elapsed, calls the EXISTING start_mining_vein/
         start_gathering_patch/harvest_all_farm on the player's behalf (no reimplemented yield
-        logic). Always reschedules for another attempt, win or miss -- unlike Ink Men running out
-        of page duplicates, a mine/gather/farm cycle is always eventually available again, so a
+        logic), then scales the result up by the ASSIGNED servant's own automation_yield_bonus_pct
+        (tier/star/level/affinity -- see servants.automation_yield_bonus_pct) so a higher-tier,
+        more-invested servant is a meaningfully better automated worker, not just eligible to
+        work at all. Always reschedules for another attempt, win or miss -- unlike Ink Men running
+        out of page duplicates, a mine/gather/farm cycle is always eventually available again, so a
         servant never goes idle here (a same-cycle collision with the player's own manual /mine
         or /gather is rare and harmless: MINE/GATHER_COOLDOWN_SECONDS are both 900, dwarfed by
         the 24h tick interval, so it just skips to next cycle). Farm duty is harvest-only in this
@@ -2075,22 +2091,39 @@ class GameManager:
                 self.db.clear_servant_automation(instance["instance_id"])
                 continue
             duty = instance["automation_duty"]
+            servant = servants.SERVANT_CATALOG.get(instance["name"])
+            affinity = servants.current_affinity_seconds(instance, now)
+            bonus_pct = servants.automation_yield_bonus_pct(servant, instance["star_level"], instance["level"], affinity) if servant else 0.0
             success = False
             if duty == servants.DUTY_MINE:
                 result = self.start_mining_vein(owner_id, player["name"])
                 if result["ok"]:
-                    self.collect_mining_vein(owner_id, {node["item_name"]: node["quantity"] for node in result["nodes"]})
+                    collected = self._sum_node_quantities(result["nodes"])
+                    boosted = {item: round(qty * (1 + bonus_pct)) for item, qty in collected.items()}
+                    self.collect_mining_vein(owner_id, boosted)
                     success = True
             elif duty == servants.DUTY_GATHER:
                 result = self.start_gathering_patch(owner_id, player["name"])
                 if result["ok"]:
-                    self.collect_gathering_patch(owner_id, {node["item_name"]: node["quantity"] for node in result["nodes"]})
+                    collected = self._sum_node_quantities(result["nodes"])
+                    boosted = {item: round(qty * (1 + bonus_pct)) for item, qty in collected.items()}
+                    self.collect_gathering_patch(owner_id, boosted)
                     success = True
-            else:  # farm
+            else:  # farm -- harvest_all_farm already GRANTS at the base rate internally (single-
+                   # phase, unlike mine/gather's roll-then-collect split), so the bonus tops up
+                   # the difference afterward instead of being folded in beforehand.
                 result = self.harvest_all_farm(owner_id, player["name"])
                 success = result["plots_harvested"] > 0
+                if success and bonus_pct:
+                    for item_name, qty in result["harvested"].items():
+                        extra = round(qty * bonus_pct)
+                        if extra:
+                            self.db.add_item(owner_id, item_name, extra)
             self.db.set_servant_next_tick(instance["instance_id"], now + servants.AUTOMATION_TICK_INTERVAL_SECONDS)
-            completed.append({"user_id": owner_id, "name": player["name"], "servant_name": instance["name"], "duty": duty, "success": success})
+            completed.append({
+                "user_id": owner_id, "name": player["name"], "servant_name": instance["name"],
+                "duty": duty, "success": success, "yield_bonus_pct": bonus_pct,
+            })
         return completed
 
     def _servant_yield_bonus(self, user_id: int, key: str) -> float:

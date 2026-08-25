@@ -1,11 +1,17 @@
 """
 ServantView -- the /servant menu (admin-only preview, see cog.py). Summon tab: roll for new
-servants (see GameManager.summon_servant). Roster tab: browse owned instances + the collection
-bonus. Star Up tab: consume exact-name duplicates to advance a servant's star level, or evolve a
-maxed T5/T6 servant into a fresh T6/T7 named identity (see GameManager.star_up_servant/
-evolve_servant). Equip tab: assign a servant to the Support or Combat slot (see
+servants (see GameManager.summon_servant). Roster tab: browse owned instances by tier + the
+collection bonus. Star Up tab: consume exact-name duplicates to advance a servant's star level,
+or evolve a maxed T5/T6 servant into a fresh T6/T7 named identity (see GameManager.
+star_up_servant/evolve_servant). Level tab: feed materials to advance a servant's Level,
+independent of Star/duplicates, via its own separate servant picker (see GameManager.
+level_up_servant). Equip tab: assign a servant to the Support or Combat slot (see
 GameManager.equip_servant/unequip_servant). Automation tab: assign a servant to auto-run mining/
 gathering/farming on a daily tick (see GameManager.assign_servant_duty/unassign_servant_duty).
+
+Tabs span 2 rows (3+3) since there are 6 of them -- Discord caps a single ActionRow at 5
+buttons. Every tab's own content is squeezed into the 3 rows left (2-4), so pagination buttons
+usually share a row with their tab's action button(s) rather than getting a dedicated row.
 """
 
 import asyncio
@@ -43,6 +49,15 @@ def _instance_label(instance: dict) -> str:
     return f"{servants.TIER_EMOJI.get(instance['tier'], '')} #{instance['instance_id']} {instance['name']} (T{instance['tier']} ★{instance['star_level']} Lv{instance['level']})"
 
 
+def _maybe_set_thumbnail(embed: discord.Embed, name: str):
+    """Sets the embed's thumbnail to this servant's image_url, if the catalog entry has one
+    filled in -- every catalog entry ships with image_url=None until real art is supplied, so
+    this is a no-op today and starts working the moment servants.py's entries are filled in."""
+    servant = servants.SERVANT_CATALOG.get(name)
+    if servant and servant.image_url:
+        embed.set_thumbnail(url=servant.image_url)
+
+
 def _stats_text(servant, star_level: int, level: int = 1, affinity_seconds: int = 0) -> str:
     bonuses = servants.scaled_stat_bonuses(servant, star_level, level, affinity_seconds)
     return ", ".join(f"{STAT_LABELS.get(k, k)} +{v:g}" for k, v in bonuses.items()) or "—"
@@ -50,8 +65,8 @@ def _stats_text(servant, star_level: int, level: int = 1, affinity_seconds: int 
 
 class ServantView(GameView):
     TABS = [
-        ("summon", "Summon", "🎴"), ("roster", "Roster", "📜"), ("star_up", "Star Up", "⭐"),
-        ("equip", "Equip", "⚔️"), ("automation", "Automation", "⚙️"),
+        ("summon", "Summon", "🎴", 0), ("roster", "Roster", "📜", 0), ("star_up", "Star Up", "⭐", 0),
+        ("level", "Level", "🔺", 1), ("equip", "Equip", "⚔️", 1), ("automation", "Automation", "⚙️", 1),
     ]
 
     def __init__(self, user_id: int, game, display_name: str):
@@ -71,6 +86,9 @@ class ServantView(GameView):
         self.selected_keep_id: int = None
         self.selected_consume_ids: list = []
         self.starup_page = 0
+
+        self.selected_level_id: int = None
+        self.level_page = 0
 
         self.selected_slot = servants.SLOT_KEY_SUPPORT
         self.selected_equip_id: int = None
@@ -92,8 +110,8 @@ class ServantView(GameView):
 
     def _build_components(self):
         self.clear_items()
-        for key, label, emoji in self.TABS:
-            button = discord.ui.Button(label=label, emoji=emoji, row=0)
+        for key, label, emoji, row in self.TABS:
+            button = discord.ui.Button(label=label, emoji=emoji, row=row)
             is_active = key == self.active_tab
             button.style = discord.ButtonStyle.primary if is_active else discord.ButtonStyle.secondary
             button.disabled = is_active
@@ -106,6 +124,8 @@ class ServantView(GameView):
             self._build_roster_components()
         elif self.active_tab == "star_up":
             self._build_star_up_components()
+        elif self.active_tab == "level":
+            self._build_level_components()
         elif self.active_tab == "equip":
             self._build_equip_components()
         elif self.active_tab == "automation":
@@ -131,15 +151,15 @@ class ServantView(GameView):
             discord.SelectOption(label=CURRENCY_LABELS[c], value=c, default=(c == self.selected_currency))
             for c in servants.SUMMON_CURRENCIES
         ]
-        currency_select = discord.ui.Select(placeholder="Choose a currency...", options=currency_options, row=1)
+        currency_select = discord.ui.Select(placeholder="Choose a currency...", options=currency_options, row=2)
         currency_select.callback = self._on_pick_currency
         self.add_item(currency_select)
 
-        summon_one = discord.ui.Button(label="Summon x1", emoji="🎴", style=discord.ButtonStyle.success, row=2)
+        summon_one = discord.ui.Button(label="Summon x1", emoji="🎴", style=discord.ButtonStyle.success, row=3)
         summon_one.callback = self._make_summon_callback(1)
         self.add_item(summon_one)
 
-        summon_ten = discord.ui.Button(label="Summon x10", emoji="🎴", style=discord.ButtonStyle.success, row=2)
+        summon_ten = discord.ui.Button(label="Summon x10", emoji="🎴", style=discord.ButtonStyle.success, row=3)
         summon_ten.callback = self._make_summon_callback(10)
         self.add_item(summon_ten)
 
@@ -149,15 +169,14 @@ class ServantView(GameView):
         for i in instances:
             counts[i["tier"]] = counts.get(i["tier"], 0) + 1
 
-        # Tier-browse buttons (row1: T7-T3, row2: T2/T1/All) -- same "tier + count" layout
-        # requested, so the whole roster is scannable/filterable at a glance instead of one
-        # long flat list.
+        # Tier-browse buttons (row2: T7-T3, row3: T2/T1/All) -- "tier + count" layout, so the
+        # whole roster is scannable/filterable at a glance instead of one long flat list.
         for t in (7, 6, 5, 4, 3):
-            self._add_tier_filter_button(t, counts.get(t, 0), row=1)
-        for t in (2, 1):
             self._add_tier_filter_button(t, counts.get(t, 0), row=2)
+        for t in (2, 1):
+            self._add_tier_filter_button(t, counts.get(t, 0), row=3)
         all_button = discord.ui.Button(
-            label=f"All — {len(instances)}", row=2,
+            label=f"All — {len(instances)}", row=3,
             style=discord.ButtonStyle.primary if self.roster_tier_filter is None else discord.ButtonStyle.secondary,
         )
         all_button.callback = self._make_roster_tier_callback(None)
@@ -166,10 +185,10 @@ class ServantView(GameView):
         filtered = self._roster_filtered(instances)
         _, self.roster_page, total_pages = self._paginate(filtered, self.roster_page, page_size=15)
         if total_pages > 1:
-            prev_button = discord.ui.Button(label="◀ Prev", row=3, disabled=self.roster_page == 0)
+            prev_button = discord.ui.Button(label="◀ Prev", row=4, disabled=self.roster_page == 0)
             prev_button.callback = self._make_roster_page_callback(-1)
             self.add_item(prev_button)
-            next_button = discord.ui.Button(label="Next ▶", row=3, disabled=self.roster_page >= total_pages - 1)
+            next_button = discord.ui.Button(label="Next ▶", row=4, disabled=self.roster_page >= total_pages - 1)
             next_button.callback = self._make_roster_page_callback(1)
             self.add_item(next_button)
 
@@ -201,16 +220,11 @@ class ServantView(GameView):
         for i in instances:
             name_counts[i["name"]] = name_counts.get(i["name"], 0) + 1
 
-        # Only list servants with an actionable power-up path right now: ready to evolve, has
-        # enough duplicates owned to star up immediately, or still has Level headroom (fed with
-        # materials, so it's available almost always) -- a servant fully maxed on both Star AND
-        # Level with no evolution/dupes available is the only thing excluded.
+        # Only list servants that can ACTUALLY be starred up or evolved right now -- Leveling
+        # has its own separate tab/picker (see _build_level_components), so it plays no part in
+        # this filter.
         def has_action(i):
-            return (
-                servants.can_evolve(i["tier"], i["star_level"])
-                or self._has_dupes_for_star_up(i, name_counts)
-                or i["level"] < servants.SERVANT_MAX_LEVEL
-            )
+            return servants.can_evolve(i["tier"], i["star_level"]) or self._has_dupes_for_star_up(i, name_counts)
 
         keep_candidates = sorted((i for i in instances if has_action(i)), key=lambda i: (i["tier"], i["name"], -i["star_level"]))
         shown, self.starup_page, total_pages = self._paginate(keep_candidates, self.starup_page)
@@ -226,29 +240,21 @@ class ServantView(GameView):
             for i in shown
         ]
         keep_select = discord.ui.Select(
-            placeholder="Choose a servant to power up..." + (f" (page {self.starup_page + 1}/{total_pages})" if total_pages > 1 else ""),
-            options=keep_options or [discord.SelectOption(label="Nothing left to advance", value="none")],
-            disabled=not keep_options, row=1,
+            placeholder="Choose a servant to star up/evolve..." + (f" (page {self.starup_page + 1}/{total_pages})" if total_pages > 1 else ""),
+            options=keep_options or [discord.SelectOption(label="No servants ready to star up/evolve", value="none")],
+            disabled=not keep_options, row=2,
         )
         keep_select.callback = self._on_pick_keep
         self.add_item(keep_select)
-        if total_pages > 1:
-            prev_button = discord.ui.Button(label="◀ Prev", row=2, disabled=self.starup_page == 0)
-            prev_button.callback = self._make_starup_page_callback(-1)
-            self.add_item(prev_button)
-            next_button = discord.ui.Button(label="Next ▶", row=2, disabled=self.starup_page >= total_pages - 1)
-            next_button.callback = self._make_starup_page_callback(1)
-            self.add_item(next_button)
 
         keep = by_id.get(self.selected_keep_id)
-        if keep is None:
-            return
+        star_up_viable = keep is not None and not servants.can_evolve(keep["tier"], keep["star_level"]) and self._has_dupes_for_star_up(keep, name_counts)
 
-        if servants.can_evolve(keep["tier"], keep["star_level"]):
+        if keep is not None and servants.can_evolve(keep["tier"], keep["star_level"]):
             evolve_button = discord.ui.Button(label=f"Evolve {keep['name']}", emoji="🌟", style=discord.ButtonStyle.success, row=3)
             evolve_button.callback = self._on_evolve
             self.add_item(evolve_button)
-        elif self._has_dupes_for_star_up(keep, name_counts):
+        elif star_up_viable:
             required = servants.STAR_UP_DUPLICATES_REQUIRED[keep["star_level"]]
             dupes = [i for i in instances if i["name"] == keep["name"] and i["instance_id"] != keep["instance_id"]]
             dupe_options = [discord.SelectOption(label=_instance_label(i)[:100], value=str(i["instance_id"])) for i in dupes[:PAGE_SIZE]]
@@ -259,6 +265,15 @@ class ServantView(GameView):
             dupe_select.callback = self._on_pick_consume
             self.add_item(dupe_select)
 
+        if total_pages > 1:
+            prev_button = discord.ui.Button(label="◀ Prev", row=4, disabled=self.starup_page == 0)
+            prev_button.callback = self._make_starup_page_callback(-1)
+            self.add_item(prev_button)
+            next_button = discord.ui.Button(label="Next ▶", row=4, disabled=self.starup_page >= total_pages - 1)
+            next_button.callback = self._make_starup_page_callback(1)
+            self.add_item(next_button)
+        if star_up_viable:
+            required = servants.STAR_UP_DUPLICATES_REQUIRED[keep["star_level"]]
             star_up_button = discord.ui.Button(
                 label="Star Up", emoji="⭐", style=discord.ButtonStyle.success, row=4,
                 disabled=len(self.selected_consume_ids) != required,
@@ -266,9 +281,44 @@ class ServantView(GameView):
             star_up_button.callback = self._on_star_up
             self.add_item(star_up_button)
 
-        if keep["level"] < servants.SERVANT_MAX_LEVEL:
+    def _build_level_components(self):
+        """Level's own independent servant picker -- deliberately NOT shared with Star Up's
+        keep select, so any owned servant with Level headroom is reachable here regardless of
+        whether it also happens to be star-up/evolve eligible."""
+        instances = self.game.get_player_servants(self.user_id)
+        by_id = {i["instance_id"]: i for i in instances}
+        candidates = sorted(
+            (i for i in instances if i["level"] < servants.SERVANT_MAX_LEVEL),
+            key=lambda i: (i["tier"], i["name"], i["level"]),
+        )
+        shown, self.level_page, total_pages = self._paginate(candidates, self.level_page)
+        if self.selected_level_id not in by_id:
+            self.selected_level_id = None
+
+        level_options = [
+            discord.SelectOption(label=_instance_label(i)[:100], value=str(i["instance_id"]), default=(i["instance_id"] == self.selected_level_id))
+            for i in shown
+        ]
+        level_select = discord.ui.Select(
+            placeholder="Choose a servant to level up..." + (f" (page {self.level_page + 1}/{total_pages})" if total_pages > 1 else ""),
+            options=level_options or [discord.SelectOption(label="Every servant is already max Level", value="none")],
+            disabled=not level_options, row=2,
+        )
+        level_select.callback = self._on_pick_level_instance
+        self.add_item(level_select)
+
+        if total_pages > 1:
+            prev_button = discord.ui.Button(label="◀ Prev", row=3, disabled=self.level_page == 0)
+            prev_button.callback = self._make_level_page_callback(-1)
+            self.add_item(prev_button)
+            next_button = discord.ui.Button(label="Next ▶", row=3, disabled=self.level_page >= total_pages - 1)
+            next_button.callback = self._make_level_page_callback(1)
+            self.add_item(next_button)
+
+        keep = by_id.get(self.selected_level_id)
+        if keep is not None:
             level_up_button = discord.ui.Button(
-                label=f"Level Up ({keep['level']}→{keep['level'] + 1})", emoji="🔺", style=discord.ButtonStyle.primary, row=4,
+                label=f"Level Up ({keep['level']}→{keep['level'] + 1})", emoji="🔺", style=discord.ButtonStyle.success, row=4,
             )
             level_up_button.callback = self._on_level_up
             self.add_item(level_up_button)
@@ -278,7 +328,7 @@ class ServantView(GameView):
             discord.SelectOption(label="Support", value=servants.SLOT_KEY_SUPPORT, default=(self.selected_slot == servants.SLOT_KEY_SUPPORT)),
             discord.SelectOption(label="Combat", value=servants.SLOT_KEY_COMBAT, default=(self.selected_slot == servants.SLOT_KEY_COMBAT)),
         ]
-        slot_select = discord.ui.Select(placeholder="Choose a slot...", options=slot_options, row=1)
+        slot_select = discord.ui.Select(placeholder="Choose a slot...", options=slot_options, row=2)
         slot_select.callback = self._on_pick_slot
         self.add_item(slot_select)
 
@@ -291,17 +341,10 @@ class ServantView(GameView):
         instance_select = discord.ui.Select(
             placeholder="Choose a servant to equip..." + (f" (page {self.equip_page + 1}/{total_pages})" if total_pages > 1 else ""),
             options=instance_options or [discord.SelectOption(label="No servants owned", value="none")],
-            disabled=not instance_options, row=2,
+            disabled=not instance_options, row=3,
         )
         instance_select.callback = self._on_pick_equip_instance
         self.add_item(instance_select)
-        if total_pages > 1:
-            prev_button = discord.ui.Button(label="◀ Prev", row=3, disabled=self.equip_page == 0)
-            prev_button.callback = self._make_equip_page_callback(-1)
-            self.add_item(prev_button)
-            next_button = discord.ui.Button(label="Next ▶", row=3, disabled=self.equip_page >= total_pages - 1)
-            next_button.callback = self._make_equip_page_callback(1)
-            self.add_item(next_button)
 
         equip_button = discord.ui.Button(label="Equip", emoji="⚔️", style=discord.ButtonStyle.success, row=4, disabled=not instance_options)
         equip_button.callback = self._on_equip
@@ -309,10 +352,17 @@ class ServantView(GameView):
         unequip_button = discord.ui.Button(label="Unequip Slot", emoji="🗑️", style=discord.ButtonStyle.danger, row=4)
         unequip_button.callback = self._on_unequip
         self.add_item(unequip_button)
+        if total_pages > 1:
+            prev_button = discord.ui.Button(label="◀ Prev", row=4, disabled=self.equip_page == 0)
+            prev_button.callback = self._make_equip_page_callback(-1)
+            self.add_item(prev_button)
+            next_button = discord.ui.Button(label="Next ▶", row=4, disabled=self.equip_page >= total_pages - 1)
+            next_button.callback = self._make_equip_page_callback(1)
+            self.add_item(next_button)
 
     def _build_automation_components(self):
         duty_options = [discord.SelectOption(label=label, value=key, default=(key == self.selected_duty)) for key, label in DUTY_LABELS.items()]
-        duty_select = discord.ui.Select(placeholder="Choose a duty...", options=duty_options, row=1)
+        duty_select = discord.ui.Select(placeholder="Choose a duty...", options=duty_options, row=2)
         duty_select.callback = self._on_pick_duty
         self.add_item(duty_select)
 
@@ -326,17 +376,10 @@ class ServantView(GameView):
         instance_select = discord.ui.Select(
             placeholder="Choose an idle servant to assign..." + (f" (page {self.automation_page + 1}/{total_pages})" if total_pages > 1 else ""),
             options=instance_options or [discord.SelectOption(label="No idle servants owned", value="none")],
-            disabled=not instance_options, row=2,
+            disabled=not instance_options, row=3,
         )
         instance_select.callback = self._on_pick_automation_instance
         self.add_item(instance_select)
-        if total_pages > 1:
-            prev_button = discord.ui.Button(label="◀ Prev", row=3, disabled=self.automation_page == 0)
-            prev_button.callback = self._make_automation_page_callback(-1)
-            self.add_item(prev_button)
-            next_button = discord.ui.Button(label="Next ▶", row=3, disabled=self.automation_page >= total_pages - 1)
-            next_button.callback = self._make_automation_page_callback(1)
-            self.add_item(next_button)
 
         assigned = [i for i in instances if i["automation_duty"] is not None]
         assign_button = discord.ui.Button(
@@ -345,15 +388,22 @@ class ServantView(GameView):
         )
         assign_button.callback = self._on_assign_duty
         self.add_item(assign_button)
-        for instance in assigned[:4]:
+        for instance in assigned[:servants.MAX_AUTOMATION_SERVANTS]:
             stop_button = discord.ui.Button(label=f"Stop #{instance['instance_id']}", style=discord.ButtonStyle.danger, row=4)
             stop_button.callback = self._make_unassign_callback(instance["instance_id"])
             self.add_item(stop_button)
+        # A single wraparound cycle button instead of separate Prev/Next -- row4 is already at
+        # assign(1) + up to MAX_AUTOMATION_SERVANTS(3) stop buttons, leaving only 1 slot free,
+        # not the 2 a Prev/Next pair would need.
+        if total_pages > 1:
+            cycle_button = discord.ui.Button(label=f"Next Page ({self.automation_page + 1}/{total_pages})", row=4)
+            cycle_button.callback = self._make_automation_cycle_callback(total_pages)
+            self.add_item(cycle_button)
 
     # -- callbacks: summon ----------------------------------------------------------------------
 
     async def _on_pick_currency(self, interaction: discord.Interaction):
-        select = next(child for child in self.children if isinstance(child, discord.ui.Select) and child.row == 1)
+        select = next(child for child in self.children if isinstance(child, discord.ui.Select) and child.row == 2)
         self.selected_currency = select.values[0]
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
@@ -391,7 +441,7 @@ class ServantView(GameView):
     # -- callbacks: star up / evolve ---------------------------------------------------------
 
     async def _on_pick_keep(self, interaction: discord.Interaction):
-        select = next(child for child in self.children if isinstance(child, discord.ui.Select) and child.row == 1)
+        select = next(child for child in self.children if isinstance(child, discord.ui.Select) and child.row == 2)
         self.selected_keep_id = int(select.values[0])
         self.selected_consume_ids = []
         await asyncio.to_thread(self._build_components)
@@ -430,9 +480,26 @@ class ServantView(GameView):
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
 
+    # -- callbacks: level -------------------------------------------------------------------
+
+    async def _on_pick_level_instance(self, interaction: discord.Interaction):
+        select = next(child for child in self.children if isinstance(child, discord.ui.Select) and child.row == 2)
+        self.selected_level_id = int(select.values[0])
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    def _make_level_page_callback(self, delta: int):
+        async def callback(interaction: discord.Interaction):
+            self.level_page += delta
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
+        return callback
+
     async def _on_level_up(self, interaction: discord.Interaction):
-        if self.selected_keep_id:
-            _, self.last_result = await asyncio.to_thread(self.game.level_up_servant, self.user_id, self.selected_keep_id)
+        if self.selected_level_id:
+            _, self.last_result = await asyncio.to_thread(self.game.level_up_servant, self.user_id, self.selected_level_id)
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -440,14 +507,14 @@ class ServantView(GameView):
     # -- callbacks: equip -------------------------------------------------------------------
 
     async def _on_pick_slot(self, interaction: discord.Interaction):
-        select = next(child for child in self.children if isinstance(child, discord.ui.Select) and child.row == 1)
+        select = next(child for child in self.children if isinstance(child, discord.ui.Select) and child.row == 2)
         self.selected_slot = select.values[0]
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_pick_equip_instance(self, interaction: discord.Interaction):
-        select = next(child for child in self.children if isinstance(child, discord.ui.Select) and child.row == 2)
+        select = next(child for child in self.children if isinstance(child, discord.ui.Select) and child.row == 3)
         self.selected_equip_id = int(select.values[0])
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
@@ -477,22 +544,22 @@ class ServantView(GameView):
     # -- callbacks: automation ----------------------------------------------------------------
 
     async def _on_pick_duty(self, interaction: discord.Interaction):
-        select = next(child for child in self.children if isinstance(child, discord.ui.Select) and child.row == 1)
+        select = next(child for child in self.children if isinstance(child, discord.ui.Select) and child.row == 2)
         self.selected_duty = select.values[0]
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_pick_automation_instance(self, interaction: discord.Interaction):
-        select = next(child for child in self.children if isinstance(child, discord.ui.Select) and child.row == 2)
+        select = next(child for child in self.children if isinstance(child, discord.ui.Select) and child.row == 3)
         self.selected_automation_id = int(select.values[0])
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
 
-    def _make_automation_page_callback(self, delta: int):
+    def _make_automation_cycle_callback(self, total_pages: int):
         async def callback(interaction: discord.Interaction):
-            self.automation_page += delta
+            self.automation_page = (self.automation_page + 1) % total_pages
             await asyncio.to_thread(self._build_components)
             embed = await asyncio.to_thread(self.build_embed)
             await interaction.response.edit_message(embed=embed, view=self)
@@ -523,6 +590,8 @@ class ServantView(GameView):
             embed = self._roster_embed()
         elif self.active_tab == "star_up":
             embed = self._star_up_embed()
+        elif self.active_tab == "level":
+            embed = self._level_embed()
         elif self.active_tab == "equip":
             embed = self._equip_embed()
         else:
@@ -545,6 +614,8 @@ class ServantView(GameView):
         if self.last_rolled:
             lines = "\n".join(f"{servants.TIER_EMOJI.get(tier, '')} **{name}** (Tier {tier})" for name, tier in self.last_rolled)
             embed.add_field(name="Pull Results", value=lines, inline=False)
+            if len(self.last_rolled) == 1:
+                _maybe_set_thumbnail(embed, self.last_rolled[0][0])
         return embed
 
     def _roster_embed(self) -> discord.Embed:
@@ -580,9 +651,9 @@ class ServantView(GameView):
         embed = discord.Embed(
             title=f"⭐ {self.display_name}'s Star Up",
             description=(
-                "Consume exact-name duplicates to advance a servant's star level (1★→7★), or feed "
-                "materials to Level it up (1-10, independent of duplicates). A maxed Tier 5/6 "
-                "servant at ★7 can evolve into a fresh Tier 6/7 named identity instead."
+                "Consume exact-name duplicates to advance a servant's star level (1★→7★). A "
+                "maxed Tier 5/6 servant at ★7 can evolve into a fresh Tier 6/7 named identity "
+                "instead. Leveling (materials, no duplicates needed) lives on its own **Level** tab."
             ),
             color=discord.Color.gold(),
         )
@@ -597,25 +668,38 @@ class ServantView(GameView):
 
             if servants.can_evolve(keep["tier"], keep["star_level"]):
                 lines.append(f"✅ Ready to evolve into a random Tier {keep['tier'] + 1} servant!")
-            elif keep["star_level"] < servants.MAX_STAR_LEVEL:
+            else:
                 required = servants.STAR_UP_DUPLICATES_REQUIRED[keep["star_level"]]
                 dupes_owned = len([i for i in instances if i["name"] == keep["name"] and i["instance_id"] != keep["instance_id"]])
-                if dupes_owned >= required:
-                    lines.append(f"★{keep['star_level']} → ★{keep['star_level'] + 1}: choose **{required}** duplicate(s) below.")
-                else:
-                    lines.append(f"★{keep['star_level']} → ★{keep['star_level'] + 1} needs **{required}** duplicate(s) (you own {dupes_owned}).")
-            else:
-                lines.append("Star level maxed.")
+                lines.append(f"★{keep['star_level']} → ★{keep['star_level'] + 1}: choose **{required}** duplicate(s) below (you own {dupes_owned}).")
 
-            if keep["level"] < servants.SERVANT_MAX_LEVEL:
-                recipe = servants.level_up_recipe(keep["tier"], keep["level"])
+            embed.add_field(name=keep["name"], value="\n".join(lines), inline=False)
+            _maybe_set_thumbnail(embed, keep["name"])
+        return embed
+
+    def _level_embed(self) -> discord.Embed:
+        embed = discord.Embed(
+            title=f"🔺 {self.display_name}'s Servant Leveling",
+            description=(
+                "Feed Soul Nourishing Pill + Soul Crystal + Spirit Stones to advance a servant's "
+                "Level (1-10) -- the same materials/curve Nascent Soul Avatar leveling uses, scaled "
+                "by the servant's own tier. Independent of Star -- works even on a lone, dupe-less copy."
+            ),
+            color=discord.Color.gold(),
+        )
+        instances = self.game.get_player_servants(self.user_id)
+        keep = next((i for i in instances if i["instance_id"] == self.selected_level_id), None)
+        if keep:
+            lines = [f"{servants.tier_label(keep['tier'])} · ★{keep['star_level']} · Level {keep['level']}/{servants.SERVANT_MAX_LEVEL}"]
+            recipe = servants.level_up_recipe(keep["tier"], keep["level"])
+            if recipe is not None:
                 stones_cost = servants.level_up_stones_cost(keep["tier"], keep["level"])
                 recipe_text = ", ".join(f"{qty}x {item}" for item, qty in recipe.items())
                 lines.append(f"Level {keep['level']} → {keep['level'] + 1}: {format_number(stones_cost)} Spirit Stones + {recipe_text}")
             else:
                 lines.append("Level maxed.")
-
             embed.add_field(name=keep["name"], value="\n".join(lines), inline=False)
+            _maybe_set_thumbnail(embed, keep["name"])
         return embed
 
     def _equip_embed(self) -> discord.Embed:
@@ -640,6 +724,11 @@ class ServantView(GameView):
                 else:
                     lines.append(f"Stats: {stats_text}")
             embed.add_field(name=label, value="\n".join(lines), inline=False)
+        # An embed only has ONE thumbnail slot -- Combat wins when both are filled, since it's
+        # listed first and is the more "battle-facing" of the two.
+        primary = equipped.get(servants.SLOT_KEY_COMBAT) or equipped.get(servants.SLOT_KEY_SUPPORT)
+        if primary:
+            _maybe_set_thumbnail(embed, primary["name"])
         return embed
 
     def _automation_embed(self) -> discord.Embed:
@@ -649,11 +738,20 @@ class ServantView(GameView):
             title=f"⚙️ {self.display_name}'s Servant Automation",
             description=(
                 f"**{len(assigned)} / {servants.MAX_AUTOMATION_SERVANTS}** servants on duty. Each assigned servant "
-                "triggers one mine/gather/farm cycle per real day on your behalf."
+                "triggers one mine/gather/farm cycle per real day on your behalf, boosted by that "
+                "servant's own Tier/Star/Level/Affinity -- a higher-tier, more-invested servant is a "
+                "meaningfully better worker, not just eligible to work."
             ),
             color=discord.Color.gold(),
         )
         if assigned:
-            lines = [f"{_instance_label(i)} — {DUTY_LABELS.get(i['automation_duty'], i['automation_duty'])} duty" for i in assigned]
+            lines = []
+            for i in assigned:
+                servant = servants.SERVANT_CATALOG.get(i["name"])
+                bonus_text = ""
+                if servant:
+                    bonus_pct = servants.automation_yield_bonus_pct(servant, i["star_level"], i["level"], i.get("current_affinity_seconds", 0))
+                    bonus_text = f" (+{bonus_pct * 100:.0f}% yield)"
+                lines.append(f"{_instance_label(i)} — {DUTY_LABELS.get(i['automation_duty'], i['automation_duty'])} duty{bonus_text}")
             embed.add_field(name="On Duty", value="\n".join(lines), inline=False)
         return embed

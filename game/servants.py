@@ -1,7 +1,7 @@
 """
 Servants -- a Reverend-Insanity-inspired gacha/collection system. Admin-only for now (see
 /servant in cog.py) while the design is validated against real play. T1-T5 are generic
-cultivator archetypes (e.g. "Rank Two Cultivator"); T6-T7 are specific named characters (e.g.
+cultivator archetypes (e.g. "Qi Condensation Gu Apprentice"); T6-T7 are specific named characters (e.g.
 "Fang Yuan") drawn loosely from the reference doc's own cast -- exact names/flavor are a
 placeholder roster, meant to be confirmed/replaced later, not final art-of-record.
 
@@ -70,24 +70,24 @@ _register(
     Servant("Fog Valley Disciple", 1, "Outer Sect Disciple", "A minor disciple from a fog-shrouded valley sect, still finding their Dao.", _stats(1, "qi_stat", "luck_stat"), "cultivation_speed_pct", 30),
     Servant("Green Bull Clan Warrior", 1, "Clan Warrior", "A young warrior of the Green Bull Clan, blooded in border skirmishes.", _stats(1, "str_stat", "atk_stat"), "stone_reward_bonus_pct", 30),
     Servant("Wild Root Scavenger", 1, "Wilderness Scavenger", "Survives on the fringes of civilization, foraging rare roots and herbs.", _stats(1, "spd_stat", "luck_stat"), "loot_chance_bonus_pct", 25),
-    Servant("Rank Two Cultivator", 1, "Rank Two Cultivator", "A cultivator who has just begun to sense the Gu world's true scale.", _stats(1, "hp", "qi_stat"), "essence_regen_pct", 25),
+    Servant("Qi Condensation Gu Apprentice", 1, "Gu Apprentice", "A cultivator at the Qi Condensation realm, only just beginning to sense the Gu world's true scale.", _stats(1, "hp", "qi_stat"), "essence_regen_pct", 25),
 
     Servant("Rank Three Sect Elder", 2, "Sect Elder", "An elder of a minor sect, steady and well-versed in Gu lore.", _stats(2, "def_stat", "hp"), "mining_yield_pct", 25),
     Servant("Beast-Blood Warrior", 2, "Beast-Blood Warrior", "Has refined a beast-blood Gu into their own body, gaining ferocious strength.", _stats(2, "atk_stat", "str_stat"), "herb_yield_pct", 25),
-    Servant("Bronze Rank Gu Master", 2, "Gu Master", "A Bronze rank Gu Master, commanding a modest collection of refined Gu.", _stats(2, "qi_stat", "atk_stat"), "cultivation_speed_pct", 20),
+    Servant("Foundation Establishment Gu Master", 2, "Gu Master", "A Gu Master at the Foundation Establishment realm, commanding a modest collection of refined Gu.", _stats(2, "qi_stat", "atk_stat"), "cultivation_speed_pct", 20),
     Servant("Iron Fist Ancestor", 2, "Clan Ancestor", "A retired clan champion, fists still capable of shattering stone.", _stats(2, "str_stat", "def_stat"), "stone_reward_bonus_pct", 20),
 
     Servant("Rank Four Sect Master", 3, "Sect Master", "Leads a mid-sized sect, balancing politics and cultivation.", _stats(3, "hp", "def_stat"), "loot_chance_bonus_pct", 20),
-    Servant("Silver Rank Gu Immortal", 3, "Gu Immortal", "A Silver rank Gu Immortal, their Dao Marks beginning to stabilize.", _stats(3, "qi_stat", "luck_stat"), "essence_regen_pct", 20),
+    Servant("Core Formation Gu Immortal", 3, "Gu Immortal", "A Gu Immortal at the Core Formation realm, their Dao Marks beginning to stabilize.", _stats(3, "qi_stat", "luck_stat"), "essence_regen_pct", 20),
     Servant("Blood Sea Vanguard", 3, "Blood Sea Vanguard", "A vanguard fighter of the Blood Sea faction, fast and merciless.", _stats(3, "atk_stat", "spd_stat"), "mining_yield_pct", 15),
     Servant("Nascent Gu Ancestor", 3, "Clan Ancestor", "An ancestor whose foundation has only just stabilized at this rank.", _stats(3, "def_stat", "qi_stat"), "herb_yield_pct", 15),
 
     Servant("Rank Five Small Clan Ancestor", 4, "Clan Ancestor", "The pillar of a small clan, their strength a matter of local legend.", _stats(4, "hp", "str_stat"), "cultivation_speed_pct", 15),
-    Servant("Golden Rank Gu Immortal", 4, "Gu Immortal", "A Golden rank Gu Immortal with a well-rounded Gu collection.", _stats(4, "qi_stat", "atk_stat"), "stone_reward_bonus_pct", 15),
+    Servant("Nascent Soul Gu Immortal", 4, "Gu Immortal", "A Gu Immortal at the Nascent Soul realm, wielding a well-rounded Gu collection.", _stats(4, "qi_stat", "atk_stat"), "stone_reward_bonus_pct", 15),
     Servant("Frost Sect Elder Ancestor", 4, "Sect Elder Ancestor", "An elder ancestor of a frost-aligned sect, cold and unshakeable.", _stats(4, "def_stat", "spd_stat"), "loot_chance_bonus_pct", 10),
 
     Servant("Rank Five Great Clan Ancestor", 5, "Great Clan Ancestor", "The founding pillar of a great clan, revered across the region.", _stats(5, "hp", "def_stat"), "essence_regen_pct", 10),
-    Servant("Diamond Rank Gu Immortal", 5, "Gu Immortal", "A Diamond rank Gu Immortal, their Dao Marks nearly complete.", _stats(5, "qi_stat", "str_stat"), "mining_yield_pct", 10),
+    Servant("Spirit Severing Gu Immortal", 5, "Gu Immortal", "A Gu Immortal at the Spirit Severing realm, their Dao Marks nearly complete.", _stats(5, "qi_stat", "str_stat"), "mining_yield_pct", 10),
     Servant("True Ancestor of a Thousand Gu", 5, "True Ancestor", "Has refined a thousand Gu across their long, storied life.", _stats(5, "atk_stat", "luck_stat"), "herb_yield_pct", 6),
 )
 
@@ -309,3 +309,17 @@ AUTOMATION_DUTIES = (DUTY_MINE, DUTY_GATHER, DUTY_FARM)
 
 MAX_AUTOMATION_SERVANTS = 3                        # mirrors grotto.GROTTO_MAX_INK_MEN's cap shape
 AUTOMATION_TICK_INTERVAL_SECONDS = 24 * 3600        # one cycle/real day, same cadence as Ink/Hairy Men
+
+# Automation YIELD scaling -- higher tier/star/level/affinity means a meaningfully BETTER
+# automated worker, not just eligibility to work at all (see GameManager.check_and_complete_
+# servant_automation). Same STAR_STAT_MULTIPLIER/LEVEL_STAT_MULTIPLIER/affinity_multiplier
+# compounding stack as scaled_stat_bonuses/support_special_pct (up to ~8x at ★7/Lv10/max
+# affinity), applied on top of a per-tier base -- a fully-invested T7 roughly DOUBLES yield;
+# a fully-invested T1 tops out around +12%, since a T1 just isn't built for it no matter how
+# much is invested in that one copy.
+AUTOMATION_BASE_YIELD_PCT: Dict[int, float] = {1: 0.015, 2: 0.025, 3: 0.04, 4: 0.06, 5: 0.085, 6: 0.11, 7: 0.125}
+
+
+def automation_yield_bonus_pct(servant: Servant, star_level: int, level: int = 1, affinity_seconds: int = 0) -> float:
+    mult = STAR_STAT_MULTIPLIER[star_level] * LEVEL_STAT_MULTIPLIER.get(level, 1.0) * affinity_multiplier(affinity_seconds)
+    return AUTOMATION_BASE_YIELD_PCT[servant.tier] * mult
