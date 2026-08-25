@@ -1974,12 +1974,15 @@ class GameManager:
         full identity swap (see servants.roll_named_servant), not a fixed mapping. star_level
         intentionally resets to 1 (a fresh copy of the new identity), but Level and Affinity --
         player-invested resources/bond time, not part of the servant's raw identity -- carry
-        forward onto the new instance, same as equip/automation state."""
+        forward onto the new instance, same as equip/automation state. Returns (ok, message,
+        new_instance_id) -- new_instance_id is None on failure, otherwise the freshly-created
+        row's id, so a caller (see servant_view.ServantView._on_evolve) can immediately select
+        and display exactly what the servant evolved into."""
         instance = self.db.get_servant_instance(instance_id)
         if instance is None or instance["owner_id"] != user_id:
-            return False, "That servant isn't yours."
+            return False, "That servant isn't yours.", None
         if not servants.can_evolve(instance["tier"], instance["star_level"]):
-            return False, f"**{instance['name']}** can't evolve yet — needs to be ★{servants.MAX_STAR_LEVEL} at Tier 5 or 6."
+            return False, f"**{instance['name']}** can't evolve yet — needs to be ★{servants.MAX_STAR_LEVEL} at Tier 5 or 6.", None
         new_tier = instance["tier"] + 1
         new_name = servants.roll_named_servant(new_tier)
 
@@ -2009,7 +2012,7 @@ class GameManager:
         if was_automated:
             self.db.set_servant_automation(new_instance_id, was_automated, automation_next_tick_ts)
 
-        return True, f"**{old_name}** evolves into **{new_name}** (Tier {new_tier})!"
+        return True, f"**{old_name}** evolves into **{new_name}** (Tier {new_tier})!", new_instance_id
 
     def equip_servant(self, user_id: int, slot_key: str, instance_id: int):
         if slot_key not in servants.SERVANT_SLOT_KEYS:

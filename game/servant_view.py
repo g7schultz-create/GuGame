@@ -502,9 +502,13 @@ class ServantView(GameView):
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_evolve(self, interaction: discord.Interaction):
+        new_instance_id = None
         if self.selected_keep_id:
-            _, self.last_result = await asyncio.to_thread(self.game.evolve_servant, self.user_id, self.selected_keep_id)
-        self.selected_keep_id = None
+            _, self.last_result, new_instance_id = await asyncio.to_thread(self.game.evolve_servant, self.user_id, self.selected_keep_id)
+        # Select the FRESHLY EVOLVED instance (not None) so the rebuilt embed immediately shows
+        # exactly what the servant turned into -- name, tier, stats, and its own portrait --
+        # instead of going blank right after such a dramatic identity change.
+        self.selected_keep_id = new_instance_id
         self.selected_consume_ids = []
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
@@ -708,6 +712,12 @@ class ServantView(GameView):
 
             if servants.can_evolve(keep["tier"], keep["star_level"]):
                 lines.append(f"✅ Ready to evolve into a random Tier {keep['tier'] + 1} servant!")
+            elif keep["star_level"] >= servants.MAX_STAR_LEVEL:
+                # Maxed at ★7 with nowhere further to go -- either a non-evolvable tier (T1-4,
+                # T7) or a T5/6 that already evolved. STAR_UP_DUPLICATES_REQUIRED only has keys
+                # 1-6 (there's no "star up from 7"), so this branch MUST come before the dict
+                # lookup below or it KeyErrors (the exact bug this fixes).
+                lines.append("Star level maxed.")
             else:
                 required = servants.STAR_UP_DUPLICATES_REQUIRED[keep["star_level"]]
                 dupes_owned = len([i for i in instances if i["name"] == keep["name"] and i["instance_id"] != keep["instance_id"]])
