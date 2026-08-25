@@ -24,6 +24,9 @@ from .equipment import SPECIAL_STAT_TEXT, FOUNDATION_STAT_LABELS
 from .ui_utils import format_number, format_duration
 
 PAGE_SIZE = 25
+# Smaller than PAGE_SIZE -- Roster lines now include a stat summary per entry (see
+# _roster_embed), so fewer fit per page before risking Discord's 1024-char field value cap.
+ROSTER_PAGE_SIZE = 8
 
 CURRENCY_LABELS = {
     servants.CURRENCY_STONES: "Spirit Stones",
@@ -181,7 +184,7 @@ class ServantView(GameView):
         self.add_item(all_button)
 
         filtered = self._roster_filtered(instances)
-        _, self.roster_page, total_pages = self._paginate(filtered, self.roster_page, page_size=15)
+        _, self.roster_page, total_pages = self._paginate(filtered, self.roster_page, page_size=ROSTER_PAGE_SIZE)
         if total_pages > 1:
             prev_button = discord.ui.Button(label="◀ Prev", row=4, disabled=self.roster_page == 0)
             prev_button.callback = self._make_roster_page_callback(-1)
@@ -224,7 +227,7 @@ class ServantView(GameView):
         def has_action(i):
             return servants.can_evolve(i["tier"], i["star_level"]) or self._has_dupes_for_star_up(i, name_counts)
 
-        keep_candidates = sorted((i for i in instances if has_action(i)), key=lambda i: (i["tier"], i["name"], -i["star_level"]))
+        keep_candidates = sorted((i for i in instances if has_action(i)), key=lambda i: (-i["tier"], i["name"], -i["star_level"]))
         shown, self.starup_page, total_pages = self._paginate(keep_candidates, self.starup_page)
         if self.selected_keep_id not in by_id:
             self.selected_keep_id = None
@@ -287,7 +290,7 @@ class ServantView(GameView):
         candidates = [i for i in instances if i["level"] < servants.SERVANT_MAX_LEVEL]
         if self.level_tier_filter is not None:
             candidates = [i for i in candidates if i["tier"] == self.level_tier_filter]
-        return sorted(candidates, key=lambda i: (i["tier"], i["name"], i["level"]))
+        return sorted(candidates, key=lambda i: (-i["tier"], i["name"], i["level"]))
 
     def _build_level_components(self):
         """Level's own independent servant picker -- deliberately NOT shared with Star Up's
@@ -665,7 +668,7 @@ class ServantView(GameView):
     def _roster_embed(self) -> discord.Embed:
         instances = self.game.get_player_servants(self.user_id)
         filtered = self._roster_filtered(instances)
-        shown, page, total_pages = self._paginate(filtered, self.roster_page, page_size=15)
+        shown, page, total_pages = self._paginate(filtered, self.roster_page, page_size=ROSTER_PAGE_SIZE)
         collection_pct = self.game.get_servant_collection_bonus_pct(self.user_id)
         distinct = len({i["name"] for i in instances})
         embed = discord.Embed(
@@ -685,7 +688,17 @@ class ServantView(GameView):
                 tags = []
                 if i["automation_duty"]:
                     tags.append(f"on {DUTY_LABELS.get(i['automation_duty'], i['automation_duty'])} duty")
-                lines.append(_instance_label(i) + (f" — {', '.join(tags)}" if tags else ""))
+                servant = servants.SERVANT_CATALOG.get(i["name"])
+                stat_text = (
+                    _stats_text(servant, i["star_level"], i["level"], i.get("current_affinity_seconds", 0))
+                    if servant else ""
+                )
+                line = _instance_label(i)
+                if stat_text and stat_text != "—":
+                    line += f" — {stat_text}"
+                if tags:
+                    line += f" ({', '.join(tags)})"
+                lines.append(line)
             embed.add_field(name=field_name, value="\n".join(lines), inline=False)
         else:
             embed.add_field(name=field_name, value="No servants yet — summon one!" if not instances else "None of this tier.", inline=False)
