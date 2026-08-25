@@ -20,6 +20,16 @@ import random
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+from . import avatar
+
+# One distinct color-circle emoji per tier, for at-a-glance scanning in the Roster/Star Up/
+# Equip/Automation selects and embeds -- T1 (common) through T7 (rarest).
+TIER_EMOJI: Dict[int, str] = {1: "⚪", 2: "🟢", 3: "🔵", 4: "🟣", 5: "🟠", 6: "🔴", 7: "⚫"}
+
+
+def tier_label(tier: int) -> str:
+    return f"{TIER_EMOJI.get(tier, '')} T{tier}"
+
 
 @dataclass
 class Servant:
@@ -163,17 +173,77 @@ STAR_UP_DUPLICATES_REQUIRED: Dict[int, int] = {1: 1, 2: 1, 3: 2, 4: 2, 5: 3, 6: 
 STAR_STAT_MULTIPLIER: Dict[int, float] = {1: 1.00, 2: 1.15, 3: 1.30, 4: 1.50, 5: 1.75, 6: 2.00, 7: 2.30}
 
 
-def scaled_stat_bonuses(servant: Servant, star_level: int) -> Dict[str, float]:
-    mult = STAR_STAT_MULTIPLIER[star_level]
+# -- Level -- a SEPARATE progression axis from Star: fed with materials/resources (see below)
+# rather than duplicate copies, so it advances even a lone, dupe-less copy of a servant. Reuses
+# avatar.py's own 1-10 ladder/multiplier curve directly ("feed the avatar level up material"
+# per explicit request), scaled by the servant's tier.
+
+SERVANT_MAX_LEVEL = avatar.AVATAR_MAX_LEVEL  # 10, same ladder as Nascent Soul Avatar
+LEVEL_STAT_MULTIPLIER = avatar.AVATAR_LEVEL_MULTIPLIER  # same tapering-growth curve, reused directly
+
+SOUL_NOURISHING_PILL = avatar.SOUL_NOURISHING_PILL
+SOUL_CRYSTAL = avatar.SOUL_CRYSTAL
+LEVEL_UP_STONES_BASE = 3000  # per (tier * target level) step -- mirrors Grotto's Hairy Man dual pill+crystal+stones cost shape
+
+
+def level_up_recipe(tier: int, current_level: int) -> Optional[Dict[str, int]]:
+    """Soul Nourishing Pill / Soul Crystal cost to reach current_level+1 -- avatar.py's own
+    recipe shape, scaled up by this servant's tier (a T7 costs 7x what a T1 does at the same
+    level). None once already at SERVANT_MAX_LEVEL."""
+    base_recipe = avatar.level_up_recipe(current_level)
+    if base_recipe is None:
+        return None
+    return {item: qty * tier for item, qty in base_recipe.items()}
+
+
+def level_up_stones_cost(tier: int, current_level: int) -> int:
+    return LEVEL_UP_STONES_BASE * tier * (current_level + 1)
+
+
+# -- Affinity -- grows passively the longer a servant stays EQUIPPED (Support or Combat),
+# tracked as accumulated real seconds (servant_instances.affinity_seconds), lazily settled --
+# see GameManager.equip_servant/unequip_servant and servants.current_affinity_seconds. Persists
+# through star-ups automatically (same instance row) and is explicitly carried forward through
+# evolution (see GameManager.evolve_servant) -- an accrued bond/investment, not tied to the
+# servant's raw star/tier identity.
+
+AFFINITY_CAP_SECONDS = 30 * 24 * 3600  # 30 real days equipped to reach max affinity
+AFFINITY_MAX_BONUS_PCT = 0.20          # +20% multiplier on top of star/level at full affinity
+
+
+def affinity_multiplier(affinity_seconds: int) -> float:
+    ratio = min(1.0, max(0, affinity_seconds) / AFFINITY_CAP_SECONDS)
+    return 1.0 + AFFINITY_MAX_BONUS_PCT * ratio
+
+
+def current_affinity_seconds(instance: dict, now: int) -> int:
+    """Lazy settlement, same shape as gu_pet's own satiety calc -- affinity_seconds is only
+    ever a snapshot; while equipped_since_ts is set (the servant is CURRENTLY slotted), the
+    live total also includes time elapsed since that snapshot."""
+    equipped_since = instance.get("affinity_equipped_since_ts")
+    base = instance.get("affinity_seconds", 0) or 0
+    if not equipped_since:
+        return base
+    return base + max(0, now - equipped_since)
+
+
+def scaled_stat_bonuses(servant: Servant, star_level: int, level: int = 1, affinity_seconds: int = 0) -> Dict[str, float]:
+    mult = STAR_STAT_MULTIPLIER[star_level] * LEVEL_STAT_MULTIPLIER.get(level, 1.0) * affinity_multiplier(affinity_seconds)
     return {key: value * mult for key, value in servant.base_stats.items()}
 
 
-# Support slot's own themed utility % -- scales with both tier (bigger at T6/T7) and star level.
+# Support slot's own themed utility % -- scales with tier (bigger at T6/T7), star level, servant
+# level, and affinity.
 SUPPORT_BASE_PCT: Dict[int, float] = {1: 0.010, 2: 0.015, 3: 0.020, 4: 0.030, 5: 0.040, 6: 0.055, 7: 0.075}
 
 
-def support_special_pct(servant: Servant, star_level: int) -> float:
-    return SUPPORT_BASE_PCT[servant.tier] * STAR_STAT_MULTIPLIER[star_level]
+def support_special_pct(servant: Servant, star_level: int, level: int = 1, affinity_seconds: int = 0) -> float:
+    return (
+        SUPPORT_BASE_PCT[servant.tier]
+        * STAR_STAT_MULTIPLIER[star_level]
+        * LEVEL_STAT_MULTIPLIER.get(level, 1.0)
+        * affinity_multiplier(affinity_seconds)
+    )
 
 
 # support_bonus_key values that are NOT part of GameManager.SPECIAL_BONUS_KEYS -- mine/gather/

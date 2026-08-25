@@ -1887,17 +1887,28 @@ class GameManager:
         return True, f"Summoned {count} servant(s)!", rolled
 
     def get_player_servants(self, user_id: int) -> list:
-        """Read-only -- for /servant's Roster/Star Up/Equip tabs."""
-        return self.db.get_player_servant_instances(user_id)
+        """Read-only -- for /servant's Roster/Star Up/Equip tabs. Each instance dict gets a
+        live "current_affinity_seconds" (see servants.current_affinity_seconds) folded in for
+        display, without mutating the persisted value."""
+        now = int(time.time())
+        instances = self.db.get_player_servant_instances(user_id)
+        for instance in instances:
+            instance["current_affinity_seconds"] = servants.current_affinity_seconds(instance, now)
+        return instances
 
     def get_equipped_servants(self, user_id: int) -> dict:
         """Read-only -- {servants.SLOT_KEY_SUPPORT/SLOT_KEY_COMBAT: instance dict or None} for
-        /servant's Equip tab."""
+        /servant's Equip tab. Each present instance gets a live "current_affinity_seconds"
+        folded in, same as get_player_servants."""
+        now = int(time.time())
         equipped_ids = self.db.get_equipped_servant_instance_ids(user_id)
-        return {
-            slot_key: self.db.get_servant_instance(equipped_ids[slot_key]) if slot_key in equipped_ids else None
-            for slot_key in servants.SERVANT_SLOT_KEYS
-        }
+        result = {}
+        for slot_key in servants.SERVANT_SLOT_KEYS:
+            instance = self.db.get_servant_instance(equipped_ids[slot_key]) if slot_key in equipped_ids else None
+            if instance:
+                instance["current_affinity_seconds"] = servants.current_affinity_seconds(instance, now)
+            result[slot_key] = instance
+        return result
 
     def get_servant_collection_bonus_pct(self, user_id: int) -> float:
         """Read-only -- for /servant's Roster tab header."""
@@ -1933,8 +1944,10 @@ class GameManager:
 
     def evolve_servant(self, user_id: int, instance_id: int):
         """A maxed (★7) T5/T6 servant evolves into a freshly-rolled T6/T7 named servant -- a
-        full identity swap (see servants.roll_named_servant), not a fixed mapping. Equip/
-        automation state carries forward onto the new instance."""
+        full identity swap (see servants.roll_named_servant), not a fixed mapping. star_level
+        intentionally resets to 1 (a fresh copy of the new identity), but Level and Affinity --
+        player-invested resources/bond time, not part of the servant's raw identity -- carry
+        forward onto the new instance, same as equip/automation state."""
         instance = self.db.get_servant_instance(instance_id)
         if instance is None or instance["owner_id"] != user_id:
             return False, "That servant isn't yours."
@@ -1951,11 +1964,21 @@ class GameManager:
         was_automated = instance["automation_duty"]
         automation_next_tick_ts = instance["automation_next_tick_ts"]
 
+        now = int(time.time())
+        if equipped_slot_key:
+            # Settle BEFORE deleting -- the old row is about to disappear, so its live elapsed
+            # equipped-time has to be folded into affinity_seconds now or it's lost.
+            self.db.settle_servant_affinity(instance_id, now)
+            instance = self.db.get_servant_instance(instance_id)
+
         old_name = instance["name"]
         self.db.delete_servant_instance(instance_id)
-        new_instance_id = self.db.create_servant_instance(user_id, new_name, new_tier, star_level=1)
+        new_instance_id = self.db.create_servant_instance(
+            user_id, new_name, new_tier, star_level=1, level=instance["level"], affinity_seconds=instance["affinity_seconds"],
+        )
         if equipped_slot_key:
             self.db.set_equipped_servant(user_id, equipped_slot_key, new_instance_id, new_name)
+            self.db.start_servant_affinity(new_instance_id, now)  # continues accruing, no gap
         if was_automated:
             self.db.set_servant_automation(new_instance_id, was_automated, automation_next_tick_ts)
 
@@ -1967,15 +1990,50 @@ class GameManager:
         instance = self.db.get_servant_instance(instance_id)
         if instance is None or instance["owner_id"] != user_id:
             return False, "That servant isn't yours."
+        now = int(time.time())
+        previous_id = self.db.get_equipped_servant_instance_ids(user_id).get(slot_key)
+        if previous_id and previous_id != instance_id:
+            self.db.settle_servant_affinity(previous_id, now)  # displaced servant stops accruing
         self.db.set_equipped_servant(user_id, slot_key, instance_id, instance["name"])
+        self.db.start_servant_affinity(instance_id, now)
         slot_label = "Combat" if slot_key == servants.SLOT_KEY_COMBAT else "Support"
         return True, f"**{instance['name']}** equipped to {slot_label}."
 
     def unequip_servant(self, user_id: int, slot_key: str):
         if slot_key not in servants.SERVANT_SLOT_KEYS:
             return False, "Not a valid servant slot."
+        instance_id = self.db.get_equipped_servant_instance_ids(user_id).get(slot_key)
+        if instance_id:
+            self.db.settle_servant_affinity(instance_id, int(time.time()))
         self.db.clear_equipped(user_id, slot_key)
         return True, "Servant unequipped."
+
+    def level_up_servant(self, user_id: int, instance_id: int):
+        """Feeds Soul Nourishing Pill + Soul Crystal + spirit stones to advance a servant's
+        Level by one -- independent of Star (duplicates) and Tier (evolution), so it progresses
+        even a single dupe-less copy. See servants.level_up_recipe/level_up_stones_cost."""
+        instance = self.db.get_servant_instance(instance_id)
+        if instance is None or instance["owner_id"] != user_id:
+            return False, "That servant isn't yours."
+        recipe = servants.level_up_recipe(instance["tier"], instance["level"])
+        if recipe is None:
+            return False, f"**{instance['name']}** is already at the maximum level."
+        stones_cost = servants.level_up_stones_cost(instance["tier"], instance["level"])
+        player = self.db.get_player_row(user_id)
+        if player["spirit_stones"] < stones_cost:
+            return False, f"Not enough spirit stones — need {format_number(stones_cost)}."
+        inventory = self.db.get_inventory(user_id)
+        missing = {item: qty for item, qty in recipe.items() if inventory.get(item, 0) < qty}
+        if missing:
+            missing_text = ", ".join(f"{qty}x {item} (have {inventory.get(item, 0)})" for item, qty in missing.items())
+            return False, f"Missing materials: {missing_text}."
+        if not self.db.spend_spirit_stones(user_id, stones_cost):
+            return False, "Not enough spirit stones."
+        for item, qty in recipe.items():
+            self.db.remove_item(user_id, item, qty)
+        new_level = instance["level"] + 1
+        self.db.set_servant_instance_level(instance_id, new_level)
+        return True, f"**{instance['name']}** advances to Level {new_level}!"
 
     def assign_servant_duty(self, user_id: int, instance_id: int, duty: str):
         if duty not in servants.AUTOMATION_DUTIES:
@@ -2048,7 +2106,8 @@ class GameManager:
         servant = servants.SERVANT_CATALOG.get(instance["name"])
         if servant is None or servant.support_bonus_key != key:
             return 0.0
-        return servants.support_special_pct(servant, instance["star_level"])
+        affinity = servants.current_affinity_seconds(instance, int(time.time()))
+        return servants.support_special_pct(servant, instance["star_level"], instance["level"], affinity)
 
     # Special stat_bonuses keys that aren't flat foundation stats — each fed straight
     # through to combat.resolve_attack (via hunt.py/raid.py), the qi-rate system, or
@@ -2197,11 +2256,12 @@ class GameManager:
                 servant_instance = self.db.get_servant_instance(servant_instance_ids[slot_key])
                 servant = servants.SERVANT_CATALOG.get(servant_instance["name"]) if servant_instance else None
                 if servant and servant_instance:
-                    stat_bonuses = servants.scaled_stat_bonuses(servant, servant_instance["star_level"])
+                    affinity = servants.current_affinity_seconds(servant_instance, int(time.time()))
+                    stat_bonuses = servants.scaled_stat_bonuses(servant, servant_instance["star_level"], servant_instance["level"], affinity)
                     if slot_key == servants.SLOT_KEY_SUPPORT:
                         stat_bonuses = {key: value * servants.SUPPORT_STAT_FRACTION for key, value in stat_bonuses.items()}
                         if servant.support_bonus_key not in servants.SUPPORT_KEYS_OUTSIDE_GENERIC_POOL:
-                            pct = servants.support_special_pct(servant, servant_instance["star_level"])
+                            pct = servants.support_special_pct(servant, servant_instance["star_level"], servant_instance["level"], affinity)
                             stat_bonuses[servant.support_bonus_key] = stat_bonuses.get(servant.support_bonus_key, 0) + pct
                 else:
                     stat_bonuses = {}

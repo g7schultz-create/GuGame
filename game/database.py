@@ -775,6 +775,17 @@ class GameDatabase:
             created_ts INTEGER
         )
         """)
+        # Level (fed with materials, independent of Star -- see servants.level_up_recipe) and
+        # Affinity (grows passively while equipped -- see servants.current_affinity_seconds)
+        # both added after the table's initial release; guarded ALTER, same idiom as `equipped`'s
+        # gear_id/gu_instance_id/servant_instance_id columns above.
+        servant_instance_columns = {row[1] for row in cur.execute("PRAGMA table_info(servant_instances)").fetchall()}
+        if "level" not in servant_instance_columns:
+            cur.execute("ALTER TABLE servant_instances ADD COLUMN level INTEGER DEFAULT 1")
+        if "affinity_seconds" not in servant_instance_columns:
+            cur.execute("ALTER TABLE servant_instances ADD COLUMN affinity_seconds INTEGER DEFAULT 0")
+        if "affinity_equipped_since_ts" not in servant_instance_columns:
+            cur.execute("ALTER TABLE servant_instances ADD COLUMN affinity_equipped_since_ts INTEGER DEFAULT NULL")
 
         # Unique rolled Weapon/Head/Body instances forged by /blacksmith (and, since it's the
         # same underlying loot, "weapon"/"armor" discovery rewards — see discovery_gen.py) —
@@ -1555,11 +1566,12 @@ class GameDatabase:
         support_row = cur.fetchone()
         if support_row:
             servant_row = cur.execute(
-                "SELECT name, star_level FROM servant_instances WHERE instance_id = ?", (support_row["servant_instance_id"],)
+                "SELECT * FROM servant_instances WHERE instance_id = ?", (support_row["servant_instance_id"],)
             ).fetchone()
             servant = _servants.SERVANT_CATALOG.get(servant_row["name"]) if servant_row else None
             if servant and servant.support_bonus_key == "cultivation_speed_pct":
-                total_manual_pct += _servants.support_special_pct(servant, servant_row["star_level"]) * 100
+                affinity = _servants.current_affinity_seconds(dict(servant_row), now)
+                total_manual_pct += _servants.support_special_pct(servant, servant_row["star_level"], servant_row["level"], affinity) * 100
 
         player_rank = _realms.STAGES[player["realm_index"]].great_realm_index + 1
         soft_cap = _search_data.CULTIVATION_SOFT_CAP_BY_PLAYER_RANK.get(player_rank, 100)
@@ -4471,17 +4483,24 @@ class GameDatabase:
     def _servant_instance_row_to_dict(row) -> dict:
         return {
             "instance_id": row["instance_id"], "owner_id": row["owner_id"], "name": row["name"],
-            "tier": row["tier"], "star_level": row["star_level"],
+            "tier": row["tier"], "star_level": row["star_level"], "level": row["level"],
+            "affinity_seconds": row["affinity_seconds"], "affinity_equipped_since_ts": row["affinity_equipped_since_ts"],
             "automation_duty": row["automation_duty"], "automation_next_tick_ts": row["automation_next_tick_ts"],
             "created_ts": row["created_ts"],
         }
 
-    def create_servant_instance(self, owner_id: int, name: str, tier: int, star_level: int = 1) -> int:
+    def create_servant_instance(
+        self, owner_id: int, name: str, tier: int, star_level: int = 1, level: int = 1, affinity_seconds: int = 0,
+    ) -> int:
+        """level/affinity_seconds default to a fresh copy's baseline (1, 0) -- evolve_servant
+        passes the OLD instance's own settled values through instead, since Level/Affinity
+        represent player-invested resources/bond time that survive an identity swap (unlike
+        star_level, which intentionally resets -- see GameManager.evolve_servant)."""
         con = self.connect()
         cur = con.cursor()
         cur.execute(
-            "INSERT INTO servant_instances (owner_id, name, tier, star_level, created_ts) VALUES (?, ?, ?, ?, ?)",
-            (owner_id, name, tier, star_level, int(time.time())),
+            "INSERT INTO servant_instances (owner_id, name, tier, star_level, level, affinity_seconds, created_ts) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (owner_id, name, tier, star_level, level, affinity_seconds, int(time.time())),
         )
         con.commit()
         instance_id = cur.lastrowid
@@ -4509,6 +4528,38 @@ class GameDatabase:
     def set_servant_instance_star(self, instance_id: int, star_level: int):
         con = self.connect()
         con.execute("UPDATE servant_instances SET star_level = ? WHERE instance_id = ?", (star_level, instance_id))
+        con.commit()
+        con.close()
+
+    def set_servant_instance_level(self, instance_id: int, level: int):
+        con = self.connect()
+        con.execute("UPDATE servant_instances SET level = ? WHERE instance_id = ?", (level, instance_id))
+        con.commit()
+        con.close()
+
+    def start_servant_affinity(self, instance_id: int, now: int):
+        """Marks a servant instance as currently equipped for affinity purposes -- called on
+        equip. affinity_seconds itself is untouched; current_affinity_seconds adds live elapsed
+        time on top of it lazily (see servants.current_affinity_seconds)."""
+        con = self.connect()
+        con.execute("UPDATE servant_instances SET affinity_equipped_since_ts = ? WHERE instance_id = ?", (now, instance_id))
+        con.commit()
+        con.close()
+
+    def settle_servant_affinity(self, instance_id: int, now: int):
+        """Folds any live elapsed equipped-time into the persisted affinity_seconds total and
+        clears affinity_equipped_since_ts -- called on unequip, and before deleting an instance
+        during evolution (so the settled total can be carried onto the new instance)."""
+        con = self.connect()
+        row = con.execute("SELECT affinity_seconds, affinity_equipped_since_ts FROM servant_instances WHERE instance_id = ?", (instance_id,)).fetchone()
+        if row is None:
+            con.close()
+            return
+        equipped_since = row["affinity_equipped_since_ts"]
+        total = row["affinity_seconds"] or 0
+        if equipped_since:
+            total += max(0, now - equipped_since)
+        con.execute("UPDATE servant_instances SET affinity_seconds = ?, affinity_equipped_since_ts = NULL WHERE instance_id = ?", (total, instance_id))
         con.commit()
         con.close()
 

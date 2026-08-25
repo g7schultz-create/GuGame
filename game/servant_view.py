@@ -15,6 +15,7 @@ import discord
 from . import servants
 from .base_view import GameView
 from .equipment import SPECIAL_STAT_TEXT
+from .ui_utils import format_number
 
 PAGE_SIZE = 25
 
@@ -39,11 +40,11 @@ def _format_bonus_line(key: str, value: float) -> str:
 
 
 def _instance_label(instance: dict) -> str:
-    return f"#{instance['instance_id']} {instance['name']} (T{instance['tier']} ★{instance['star_level']})"
+    return f"{servants.TIER_EMOJI.get(instance['tier'], '')} #{instance['instance_id']} {instance['name']} (T{instance['tier']} ★{instance['star_level']} Lv{instance['level']})"
 
 
-def _stats_text(servant, star_level: int) -> str:
-    bonuses = servants.scaled_stat_bonuses(servant, star_level)
+def _stats_text(servant, star_level: int, level: int = 1, affinity_seconds: int = 0) -> str:
+    bonuses = servants.scaled_stat_bonuses(servant, star_level, level, affinity_seconds)
     return ", ".join(f"{STAT_LABELS.get(k, k)} +{v:g}" for k, v in bonuses.items()) or "—"
 
 
@@ -65,6 +66,7 @@ class ServantView(GameView):
         self.selected_currency = servants.CURRENCY_STONES
 
         self.roster_page = 0
+        self.roster_tier_filter: int = None
 
         self.selected_keep_id: int = None
         self.selected_consume_ids: list = []
@@ -143,22 +145,74 @@ class ServantView(GameView):
 
     def _build_roster_components(self):
         instances = self.game.get_player_servants(self.user_id)
-        _, self.roster_page, total_pages = self._paginate(instances, self.roster_page, page_size=15)
+        counts = {t: 0 for t in range(1, 8)}
+        for i in instances:
+            counts[i["tier"]] = counts.get(i["tier"], 0) + 1
+
+        # Tier-browse buttons (row1: T7-T3, row2: T2/T1/All) -- same "tier + count" layout
+        # requested, so the whole roster is scannable/filterable at a glance instead of one
+        # long flat list.
+        for t in (7, 6, 5, 4, 3):
+            self._add_tier_filter_button(t, counts.get(t, 0), row=1)
+        for t in (2, 1):
+            self._add_tier_filter_button(t, counts.get(t, 0), row=2)
+        all_button = discord.ui.Button(
+            label=f"All — {len(instances)}", row=2,
+            style=discord.ButtonStyle.primary if self.roster_tier_filter is None else discord.ButtonStyle.secondary,
+        )
+        all_button.callback = self._make_roster_tier_callback(None)
+        self.add_item(all_button)
+
+        filtered = self._roster_filtered(instances)
+        _, self.roster_page, total_pages = self._paginate(filtered, self.roster_page, page_size=15)
         if total_pages > 1:
-            prev_button = discord.ui.Button(label="◀ Prev", row=1, disabled=self.roster_page == 0)
+            prev_button = discord.ui.Button(label="◀ Prev", row=3, disabled=self.roster_page == 0)
             prev_button.callback = self._make_roster_page_callback(-1)
             self.add_item(prev_button)
-            next_button = discord.ui.Button(label="Next ▶", row=1, disabled=self.roster_page >= total_pages - 1)
+            next_button = discord.ui.Button(label="Next ▶", row=3, disabled=self.roster_page >= total_pages - 1)
             next_button.callback = self._make_roster_page_callback(1)
             self.add_item(next_button)
+
+    def _add_tier_filter_button(self, tier: int, count: int, row: int):
+        is_active = self.roster_tier_filter == tier
+        button = discord.ui.Button(
+            label=f"T{tier} — {count}", emoji=servants.TIER_EMOJI[tier], row=row,
+            style=discord.ButtonStyle.primary if is_active else discord.ButtonStyle.secondary,
+        )
+        button.callback = self._make_roster_tier_callback(tier)
+        self.add_item(button)
+
+    def _roster_filtered(self, instances: list) -> list:
+        if self.roster_tier_filter is None:
+            return instances
+        return [i for i in instances if i["tier"] == self.roster_tier_filter]
+
+    @staticmethod
+    def _has_dupes_for_star_up(instance: dict, name_counts: dict) -> bool:
+        if instance["star_level"] >= servants.MAX_STAR_LEVEL:
+            return False
+        required = servants.STAR_UP_DUPLICATES_REQUIRED[instance["star_level"]]
+        return name_counts.get(instance["name"], 0) - 1 >= required
 
     def _build_star_up_components(self):
         instances = self.game.get_player_servants(self.user_id)
         by_id = {i["instance_id"]: i for i in instances}
-        keep_candidates = sorted(
-            (i for i in instances if i["star_level"] < servants.MAX_STAR_LEVEL or servants.can_evolve(i["tier"], i["star_level"])),
-            key=lambda i: (i["tier"], i["name"], -i["star_level"]),
-        )
+        name_counts = {}
+        for i in instances:
+            name_counts[i["name"]] = name_counts.get(i["name"], 0) + 1
+
+        # Only list servants with an actionable power-up path right now: ready to evolve, has
+        # enough duplicates owned to star up immediately, or still has Level headroom (fed with
+        # materials, so it's available almost always) -- a servant fully maxed on both Star AND
+        # Level with no evolution/dupes available is the only thing excluded.
+        def has_action(i):
+            return (
+                servants.can_evolve(i["tier"], i["star_level"])
+                or self._has_dupes_for_star_up(i, name_counts)
+                or i["level"] < servants.SERVANT_MAX_LEVEL
+            )
+
+        keep_candidates = sorted((i for i in instances if has_action(i)), key=lambda i: (i["tier"], i["name"], -i["star_level"]))
         shown, self.starup_page, total_pages = self._paginate(keep_candidates, self.starup_page)
         if self.selected_keep_id not in by_id:
             self.selected_keep_id = None
@@ -172,8 +226,8 @@ class ServantView(GameView):
             for i in shown
         ]
         keep_select = discord.ui.Select(
-            placeholder="Choose a servant to advance..." + (f" (page {self.starup_page + 1}/{total_pages})" if total_pages > 1 else ""),
-            options=keep_options or [discord.SelectOption(label="No eligible servants owned", value="none")],
+            placeholder="Choose a servant to power up..." + (f" (page {self.starup_page + 1}/{total_pages})" if total_pages > 1 else ""),
+            options=keep_options or [discord.SelectOption(label="Nothing left to advance", value="none")],
             disabled=not keep_options, row=1,
         )
         keep_select.callback = self._on_pick_keep
@@ -194,27 +248,30 @@ class ServantView(GameView):
             evolve_button = discord.ui.Button(label=f"Evolve {keep['name']}", emoji="🌟", style=discord.ButtonStyle.success, row=3)
             evolve_button.callback = self._on_evolve
             self.add_item(evolve_button)
-            return
+        elif self._has_dupes_for_star_up(keep, name_counts):
+            required = servants.STAR_UP_DUPLICATES_REQUIRED[keep["star_level"]]
+            dupes = [i for i in instances if i["name"] == keep["name"] and i["instance_id"] != keep["instance_id"]]
+            dupe_options = [discord.SelectOption(label=_instance_label(i)[:100], value=str(i["instance_id"])) for i in dupes[:PAGE_SIZE]]
+            dupe_select = discord.ui.Select(
+                placeholder=f"Choose exactly {required} duplicate(s) to consume...",
+                options=dupe_options, min_values=required, max_values=required, row=3,
+            )
+            dupe_select.callback = self._on_pick_consume
+            self.add_item(dupe_select)
 
-        required = servants.STAR_UP_DUPLICATES_REQUIRED[keep["star_level"]]
-        dupes = [i for i in instances if i["name"] == keep["name"] and i["instance_id"] != keep["instance_id"]]
-        if len(dupes) < required:
-            return  # embed explains the shortfall; no usable select to show
+            star_up_button = discord.ui.Button(
+                label="Star Up", emoji="⭐", style=discord.ButtonStyle.success, row=4,
+                disabled=len(self.selected_consume_ids) != required,
+            )
+            star_up_button.callback = self._on_star_up
+            self.add_item(star_up_button)
 
-        dupe_options = [discord.SelectOption(label=_instance_label(i)[:100], value=str(i["instance_id"])) for i in dupes[:PAGE_SIZE]]
-        dupe_select = discord.ui.Select(
-            placeholder=f"Choose exactly {required} duplicate(s) to consume...",
-            options=dupe_options, min_values=required, max_values=required, row=3,
-        )
-        dupe_select.callback = self._on_pick_consume
-        self.add_item(dupe_select)
-
-        star_up_button = discord.ui.Button(
-            label="Star Up", emoji="⭐", style=discord.ButtonStyle.success, row=4,
-            disabled=len(self.selected_consume_ids) != required,
-        )
-        star_up_button.callback = self._on_star_up
-        self.add_item(star_up_button)
+        if keep["level"] < servants.SERVANT_MAX_LEVEL:
+            level_up_button = discord.ui.Button(
+                label=f"Level Up ({keep['level']}→{keep['level'] + 1})", emoji="🔺", style=discord.ButtonStyle.primary, row=4,
+            )
+            level_up_button.callback = self._on_level_up
+            self.add_item(level_up_button)
 
     def _build_equip_components(self):
         slot_options = [
@@ -322,6 +379,15 @@ class ServantView(GameView):
             await interaction.response.edit_message(embed=embed, view=self)
         return callback
 
+    def _make_roster_tier_callback(self, tier):
+        async def callback(interaction: discord.Interaction):
+            self.roster_tier_filter = tier
+            self.roster_page = 0
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
+        return callback
+
     # -- callbacks: star up / evolve ---------------------------------------------------------
 
     async def _on_pick_keep(self, interaction: discord.Interaction):
@@ -360,6 +426,13 @@ class ServantView(GameView):
             _, self.last_result = await asyncio.to_thread(self.game.evolve_servant, self.user_id, self.selected_keep_id)
         self.selected_keep_id = None
         self.selected_consume_ids = []
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _on_level_up(self, interaction: discord.Interaction):
+        if self.selected_keep_id:
+            _, self.last_result = await asyncio.to_thread(self.game.level_up_servant, self.user_id, self.selected_keep_id)
         await asyncio.to_thread(self._build_components)
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -470,13 +543,14 @@ class ServantView(GameView):
             color=discord.Color.gold(),
         )
         if self.last_rolled:
-            lines = "\n".join(f"**{name}** (Tier {tier})" for name, tier in self.last_rolled)
+            lines = "\n".join(f"{servants.TIER_EMOJI.get(tier, '')} **{name}** (Tier {tier})" for name, tier in self.last_rolled)
             embed.add_field(name="Pull Results", value=lines, inline=False)
         return embed
 
     def _roster_embed(self) -> discord.Embed:
         instances = self.game.get_player_servants(self.user_id)
-        shown, page, total_pages = self._paginate(instances, self.roster_page, page_size=15)
+        filtered = self._roster_filtered(instances)
+        shown, page, total_pages = self._paginate(filtered, self.roster_page, page_size=15)
         collection_pct = self.game.get_servant_collection_bonus_pct(self.user_id)
         distinct = len({i["name"] for i in instances})
         embed = discord.Embed(
@@ -488,6 +562,8 @@ class ServantView(GameView):
             ),
             color=discord.Color.gold(),
         )
+        filter_label = servants.tier_label(self.roster_tier_filter) if self.roster_tier_filter else "All Tiers"
+        field_name = f"Roster — {filter_label}" + (f" (page {page + 1}/{total_pages})" if total_pages > 1 else "")
         if shown:
             lines = []
             for i in shown:
@@ -495,30 +571,51 @@ class ServantView(GameView):
                 if i["automation_duty"]:
                     tags.append(f"on {DUTY_LABELS.get(i['automation_duty'], i['automation_duty'])} duty")
                 lines.append(_instance_label(i) + (f" — {', '.join(tags)}" if tags else ""))
-            embed.add_field(name=f"Roster (page {page + 1}/{total_pages})" if total_pages > 1 else "Roster", value="\n".join(lines), inline=False)
+            embed.add_field(name=field_name, value="\n".join(lines), inline=False)
         else:
-            embed.add_field(name="Roster", value="No servants yet — summon one!", inline=False)
+            embed.add_field(name=field_name, value="No servants yet — summon one!" if not instances else "None of this tier.", inline=False)
         return embed
 
     def _star_up_embed(self) -> discord.Embed:
         embed = discord.Embed(
             title=f"⭐ {self.display_name}'s Star Up",
-            description="Consume exact-name duplicates to advance a servant's star level (1★→7★). A maxed Tier 5/6 servant can evolve into a fresh Tier 6/7 named identity instead.",
+            description=(
+                "Consume exact-name duplicates to advance a servant's star level (1★→7★), or feed "
+                "materials to Level it up (1-10, independent of duplicates). A maxed Tier 5/6 "
+                "servant at ★7 can evolve into a fresh Tier 6/7 named identity instead."
+            ),
             color=discord.Color.gold(),
         )
         instances = self.game.get_player_servants(self.user_id)
         keep = next((i for i in instances if i["instance_id"] == self.selected_keep_id), None)
         if keep:
+            lines = [f"{servants.tier_label(keep['tier'])} · ★{keep['star_level']} · Level {keep['level']}/{servants.SERVANT_MAX_LEVEL}"]
+            affinity_seconds = keep.get("current_affinity_seconds", 0)
+            if affinity_seconds:
+                mult = servants.affinity_multiplier(affinity_seconds)
+                lines.append(f"Affinity: {affinity_seconds / 86400:.1f}d equipped (+{(mult - 1) * 100:.1f}% bonus)")
+
             if servants.can_evolve(keep["tier"], keep["star_level"]):
-                embed.add_field(name=keep["name"], value=f"Tier {keep['tier']} ★{keep['star_level']} — ready to evolve into a random Tier {keep['tier'] + 1} servant!", inline=False)
-            else:
+                lines.append(f"✅ Ready to evolve into a random Tier {keep['tier'] + 1} servant!")
+            elif keep["star_level"] < servants.MAX_STAR_LEVEL:
                 required = servants.STAR_UP_DUPLICATES_REQUIRED[keep["star_level"]]
                 dupes_owned = len([i for i in instances if i["name"] == keep["name"] and i["instance_id"] != keep["instance_id"]])
-                embed.add_field(
-                    name=keep["name"],
-                    value=f"Tier {keep['tier']} ★{keep['star_level']} → ★{keep['star_level'] + 1} needs **{required}** duplicate(s) (you own {dupes_owned} other copies).",
-                    inline=False,
-                )
+                if dupes_owned >= required:
+                    lines.append(f"★{keep['star_level']} → ★{keep['star_level'] + 1}: choose **{required}** duplicate(s) below.")
+                else:
+                    lines.append(f"★{keep['star_level']} → ★{keep['star_level'] + 1} needs **{required}** duplicate(s) (you own {dupes_owned}).")
+            else:
+                lines.append("Star level maxed.")
+
+            if keep["level"] < servants.SERVANT_MAX_LEVEL:
+                recipe = servants.level_up_recipe(keep["tier"], keep["level"])
+                stones_cost = servants.level_up_stones_cost(keep["tier"], keep["level"])
+                recipe_text = ", ".join(f"{qty}x {item}" for item, qty in recipe.items())
+                lines.append(f"Level {keep['level']} → {keep['level'] + 1}: {format_number(stones_cost)} Spirit Stones + {recipe_text}")
+            else:
+                lines.append("Level maxed.")
+
+            embed.add_field(name=keep["name"], value="\n".join(lines), inline=False)
         return embed
 
     def _equip_embed(self) -> discord.Embed:
@@ -530,12 +627,16 @@ class ServantView(GameView):
                 embed.add_field(name=label, value="Empty", inline=False)
                 continue
             servant = servants.SERVANT_CATALOG.get(instance["name"])
-            lines = [f"**{instance['name']}** (Tier {instance['tier']} ★{instance['star_level']})"]
+            affinity_seconds = instance.get("current_affinity_seconds", 0)
+            lines = [f"**{instance['name']}** ({servants.tier_label(instance['tier'])} ★{instance['star_level']} Lv{instance['level']})"]
+            if affinity_seconds:
+                mult = servants.affinity_multiplier(affinity_seconds)
+                lines.append(f"Affinity: {affinity_seconds / 86400:.1f}d equipped (+{(mult - 1) * 100:.1f}% bonus)")
             if servant:
-                stats_text = _stats_text(servant, instance["star_level"])
+                stats_text = _stats_text(servant, instance["star_level"], instance["level"], affinity_seconds)
                 if slot_key == servants.SLOT_KEY_SUPPORT:
                     lines.append(f"Stats (half): {stats_text}")
-                    lines.append(_format_bonus_line(servant.support_bonus_key, servants.support_special_pct(servant, instance["star_level"])))
+                    lines.append(_format_bonus_line(servant.support_bonus_key, servants.support_special_pct(servant, instance["star_level"], instance["level"], affinity_seconds)))
                 else:
                     lines.append(f"Stats: {stats_text}")
             embed.add_field(name=label, value="\n".join(lines), inline=False)
