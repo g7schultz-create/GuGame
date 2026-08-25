@@ -1872,12 +1872,9 @@ class GameManager:
         elif currency == servants.CURRENCY_ESSENCE_CRYSTALS:
             if not self.db.remove_item(user_id, servants.PRIMEVAL_ESSENCE_CRYSTAL, total_cost):
                 return False, f"Not enough Primeval Essence Crystals — need {total_cost}.", []
-        elif currency == servants.CURRENCY_ESSENCE_PILLS:
-            if not self.db.spend_essence_pills_any_tier(user_id, total_cost):
-                return False, f"Not enough Essence Restoration Pills (any tier) — need {total_cost}.", []
-        else:  # manual_pages
-            if not self.db.spend_any_manual_pages(user_id, total_cost):
-                return False, f"Not enough manual pages (any rank) — need {total_cost}.", []
+        else:  # beast_cores
+            if not self.db.spend_beast_cores_any_tier(user_id, total_cost):
+                return False, f"Not enough Beast Cores (any tier) — need {total_cost}.", []
         rolled = []
         for _ in range(count):
             name = servants.roll_servant()

@@ -67,45 +67,46 @@ def _register(*rows: Servant):
 # -- Tier 1-5: generic cultivator archetypes -------------------------------------------------
 
 _register(
-    Servant("Fog Valley Disciple", 1, "Outer Sect Disciple", "A minor disciple from a fog-shrouded valley sect, still finding their Dao.", _stats(1, "qi_stat", "luck_stat"), "cultivation_speed_pct", 30),
-    Servant("Green Bull Clan Warrior", 1, "Clan Warrior", "A young warrior of the Green Bull Clan, blooded in border skirmishes.", _stats(1, "str_stat", "atk_stat"), "stone_reward_bonus_pct", 30),
-    Servant("Wild Root Scavenger", 1, "Wilderness Scavenger", "Survives on the fringes of civilization, foraging rare roots and herbs.", _stats(1, "spd_stat", "luck_stat"), "loot_chance_bonus_pct", 25),
-    Servant("Qi Condensation Gu Apprentice", 1, "Gu Apprentice", "A cultivator at the Qi Condensation realm, only just beginning to sense the Gu world's true scale.", _stats(1, "hp", "qi_stat"), "essence_regen_pct", 25),
+    Servant("Fog Valley Disciple", 1, "Outer Sect Disciple", "A minor disciple from a fog-shrouded valley sect, still finding their Dao.", _stats(1, "qi_stat", "luck_stat"), "cultivation_speed_pct", 30, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541632518569336902/content.png?ex=6a8e4caa&is=6a8cfb2a&hm=d2a72aa4be466ae673ae6780e606dc66545241f96324b756dce6e2e200b263e5&"),
+    Servant("Green Bull Clan Warrior", 1, "Clan Warrior", "A young warrior of the Green Bull Clan, blooded in border skirmishes.", _stats(1, "str_stat", "atk_stat"), "stone_reward_bonus_pct", 30, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541633145294692412/content.png?ex=6a8e4d3f&is=6a8cfbbf&hm=9010e88ecf392f28c4632f887ca97c66af32fa4aa7ab5c81dc448ee2ed974bca&"),
+    Servant("Wild Root Scavenger", 1, "Wilderness Scavenger", "Survives on the fringes of civilization, foraging rare roots and herbs.", _stats(1, "spd_stat", "luck_stat"), "loot_chance_bonus_pct", 25, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541633499965169804/content.png?ex=6a8e4d94&is=6a8cfc14&hm=95008583e008daa833b9d0f4c24a412cfbe85eff5505a48f7147a8a122d1237b&"),
+    Servant("Qi Condensation Gu Apprentice", 1, "Gu Apprentice", "A cultivator at the Qi Condensation realm, only just beginning to sense the Gu world's true scale.", _stats(1, "hp", "qi_stat"), "essence_regen_pct", 25, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541634341749399603/content.png?ex=6a8e4e5d&is=6a8cfcdd&hm=5b99c0f8b7a30231e09b71af136ee9615851d586ec031ddf91f8ae7dc77a7803&"),
 
-    Servant("Rank Three Sect Elder", 2, "Sect Elder", "An elder of a minor sect, steady and well-versed in Gu lore.", _stats(2, "def_stat", "hp"), "mining_yield_pct", 25),
-    Servant("Beast-Blood Warrior", 2, "Beast-Blood Warrior", "Has refined a beast-blood Gu into their own body, gaining ferocious strength.", _stats(2, "atk_stat", "str_stat"), "herb_yield_pct", 25),
-    Servant("Foundation Establishment Gu Master", 2, "Gu Master", "A Gu Master at the Foundation Establishment realm, commanding a modest collection of refined Gu.", _stats(2, "qi_stat", "atk_stat"), "cultivation_speed_pct", 20),
-    Servant("Iron Fist Ancestor", 2, "Clan Ancestor", "A retired clan champion, fists still capable of shattering stone.", _stats(2, "str_stat", "def_stat"), "stone_reward_bonus_pct", 20),
+    Servant("Rank Three Sect Elder", 2, "Sect Elder", "An elder of a minor sect, steady and well-versed in Gu lore.", _stats(2, "def_stat", "hp"), "mining_yield_pct", 25, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541634728417951794/content.png?ex=6a8e4eb9&is=6a8cfd39&hm=5ea4f3b3e85bd7c7ac357ad40b78d4dea4022bd4c643e4b6614837c114757989&"),
+    Servant("Beast-Blood Warrior", 2, "Beast-Blood Warrior", "Has refined a beast-blood Gu into their own body, gaining ferocious strength.", _stats(2, "atk_stat", "str_stat"), "herb_yield_pct", 25, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541634997599993886/content.png?ex=6a8e4ef9&is=6a8cfd79&hm=366a1caa7b558ee32c38645fde015057fc74ff78cc484bcb512bec8cad362d95&"),
+    Servant("Foundation Establishment Gu Master", 2, "Gu Master", "A Gu Master at the Foundation Establishment realm, commanding a modest collection of refined Gu.", _stats(2, "qi_stat", "atk_stat"), "cultivation_speed_pct", 20, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541635807641862254/content.png?ex=6a8e4fba&is=6a8cfe3a&hm=c7b0299bf4038d766a664e8f157758260adc436e7ba89daf13d3b81fcc20f0aa&"),
+    Servant("Iron Fist Ancestor", 2, "Clan Ancestor", "A retired clan champion, fists still capable of shattering stone.", _stats(2, "str_stat", "def_stat"), "stone_reward_bonus_pct", 20, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541636310630932540/content.png?ex=6a8e5032&is=6a8cfeb2&hm=d86075d19fa99a688a54beb2f95d98482ad542c86d3709d4e49598a8aa9d84d9&"),
 
-    Servant("Rank Four Sect Master", 3, "Sect Master", "Leads a mid-sized sect, balancing politics and cultivation.", _stats(3, "hp", "def_stat"), "loot_chance_bonus_pct", 20),
-    Servant("Core Formation Gu Immortal", 3, "Gu Immortal", "A Gu Immortal at the Core Formation realm, their Dao Marks beginning to stabilize.", _stats(3, "qi_stat", "luck_stat"), "essence_regen_pct", 20),
-    Servant("Blood Sea Vanguard", 3, "Blood Sea Vanguard", "A vanguard fighter of the Blood Sea faction, fast and merciless.", _stats(3, "atk_stat", "spd_stat"), "mining_yield_pct", 15),
-    Servant("Nascent Gu Ancestor", 3, "Clan Ancestor", "An ancestor whose foundation has only just stabilized at this rank.", _stats(3, "def_stat", "qi_stat"), "herb_yield_pct", 15),
+    Servant("Rank Four Sect Master", 3, "Sect Master", "Leads a mid-sized sect, balancing politics and cultivation.", _stats(3, "hp", "def_stat"), "loot_chance_bonus_pct", 20, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541636638525100095/content.png?ex=6a8e5080&is=6a8cff00&hm=f8a90805920f2d0496ca6c64d96172ae4eac25a25347c4110f0c55b9cc745ae7&"),
+    Servant("Core Formation Gu Immortal", 3, "Gu Immortal", "A Gu Immortal at the Core Formation realm, their Dao Marks beginning to stabilize.", _stats(3, "qi_stat", "luck_stat"), "essence_regen_pct", 20, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541637070164861068/content.png?ex=6a8e50e7&is=6a8cff67&hm=7ba00d689f1da60788a4f355b46b20e28ed0cea975a04511f82c8714268d765f&"),
+    Servant("Blood Sea Vanguard", 3, "Blood Sea Vanguard", "A vanguard fighter of the Blood Sea faction, fast and merciless.", _stats(3, "atk_stat", "spd_stat"), "mining_yield_pct", 15, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541637418590011432/content.png?ex=6a8e513a&is=6a8cffba&hm=10f2800fd19b94a28583fe28047d545118a0fc5d9870953e5e547cf9cf80f666&"),
+    Servant("Nascent Gu Ancestor", 3, "Clan Ancestor", "An ancestor whose foundation has only just stabilized at this rank.", _stats(3, "def_stat", "qi_stat"), "herb_yield_pct", 15, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541637791929081977/content.png?ex=6a8e5193&is=6a8d0013&hm=33f4cddcbb540840e1c121c4aa1a073f65a6f0771fe364596ca428011dcc3e3a&"),
 
-    Servant("Rank Five Small Clan Ancestor", 4, "Clan Ancestor", "The pillar of a small clan, their strength a matter of local legend.", _stats(4, "hp", "str_stat"), "cultivation_speed_pct", 15),
-    Servant("Nascent Soul Gu Immortal", 4, "Gu Immortal", "A Gu Immortal at the Nascent Soul realm, wielding a well-rounded Gu collection.", _stats(4, "qi_stat", "atk_stat"), "stone_reward_bonus_pct", 15),
-    Servant("Frost Sect Elder Ancestor", 4, "Sect Elder Ancestor", "An elder ancestor of a frost-aligned sect, cold and unshakeable.", _stats(4, "def_stat", "spd_stat"), "loot_chance_bonus_pct", 10),
+    Servant("Rank Five Small Clan Ancestor", 4, "Clan Ancestor", "The pillar of a small clan, their strength a matter of local legend.", _stats(4, "hp", "str_stat"), "cultivation_speed_pct", 15, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541650115796934666/content.png?ex=6a8e5d0e&is=6a8d0b8e&hm=8ab3a34accc3aec6f27e8af56857b740ba2f3ad80f8059f3f9292b4b83be2cea&"),
+    Servant("Nascent Soul Gu Immortal", 4, "Gu Immortal", "A Gu Immortal at the Nascent Soul realm, wielding a well-rounded Gu collection.", _stats(4, "qi_stat", "atk_stat"), "stone_reward_bonus_pct", 15, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541637791929081977/content.png?ex=6a8e5193&is=6a8d0013&hm=33f4cddcbb540840e1c121c4aa1a073f65a6f0771fe364596ca428011dcc3e3a&"),
+    Servant("Frost Sect Elder Ancestor", 4, "Sect Elder Ancestor", "An elder ancestor of a frost-aligned sect, cold and unshakeable.", _stats(4, "def_stat", "spd_stat"), "loot_chance_bonus_pct", 10, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541649603986980914/content.png?ex=6a8e5c94&is=6a8d0b14&hm=eb5a755c7fc7f65f0ec1e1158c3c1ffb1265f6e3efbf0ad377f49ae6277898f9&"),
 
-    Servant("Rank Five Great Clan Ancestor", 5, "Great Clan Ancestor", "The founding pillar of a great clan, revered across the region.", _stats(5, "hp", "def_stat"), "essence_regen_pct", 10),
-    Servant("Spirit Severing Gu Immortal", 5, "Gu Immortal", "A Gu Immortal at the Spirit Severing realm, their Dao Marks nearly complete.", _stats(5, "qi_stat", "str_stat"), "mining_yield_pct", 10),
-    Servant("True Ancestor of a Thousand Gu", 5, "True Ancestor", "Has refined a thousand Gu across their long, storied life.", _stats(5, "atk_stat", "luck_stat"), "herb_yield_pct", 6),
+    Servant("Rank Five Great Clan Ancestor", 5, "Great Clan Ancestor", "The founding pillar of a great clan, revered across the region.", _stats(5, "hp", "def_stat"), "essence_regen_pct", 10, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541638130740895814/content.png?ex=6a8e51e4&is=6a8d0064&hm=448817ddd4b9c23cfc956dbf25a6c4c9a24ee58424727e17c39832e9a633df10&"),
+    Servant("Spirit Severing Gu Immortal", 5, "Gu Immortal", "A Gu Immortal at the Spirit Severing realm, their Dao Marks nearly complete.", _stats(5, "qi_stat", "str_stat"), "mining_yield_pct", 10, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541638434127618059/content.png?ex=6a8e522c&is=6a8d00ac&hm=9a0f1b54daf85fa35838e8676aa2aff171c2cebb0e0566c100f795aa0e1906a1&"),
+    Servant("True Ancestor of a Thousand Gu", 5, "True Ancestor", "Has refined a thousand Gu across their long, storied life.", _stats(5, "atk_stat", "luck_stat"), "herb_yield_pct", 6, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541639189945253988/content.png?ex=6a8e52e1&is=6a8d0161&hm=5055944c20fe677c787da6617c84d24c3967072107e9665424cb24e93325b30f&"),
 )
 
 # -- Tier 6-7: specific named characters -- PLACEHOLDER roster, confirm final names/spelling
 # against the user's own reference doc before treating this as final. within_tier_weight is
-# deliberately steep at the top of T7 -- Fang Yuan's 5/55 share of T7 pulls (~9%) makes him
-# roughly 0.1% * 9% = 0.009% of ALL summons, meaningfully rarer than a common T6 name. ---------
+# deliberately steep at the top of T7 -- Fang Yuan's 8/100 share of T7 pulls (8%) makes him
+# roughly 0.1% * 8% = 0.008% of ALL summons, meaningfully rarer than a common T6 name. ---------
 
 _register(
-    Servant("Weeping Blood Trench Ancestor", 6, "Trench Ancestor", "A fearsome ancestor of the Weeping Blood Trench, wreathed in old grudges.", _stats(6, "hp", "atk_stat"), "cultivation_speed_pct", 30),
-    Servant("Nine Distortion Wolf Ancestor", 6, "Wolf Clan Ancestor", "Leader of the Nine Distortion Wolf pack, blindingly fast in a hunt.", _stats(6, "spd_stat", "atk_stat"), "stone_reward_bonus_pct", 22),
-    Servant("Meng Hu", 6, "Wolf King", "The Wolf King, brash and overwhelmingly powerful in a straight fight.", _stats(6, "str_stat", "atk_stat"), "loot_chance_bonus_pct", 18),
-    Servant("Bai Ning Bing", 6, "Frost Immortal", "An icy, calculating Gu Immortal, feared for her patience as much as her power.", _stats(6, "qi_stat", "def_stat"), "essence_regen_pct", 16),
-    Servant("Chi You Furnace Ancestor", 6, "Furnace Ancestor", "Wields a body tempered like a furnace, radiating battle intent.", _stats(6, "atk_stat", "hp"), "cultivation_speed_pct", 14),
+    Servant("Weeping Blood Trench Ancestor", 6, "Trench Ancestor", "A fearsome ancestor of the Weeping Blood Trench, wreathed in old grudges.", _stats(6, "hp", "atk_stat"), "cultivation_speed_pct", 26, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541640481207881728/content.png?ex=6a8e5415&is=6a8d0295&hm=c22b6d8444381eeb25ab6d16f72499cc2eb463ec86f7e6b6c5cf6634018b7f40&"),
+    Servant("Gu Yue Qing Shu", 6, "Gu Immortal Elder", "A brilliant, calculating Gu Immortal Elder, rarely caught off guard.", _stats(6, "qi_stat", "luck_stat"), "cultivation_speed_pct", 24, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541644278495715358/content.png?ex=6a8e579e&is=6a8d061e&hm=06178c438b305c769f99d2848ee962ed59da2d32006b680dfec29a5aa52f6041&"),
+    Servant("Nine Distortion Wolf Ancestor", 6, "Wolf Clan Ancestor", "Leader of the Nine Distortion Wolf pack, blindingly fast in a hunt.", _stats(6, "spd_stat", "atk_stat"), "stone_reward_bonus_pct", 20, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541641298987978913/content.png?ex=6a8e54d7&is=6a8d0357&hm=9e3a13b69cbffbb46809425206f91d9ff0c572948b33ddc707c508d3ba6d9882&"),
+    Servant("Meng Hu", 6, "Wolf King", "The Wolf King, brash and overwhelmingly powerful in a straight fight.", _stats(6, "str_stat", "atk_stat"), "loot_chance_bonus_pct", 16, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541641747942080522/content.png?ex=6a8e5543&is=6a8d03c3&hm=165d7ea7cbc94b17dbf4484391964d83e9d95552d9940a2217899300fdc62117&"),
+    Servant("Chi You Furnace Ancestor", 6, "Furnace Ancestor", "Wields a body tempered like a furnace, radiating battle intent.", _stats(6, "atk_stat", "hp"), "cultivation_speed_pct", 14, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541643670762168370/content.png?ex=6a8e570d&is=6a8d058d&hm=65fc7132358337715c89874a926a6a191430da7a77caa7e98461f343c9102a5c&"),
 
-    Servant("Gu Yue Qing Shu", 7, "Gu Immortal Elder", "A brilliant, calculating Gu Immortal Elder, rarely caught off guard.", _stats(7, "qi_stat", "luck_stat"), "cultivation_speed_pct", 35),
-    Servant("Wu Yong", 7, "Scheme Immortal", "A master of long cons and longer memories, always several moves ahead.", _stats(7, "luck_stat", "qi_stat"), "loot_chance_bonus_pct", 15),
-    Servant("Fang Yuan", 7, "Grand Supreme Elder Gu Immortal", "The rarest of the rare -- a Gu Immortal whose foresight spans centuries.", _stats(7, "qi_stat", "atk_stat"), "stone_reward_bonus_pct", 5),
+    Servant("Wu Yong", 7, "Scheme Immortal", "A master of long cons and longer memories, always several moves ahead.", _stats(7, "luck_stat", "qi_stat"), "loot_chance_bonus_pct", 38, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541645329315922060/content.png?ex=6a8e5898&is=6a8d0718&hm=91e147c511943cc95fdb522f5a20ed7a5ba5d43eaf634487dcd5ac06ace42de7&"),
+    Servant("Bai Ning Bing", 7, "Frost Immortal", "An icy, calculating Gu Immortal, feared for her patience as much as her power.", _stats(7, "qi_stat", "def_stat"), "essence_regen_pct", 32, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541642727073251438/content.png?ex=6a8e562c&is=6a8d04ac&hm=06d872e63b4b0c8e1f27e90092aa27ee8047f5db8a5a228416e39aec481e06e6&"),
+    Servant("Hei Lou Lan", 7, "Gu Immortal Elder", "A reserved, unshakeable Gu Immortal Elder, said to have weathered calamities that broke lesser cultivators.", _stats(7, "hp", "def_stat"), "mining_yield_pct", 22, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541646117752537149/content.png?ex=6a8e5954&is=6a8d07d4&hm=2d8d1ea163b2ffba572f9c7c384b1ac44fea71cfe3f6ba52a6dab2af79ecfe09&"),
+    Servant("Fang Yuan", 7, "Grand Supreme Elder Gu Immortal", "The rarest of the rare -- a Gu Immortal whose foresight spans centuries.", _stats(7, "qi_stat", "atk_stat"), "stone_reward_bonus_pct", 8, image_url="https://cdn.discordapp.com/attachments/427580710530973706/1541646510037405716/content.png?ex=6a8e59b2&is=6a8d0832&hm=f6a5f0d0368ecf78bbcbc5bf6ee1690159252546054fec94e578a794fc360fbc&"),
 )
 
 
@@ -140,25 +141,30 @@ def roll_servant(rng: Optional[random.Random] = None) -> str:
     return roll_named_servant(roll_tier(rng), rng)
 
 
-# -- Summon currencies -- Spirit Stones is primary; the other three are ALTERNATIVES, not a
-# simultaneous multi-currency requirement (see GameManager.summon_servant). ---------------------
+# -- Summon currencies -- Spirit Stones is primary; the other two are ALTERNATIVES, not a
+# simultaneous multi-currency requirement (see GameManager.summon_servant). Essence Pills/Manual
+# Pages were dropped as summon currencies per explicit request (kept as valid Level-up-adjacent
+# ideas, but not this) -- Beast Cores took their place instead. -----------------------------------
 
 CURRENCY_STONES = "stones"
 CURRENCY_ESSENCE_CRYSTALS = "essence_crystals"
-CURRENCY_ESSENCE_PILLS = "essence_pills"
-CURRENCY_MANUAL_PAGES = "manual_pages"
-SUMMON_CURRENCIES = (CURRENCY_STONES, CURRENCY_ESSENCE_CRYSTALS, CURRENCY_ESSENCE_PILLS, CURRENCY_MANUAL_PAGES)
+CURRENCY_BEAST_CORES = "beast_cores"
+SUMMON_CURRENCIES = (CURRENCY_STONES, CURRENCY_ESSENCE_CRYSTALS, CURRENCY_BEAST_CORES)
 
-SUMMON_COST_STONES = 5000
-SUMMON_COST_ESSENCE_CRYSTALS = 50   # "Primeval Essence Crystal" -- flat untiered Materials item
-SUMMON_COST_ESSENCE_PILLS = 3        # "Essence Restoration Pill (T1-7)", any tier, spent lowest-tier-first
-SUMMON_COST_MANUAL_PAGES = 5         # any owned page/rank, spent from the most-duplicated stack first
+# Retuned 2026-08-24 against a REAL live spirit-stones leaderboard (top player ~38.9M stones) --
+# the original 5,000 let the richest player buy ~7,800 pulls (effectively unlimited spam, would
+# statistically farm multiple T7s through sheer volume). 100,000 keeps even a whale's spree
+# bounded (~390 pulls, ~39% expected chance at a single T7) while most solidly-progressed
+# players can only afford a small handful -- a real, felt cost per pull. Essence Crystals scaled
+# by the same ~20x factor so it can't quietly become the "actually cheap" loophole currency.
+SUMMON_COST_STONES = 100_000
+SUMMON_COST_ESSENCE_CRYSTALS = 1000  # "Primeval Essence Crystal" -- flat untiered Materials item
+SUMMON_COST_BEAST_CORES = 20         # "Tier {N} Beast Core", any tier, spent lowest-tier-first
 
 SUMMON_CURRENCY_COST = {
     CURRENCY_STONES: SUMMON_COST_STONES,
     CURRENCY_ESSENCE_CRYSTALS: SUMMON_COST_ESSENCE_CRYSTALS,
-    CURRENCY_ESSENCE_PILLS: SUMMON_COST_ESSENCE_PILLS,
-    CURRENCY_MANUAL_PAGES: SUMMON_COST_MANUAL_PAGES,
+    CURRENCY_BEAST_CORES: SUMMON_COST_BEAST_CORES,
 }
 
 PRIMEVAL_ESSENCE_CRYSTAL = "Primeval Essence Crystal"

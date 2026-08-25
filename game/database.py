@@ -4639,25 +4639,27 @@ class GameDatabase:
         con.close()
         return row["c"] if row else 0
 
-    def spend_essence_pills_any_tier(self, user_id: int, count: int) -> bool:
-        """Spends `count` Essence Restoration Pills toward a Servant summon, ANY tier, lowest
-        tier first (preserves a player's higher-tier pills for their own healing use). Atomic:
-        refuses (no partial deduction) unless the SUM across all 7 tiers covers `count` --
-        see servants.SUMMON_COST_ESSENCE_PILLS. Item names must match items.alchemy_pill_name(
-        "Essence Restoration", tier) exactly."""
+    def spend_beast_cores_any_tier(self, user_id: int, count: int) -> bool:
+        """Spends `count` Beast Cores toward a Servant summon, ANY tier, lowest tier first
+        (preserves a player's higher-tier cores for their own blacksmith crafting). Atomic:
+        refuses (no partial deduction) unless the SUM across every tier covers `count` -- see
+        servants.SUMMON_COST_BEAST_CORES. Item names must match blacksmith.beast_core_name(tier)
+        exactly."""
+        from . import blacksmith as _blacksmith
+
         con = self.connect()
         cur = con.cursor()
         rows = cur.execute(
-            "SELECT item_name, quantity FROM inventory WHERE user_id = ? AND item_name LIKE 'Essence Restoration Pill (T%)'",
+            "SELECT item_name, quantity FROM inventory WHERE user_id = ? AND item_name LIKE 'Tier % Beast Core'",
             (user_id,),
         ).fetchall()
         owned = {row["item_name"]: row["quantity"] for row in rows}
         remaining = count
         to_spend = []
-        for tier in range(1, 8):
+        for tier in range(1, _blacksmith.MAX_TIER + 1):
             if remaining <= 0:
                 break
-            item_name = f"Essence Restoration Pill (T{tier})"
+            item_name = _blacksmith.beast_core_name(tier)
             have = owned.get(item_name, 0)
             if have <= 0:
                 continue
@@ -4670,35 +4672,6 @@ class GameDatabase:
         for item_name, quantity in to_spend:
             cur.execute("UPDATE inventory SET quantity = quantity - ? WHERE user_id = ? AND item_name = ?", (quantity, user_id, item_name))
         cur.execute("DELETE FROM inventory WHERE user_id = ? AND quantity <= 0", (user_id,))
-        con.commit()
-        con.close()
-        return True
-
-    def spend_any_manual_pages(self, user_id: int, count: int) -> bool:
-        """Spends `count` manual pages toward a Servant summon, ANY page/rank, greedily from
-        whichever stack has the MOST duplicates first (protects a player's single-copy pages,
-        which they may still need for manual assembly). Atomic: refuses (no partial deduction)
-        unless the sum across every owned page covers `count`."""
-        con = self.connect()
-        cur = con.cursor()
-        rows = cur.execute("SELECT id, page_id, quantity FROM player_pages WHERE user_id = ? ORDER BY quantity DESC", (user_id,)).fetchall()
-        remaining = count
-        to_spend = []
-        for row in rows:
-            if remaining <= 0:
-                break
-            take = min(row["quantity"], remaining)
-            to_spend.append((row["id"], row["quantity"], take))
-            remaining -= take
-        if remaining > 0:
-            con.close()
-            return False
-        for row_id, have, take in to_spend:
-            new_qty = have - take
-            if new_qty > 0:
-                cur.execute("UPDATE player_pages SET quantity = ? WHERE id = ?", (new_qty, row_id))
-            else:
-                cur.execute("DELETE FROM player_pages WHERE id = ?", (row_id,))
         con.commit()
         con.close()
         return True
