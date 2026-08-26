@@ -159,9 +159,9 @@ class GrottoView(GameView):
 
     def _build_hairy_men_components(self):
         hairy_men = self.game.get_hairy_men_status(self.user_id)
-        idle_hairy_men = [m for m in hairy_men if m["idle"]]
-        if self.selected_hairy_man_id is None and idle_hairy_men:
-            self.selected_hairy_man_id = idle_hairy_men[0]["hairy_man_id"]
+        by_id = {m["hairy_man_id"]: m for m in hairy_men}
+        if self.selected_hairy_man_id not in by_id:
+            self.selected_hairy_man_id = hairy_men[0]["hairy_man_id"] if hairy_men else None
 
         recruit_button = discord.ui.Button(
             label="Recruit Hairy Man", emoji="✨", style=discord.ButtonStyle.success, row=1,
@@ -170,15 +170,29 @@ class GrottoView(GameView):
         recruit_button.callback = self._on_recruit_hairy_man
         self.add_item(recruit_button)
 
-        if idle_hairy_men:
+        if hairy_men:
+            # Every Hairy Man, not just idle ones -- picking a WORKING one surfaces a Cancel
+            # button below instead of the Gu-assignment flow (see the branch below).
             hairy_man_options = [
-                discord.SelectOption(label=f"Hairy Man #{m['hairy_man_id']} (idle)", value=str(m["hairy_man_id"]), default=(m["hairy_man_id"] == self.selected_hairy_man_id))
-                for m in idle_hairy_men
+                discord.SelectOption(
+                    label=(
+                        f"Hairy Man #{m['hairy_man_id']} (idle)" if m["idle"]
+                        else f"Hairy Man #{m['hairy_man_id']} — blessing {m['item_name']} ({m['blessing_ticks']}/{grotto.GROTTO_BLESSING_MAX_TICKS})"
+                    )[:100],
+                    value=str(m["hairy_man_id"]), default=(m["hairy_man_id"] == self.selected_hairy_man_id),
+                )
+                for m in hairy_men
             ]
-            hairy_man_select = discord.ui.Select(placeholder="Choose an idle Hairy Man...", options=hairy_man_options, row=2)
+            hairy_man_select = discord.ui.Select(placeholder="Choose a Hairy Man...", options=hairy_man_options, row=2)
             hairy_man_select.callback = self._on_pick_hairy_man
             self.add_item(hairy_man_select)
 
+        selected = by_id.get(self.selected_hairy_man_id)
+        if selected is not None and not selected["idle"]:
+            cancel_button = discord.ui.Button(label="Cancel Blessing", emoji="🛑", style=discord.ButtonStyle.danger, row=4)
+            cancel_button.callback = self._on_cancel_hairy_man
+            self.add_item(cancel_button)
+        elif selected is not None and selected["idle"]:
             inventory = self.game.get_inventory(self.user_id)
             eligible_gu = sorted(
                 (
@@ -308,6 +322,14 @@ class GrottoView(GameView):
         embed = await asyncio.to_thread(self.build_embed)
         await interaction.response.edit_message(embed=embed, view=self)
 
+    async def _on_cancel_hairy_man(self, interaction: discord.Interaction):
+        if self.selected_hairy_man_id:
+            _, self.last_result = await asyncio.to_thread(self.game.cancel_hairy_man_work, self.user_id, self.selected_hairy_man_id)
+        self.selected_hairy_man_id = None
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
     # -- embed ------------------------------------------------------------------------------
 
     def build_embed(self) -> discord.Embed:
@@ -377,7 +399,9 @@ class GrottoView(GameView):
             title=f"🐒 {self.display_name}'s Hairy Men",
             description=(
                 f"**{len(hairy_men)} / {grotto.GROTTO_MAX_HAIRY_MEN}** recruited. Hairy Men passively "
-                "bless one Legendary+ Gu at a time, permanently strengthening that specific copy."
+                "bless one Legendary+ Gu at a time, permanently strengthening that specific copy. "
+                "Pick a working Hairy Man below to cancel their blessing early — the Gu keeps whatever "
+                "bonus it's already gained, and the Hairy Man is freed to work on something else."
             ),
             color=discord.Color.dark_green(),
         )

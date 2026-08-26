@@ -1813,6 +1813,23 @@ class GameManager:
         self.db.assign_hairy_man_instance(hairy_man_id, instance_id, int(time.time()) + grotto.HAIRY_MAN_TICK_INTERVAL_SECONDS)
         return True, f"Your Hairy Man begins blessing **{item_name}**."
 
+    def cancel_hairy_man_work(self, user_id: int, hairy_man_id: int):
+        """Stops an in-progress blessing early -- the Gu instance keeps whatever bonus it's
+        already accrued (it's already a real, equippable item the moment assign_hairy_man
+        converts it, same as a fully-blessed one), it just stops gaining any more. Nothing is
+        refunded, mirroring cancel_study's own "invested time isn't given back" precedent --
+        there's no existing mechanism anywhere in this codebase to un-consume the original item
+        assign_hairy_man spent. Frees the Hairy Man to be assigned to a different Gu."""
+        hairy_man = self.db.get_hairy_man(hairy_man_id)
+        if hairy_man is None or hairy_man["owner_id"] != user_id:
+            return False, "That Hairy Man isn't yours."
+        if hairy_man["assigned_instance_id"] is None:
+            return False, "That Hairy Man isn't working on anything."
+        instance = self.db.get_gu_instance(hairy_man["assigned_instance_id"])
+        item_name = instance["item_name"] if instance else "the Gu"
+        self.db.clear_hairy_man_assignment(hairy_man_id)
+        return True, f"Your Hairy Man stops blessing **{item_name}** — it keeps its current bonus, and your Hairy Man is free to work on something else."
+
     def get_hairy_men_status(self, user_id: int) -> list:
         """Read-only -- for /grotto's Hairy Men tab."""
         result = []
