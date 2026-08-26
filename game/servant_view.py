@@ -2,8 +2,8 @@
 ServantView -- the /servant menu. Summon tab: roll for new
 servants (see GameManager.summon_servant). Roster tab: browse owned instances by tier + the
 collection bonus. Star Up tab: consume exact-name duplicates to advance a servant's star level
-(1★→7★) via GameManager.star_up_servant. Evolve tab: once a Tier 5/6 servant is maxed at ★7, it
-shows up here to transform into a fresh, randomly-rolled Tier 6/7 named identity, then displays
+(1★→7★) via GameManager.star_up_servant. Evolve tab: once a Tier 1-6 servant is maxed at ★7, it
+shows up here to transform into a fresh, randomly-rolled next-tier named identity, then displays
 exactly what it became (see GameManager.evolve_servant) -- deliberately its own tab rather than a
 button buried in Star Up, since the two are conceptually different actions (fuel duplicates in,
 vs. a one-way identity swap out). Level tab: feed materials to advance a servant's Level,
@@ -262,9 +262,9 @@ class ServantView(GameView):
         fuel_by_name = self._star_up_fuel_ids(instances, equipped_ids)
 
         # Only list servants that can ACTUALLY be starred up right now -- once a servant is
-        # maxed at ★7, star-up has nothing left to do with it (evolve-eligible T5/T6 servants
-        # move to their own **Evolve** tab; Leveling has its own separate tab/picker too, see
-        # _build_level_components).
+        # maxed at ★7, star-up has nothing left to do with it (evolve-eligible Tier 1-6
+        # servants move to their own **Evolve** tab; Leveling has its own separate tab/picker
+        # too, see _build_level_components).
         keep_candidates = sorted(
             (i for i in instances if self._has_dupes_for_star_up(i, fuel_by_name)),
             key=lambda i: (-i["tier"], i["name"], -i["star_level"]),
@@ -327,7 +327,7 @@ class ServantView(GameView):
         instances = self.game.get_player_servants(self.user_id)
         by_id = {i["instance_id"]: i for i in instances}
 
-        # A maxed T5/T6 servant lands here the moment Star Up brings it to ★7 -- this is the
+        # A maxed Tier 1-6 servant lands here the moment Star Up brings it to ★7 -- this is the
         # ONLY place evolution happens now (moved out of the Star Up tab, which just handles
         # duplicate-fueled star advancement).
         candidates = sorted(
@@ -344,7 +344,7 @@ class ServantView(GameView):
         ]
         evolve_select = discord.ui.Select(
             placeholder="Choose a maxed servant to evolve..." + (f" (page {self.evolve_page + 1}/{total_pages})" if total_pages > 1 else ""),
-            options=evolve_options or [discord.SelectOption(label="No ★7 Tier 5/6 servants ready to evolve", value="none")],
+            options=evolve_options or [discord.SelectOption(label="No ★7 Tier 1-6 servants ready to evolve", value="none")],
             disabled=not evolve_options, row=2,
         )
         evolve_select.callback = self._on_pick_evolve
@@ -858,9 +858,9 @@ class ServantView(GameView):
             title=f"⭐ {self.display_name}'s Star Up",
             description=(
                 "Consume exact-name duplicates to advance a servant's star level (1★→7★). Once "
-                "a Tier 5/6 servant maxes at ★7, find it on the **Evolve** tab to transform it "
-                "into a fresh named identity. Leveling (materials, no duplicates needed) lives "
-                "on its own **Level** tab."
+                "a Tier 1-6 servant maxes at ★7, find it on the **Evolve** tab to transform it "
+                "into a fresh, higher-tier named identity (Tier 7 has nowhere left to go). "
+                "Leveling (materials, no duplicates needed) lives on its own **Level** tab."
             ),
             color=discord.Color.gold(),
         )
@@ -876,10 +876,11 @@ class ServantView(GameView):
             if servants.can_evolve(keep["tier"], keep["star_level"]):
                 lines.append(f"✅ Maxed and ready to evolve! Switch to the **Evolve** tab to turn it into a random Tier {keep['tier'] + 1} servant.")
             elif keep["star_level"] >= servants.MAX_STAR_LEVEL:
-                # Maxed at ★7 with nowhere further to go -- either a non-evolvable tier (T1-4,
-                # T7) or a T5/6 that already evolved. STAR_UP_DUPLICATES_REQUIRED only has keys
-                # 1-6 (there's no "star up from 7"), so this branch MUST come before the dict
-                # lookup below or it KeyErrors (the exact bug this fixes).
+                # Maxed at ★7 with nowhere further to go -- every tier 1-6 evolves instead once
+                # maxed (see the branch above), so this is now reached ONLY by a Tier 7 servant
+                # (the top of the ladder, nothing to evolve into). STAR_UP_DUPLICATES_REQUIRED
+                # only has keys 1-6 (there's no "star up from 7"), so this branch MUST still
+                # come before the dict lookup below or it KeyErrors (the exact bug this fixes).
                 lines.append("Star level maxed.")
             else:
                 required = servants.STAR_UP_DUPLICATES_REQUIRED[keep["star_level"]]
@@ -896,8 +897,8 @@ class ServantView(GameView):
         embed = discord.Embed(
             title=f"🌟 {self.display_name}'s Servant Evolution",
             description=(
-                "A Tier 5 or Tier 6 servant maxed to ★7 shows up here, ready to transform into a "
-                "fresh, randomly-rolled Tier 6/7 named servant -- a full identity swap, not just a "
+                "A Tier 1-6 servant maxed to ★7 shows up here, ready to transform into a fresh, "
+                "randomly-rolled next-tier named servant -- a full identity swap, not just a "
                 "stat boost. The new servant starts back at ★1 (its Level and Affinity carry over "
                 "unchanged), so you'll need duplicates of its NEW name to star it up again."
             ),
@@ -916,7 +917,7 @@ class ServantView(GameView):
         else:
             embed.add_field(
                 name="No servant selected",
-                value="Star a Tier 5 or Tier 6 servant up to ★7 first (see the **Star Up** tab), then pick it here to evolve it.",
+                value="Star any Tier 1-6 servant up to ★7 first (see the **Star Up** tab), then pick it here to evolve it.",
                 inline=False,
             )
         return embed

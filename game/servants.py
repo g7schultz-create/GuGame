@@ -113,7 +113,7 @@ _register(
     Servant("Chi You Furnace Ancestor", 6, "Furnace Ancestor", "Wields a body tempered like a furnace, radiating battle intent.", _stats("atk_stat", "hp"), "cultivation_speed_pct", 14, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629896/Chi%20You%20Furnace%20Ancestor.png"),
 
     Servant("Wu Yong", 7, "Scheme Immortal", "A master of long cons and longer memories, always several moves ahead.", _stats("luck_stat", "qi_stat"), "loot_chance_bonus_pct", 38, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629912/Wu%20Yong.png"),
-    Servant("Bai Ning Bing", 7, "Frost Immortal", "An icy, calculating Gu Immortal, feared for her patience as much as her power.", _stats("qi_stat", "def_stat"), "essence_regen_pct", 32, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629888/Bai%20Ning%20Bing.png"),
+    Servant("Bai Ning Bing", 7, "Frost Immortal", "An icy, calculating Gu Immortal, feared for her patience as much as her power.", _stats("qi_stat", "def_stat"), "essence_regen_pct", 32, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787754305/file_000000002d6881fb88e8e60e08fe3927.webp"),
     Servant("Hei Lou Lan", 7, "Gu Immortal Elder", "A reserved, unshakeable Gu Immortal Elder, said to have weathered calamities that broke lesser cultivators.", _stats("hp", "def_stat"), "mining_yield_pct", 22, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629935/Hei%20Lou%20Lan.png"),
     Servant("Fang Yuan", 7, "Grand Supreme Elder Gu Immortal", "The rarest of the rare -- a Gu Immortal whose foresight spans centuries.", _stats("qi_stat", "atk_stat"), "stone_reward_bonus_pct", 8, image_url="https://res.cloudinary.com/iacgiql3/image/upload/v1787629923/Fang%20Yuan.png"),
 )
@@ -139,7 +139,7 @@ def roll_tier(rng: Optional[random.Random] = None) -> int:
 
 
 def roll_named_servant(tier: int, rng: Optional[random.Random] = None) -> str:
-    """Used by BOTH the main summon roll and evolution (a maxed T5/T6 servant rolling its new
+    """Used by BOTH the main summon roll and evolution (a maxed servant rolling its new
     T6/T7 identity) -- same weighted roll, just fixed to a specific tier."""
     names = SERVANTS_BY_TIER[tier]
     weights = [SERVANT_CATALOG[n].within_tier_weight for n in names]
@@ -312,10 +312,12 @@ YIELD_BONUS_KEYS = ("mining_yield_pct", "herb_yield_pct")
 SUPPORT_KEYS_OUTSIDE_GENERIC_POOL = YIELD_BONUS_KEYS + ("cultivation_speed_pct",)
 
 
-# -- Evolution -- a maxed (★7) T5 or T6 servant can evolve into a freshly-rolled T6/T7 named
-# servant (a full identity swap, not a fixed mapping -- see roll_named_servant above). ----------
+# -- Evolution -- a maxed (★7) servant at any tier below the top one can evolve into a freshly-
+# rolled next-tier named servant (a full identity swap, not a fixed mapping -- see
+# roll_named_servant above). Every tier 1-6 is evolvable; only Tier 7 (the top of TIER_WEIGHTS)
+# has nowhere higher to go. --------------------------------------------------------------------
 
-EVOLVABLE_TIERS = (5, 6)
+EVOLVABLE_TIERS = (1, 2, 3, 4, 5, 6)
 
 
 def can_evolve(tier: int, star_level: int) -> bool:
