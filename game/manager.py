@@ -826,6 +826,28 @@ class GameManager:
         self.db.reset_trade_confirmations(trade_id)
         return True
 
+    def add_trade_servant(self, trade_id: int, user_id: int, name: str, instance_id: int) -> bool:
+        """Offers a unique Servant instance — same ownership rule as add_trade_crafted_gear/
+        add_trade_accessory: must be owned and NOT currently equipped (Combat/Support slot).
+        Unlike those two, ALSO blocked while on automation duty (see servants.py's mine/
+        gather/farm duty system) — trading it away mid-duty would leave a stale automation_
+        duty row still ticking for someone else's benefit against an instance that's no
+        longer theirs. Returns whether it was actually added."""
+        self.db.get_or_create_player(user_id, name)
+        instance = self.db.get_servant_instance(instance_id)
+        if instance is None or instance["owner_id"] != user_id:
+            return False
+        if instance_id in self.db.get_equipped_servant_instance_ids(user_id).values():
+            return False
+        if instance["automation_duty"] is not None:
+            return False
+        if instance_id in self.db.get_trade_offer(trade_id, user_id)["servants"]:
+            return False
+        display_name = f"{instance['name']} ({servants.tier_label(instance['tier'])} ★{instance['star_level']})"
+        self.db.add_trade_servant(trade_id, user_id, instance_id, display_name)
+        self.db.reset_trade_confirmations(trade_id)
+        return True
+
     def clear_trade_offer(self, trade_id: int, user_id: int):
         self.db.clear_trade_offer(trade_id, user_id)
         self.db.reset_trade_confirmations(trade_id)
@@ -1931,7 +1953,16 @@ class GameManager:
     def star_up_servant(self, user_id: int, keep_instance_id: int, consume_instance_ids: list):
         """Consumes exact-name duplicates as fuel to advance keep's star level by one -- keep's
         own instance_id (and therefore its equip/automation state) never changes. See
-        servants.STAR_UP_DUPLICATES_REQUIRED."""
+        servants.STAR_UP_DUPLICATES_REQUIRED.
+
+        Every consumed instance must ITSELF be star_level == 1, not equipped, and not on
+        automation duty -- a real incident (two fully-invested ★7 T5 servants silently
+        destroyed as fuel for a fresh ★1 roll of the same name via "Star Up All") showed that
+        without this, any same-name copy reads as interchangeable duplicate fuel regardless of
+        its own accumulated investment. Consuming fuel is a full deletion with no partial
+        credit, so only a totally uninvested (★1, idle) copy should ever be destroyable this
+        way. This is the authoritative gate -- servant_view.py's own candidate-list filtering
+        exists only to keep the UI from OFFERING an ineligible instance in the first place."""
         keep = self.db.get_servant_instance(keep_instance_id)
         if keep is None or keep["owner_id"] != user_id:
             return False, "That servant isn't yours."
@@ -1940,6 +1971,7 @@ class GameManager:
         required = servants.STAR_UP_DUPLICATES_REQUIRED[keep["star_level"]]
         if len(consume_instance_ids) != required:
             return False, f"Star-up from ★{keep['star_level']} needs exactly {required} duplicate(s)."
+        equipped_ids = set(self.db.get_equipped_servant_instance_ids(user_id).values())
         consumed = []
         for instance_id in consume_instance_ids:
             if instance_id == keep_instance_id:
@@ -1949,6 +1981,12 @@ class GameManager:
                 return False, "One of those duplicates isn't yours."
             if instance["name"] != keep["name"]:
                 return False, f"One of those duplicates isn't **{keep['name']}**."
+            if instance["star_level"] > 1:
+                return False, f"**{instance['name']}** (★{instance['star_level']}) is already starred up — only ★1 copies can be used as star-up material."
+            if instance_id in equipped_ids:
+                return False, f"Can't consume **{instance['name']}** — it's currently equipped."
+            if instance["automation_duty"] is not None:
+                return False, f"Can't consume **{instance['name']}** — it's currently on automation duty."
             consumed.append(instance)
         for instance in consumed:
             self.db.delete_servant_instance(instance["instance_id"])
@@ -1961,7 +1999,15 @@ class GameManager:
         using currently-owned exact-name duplicates, advancing as many star levels as available
         dupes allow right now. Reuses star_up_servant's own validation/consumption for each
         individual step (one source of truth), so it stops cleanly at MAX_STAR_LEVEL or the
-        first step it can't afford."""
+        first step it can't afford.
+
+        Fuel candidates are restricted to star_level == 1, not equipped, not on automation
+        duty -- same protection star_up_servant itself enforces (see that method's own
+        docstring for the incident this guards against). Filtering the candidate POOL here,
+        rather than just letting star_up_servant reject an ineligible pick, matters for THIS
+        method specifically: without it, an ineligible instance sitting early in dupes[:required]
+        would make star_up_servant refuse the whole step and this loop would stop dead, even
+        while plenty of genuinely eligible ★1 fuel sat right behind it in the same list."""
         stars_gained = 0
         while True:
             keep = self.db.get_servant_instance(keep_instance_id)
@@ -1970,9 +2016,11 @@ class GameManager:
             if keep["star_level"] >= servants.MAX_STAR_LEVEL:
                 break
             required = servants.STAR_UP_DUPLICATES_REQUIRED[keep["star_level"]]
+            equipped_ids = set(self.db.get_equipped_servant_instance_ids(user_id).values())
             dupes = [
                 i for i in self.db.get_player_servant_instances(user_id)
                 if i["name"] == keep["name"] and i["instance_id"] != keep_instance_id
+                and i["star_level"] <= 1 and i["automation_duty"] is None and i["instance_id"] not in equipped_ids
             ]
             if len(dupes) < required:
                 break

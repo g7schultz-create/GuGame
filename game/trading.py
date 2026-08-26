@@ -6,6 +6,7 @@ from . import blacksmith
 from . import equipment as equipment_module
 from . import gu_pet
 from . import manual_data
+from . import servants
 from .base_view import GameView
 from .equipment import EQUIPMENT, describe_stat_bonuses, gear_power_score
 from .items import CATEGORY_EMOJI as _ITEM_CATEGORY_EMOJI
@@ -25,9 +26,14 @@ from .views import _default_subcategory
 # owned-instance table (game/gu_pet.py's gu_pets), but with no slot_type/rank-category shape
 # to hang subcategories off of at all, so it's the simplest of the three: one flat list, no
 # subcategory row, same as Healing/Materials before Materials grew subcategories of its own.
-TRADE_CATEGORIES = ITEM_CATEGORIES + ["Equipment", "Pages", "Gu Pets"]
+# "Servants" is a 7th -- another owned-instance table (game/servants.py's servant_instances),
+# same flat-list-no-subcategory shape as Gu Pets, but WITH a tier filter row (servants have a
+# real 1-7 tier, same TIER_SORTABLE_SUBCATEGORIES-style filter Pages already uses) -- fits the
+# view's 5-row cap since it skips the subcategory row Equipment/Pages need (see
+# _build_trade_subcategory_buttons, which simply has no "Servants" branch to fall into).
+TRADE_CATEGORIES = ITEM_CATEGORIES + ["Equipment", "Pages", "Gu Pets", "Servants"]
 EQUIPMENT_SLOT_TYPES = ["Weapon", "Head", "Body", "Ring", "Earring", "Necklace", "Bracelet", "Artifact", "Manual", "Gu"]
-CATEGORY_EMOJI = {**_ITEM_CATEGORY_EMOJI, "Equipment": "⚔️", "Pages": "📄", "Gu Pets": "🐛"}
+CATEGORY_EMOJI = {**_ITEM_CATEGORY_EMOJI, "Equipment": "⚔️", "Pages": "📄", "Gu Pets": "🐛", "Servants": "🎴"}
 # Crafted_gear instances (rolled Weapon/Head/Body pieces — see blacksmith.py) aren't
 # quantity-tracked catalog items, so a trade Select option's value is prefixed to tell a
 # unique instance apart from an ordinary item_name — same convention as equipment_view.py's
@@ -41,6 +47,7 @@ INSTANCE_VALUE_PREFIX = "gear:"
 MANUAL_VALUE_PREFIX = "manual:"
 ACCESSORY_VALUE_PREFIX = "accessory:"
 GU_PET_VALUE_PREFIX = "pet:"
+SERVANT_VALUE_PREFIX = "servant:"
 # Pages ARE quantity-stacked like plain ITEMS (see player_pages), but still get their own
 # prefix -- unlike an item_name, a page_id alone doesn't tell _remaining/_make_add_callback
 # which catalog/table to look the candidate up in, so it needs the same disambiguation the
@@ -94,6 +101,7 @@ def _offer_is_empty(offer: dict) -> bool:
     return (
         currencies_empty and not offer["items"] and not offer["pages"]
         and not offer["crafted_gear"] and not offer["manuals"] and not offer["accessories"] and not offer["gu_pets"]
+        and not offer["servants"]
     )
 
 
@@ -217,6 +225,12 @@ def _format_trade_offer_lines(game, offer: dict) -> list:
         if pet is None:
             continue
         lines.append(f"{gu_pet.pet_display_emoji(pet)} {gu_pet.pet_display_name(pet)}")
+    for instance_id in offer["servants"]:
+        instance = game.db.get_servant_instance(instance_id)
+        if instance is None:
+            continue
+        emoji = servants.TIER_EMOJI.get(instance["tier"], "")
+        lines.append(f"{emoji} {instance['name']} (T{instance['tier']} ★{instance['star_level']} Lv{instance['level']})")
     return lines
 
 
@@ -391,6 +405,20 @@ class TradeAddItemView(GameView):
             if pet_id in self.game.get_trade_offer(self.trade_id, self.user_id)["gu_pets"]:
                 return 0
             return 1
+        if selected.startswith(SERVANT_VALUE_PREFIX):
+            # Same all-or-nothing shape as crafted_gear/manuals/accessories -- unlike Gu Pets,
+            # ALSO excluded while on automation duty (see GameManager.add_trade_servant).
+            instance_id = int(selected[len(SERVANT_VALUE_PREFIX):])
+            instance = self.game.db.get_servant_instance(instance_id)
+            if instance is None or instance["owner_id"] != self.user_id:
+                return 0
+            if instance_id in self.game.db.get_equipped_servant_instance_ids(self.user_id).values():
+                return 0
+            if instance["automation_duty"] is not None:
+                return 0
+            if instance_id in self.game.get_trade_offer(self.trade_id, self.user_id)["servants"]:
+                return 0
+            return 1
         if selected.startswith(PAGE_VALUE_PREFIX):
             page_id = selected[len(PAGE_VALUE_PREFIX):]
             owned = self.game.db.get_player_pages(self.user_id).get(page_id, {}).get("quantity", 0)
@@ -414,7 +442,7 @@ class TradeAddItemView(GameView):
 
         candidates = self._gather_candidates()
 
-        tier_filterable = (self.category == "Equipment" and self.subcategory in TIER_SORTABLE_SUBCATEGORIES) or self.category == "Pages"
+        tier_filterable = (self.category == "Equipment" and self.subcategory in TIER_SORTABLE_SUBCATEGORIES) or self.category in ("Pages", "Servants")
         if tier_filterable:
             self._tier_select = self._build_tier_filter_select(candidates, row=next_row)
             self.add_item(self._tier_select)
@@ -566,6 +594,32 @@ class TradeAddItemView(GameView):
                 candidates.append({
                     "sort_key": (-pet["rank"], display_name), "tier_key": pet["rank"],
                     "tier_label": f"Rank {pet['rank']}", "option": option,
+                })
+
+        if self.category == "Servants":
+            # Servants (see /servant, game/servants.py) -- owned-instance table, same shape
+            # as crafted_gear/manuals/accessories above: candidates whenever owned, not
+            # currently equipped (Combat/Support slot), not on automation duty, and not
+            # already sitting in this offer (see GameManager.add_trade_servant's own
+            # docstring for why duty is ALSO excluded here, unlike Gu Pets' active-pet
+            # exception). Tier = the servant's own 1-7 rarity tier.
+            offered_instance_ids = set(current_offer["servants"])
+            equipped_instance_ids = set(self.game.db.get_equipped_servant_instance_ids(self.user_id).values())
+            for instance in self.game.get_player_servants(self.user_id):
+                if instance["instance_id"] in offered_instance_ids or instance["instance_id"] in equipped_instance_ids:
+                    continue
+                if instance["automation_duty"] is not None:
+                    continue
+                value = f"{SERVANT_VALUE_PREFIX}{instance['instance_id']}"
+                display_name = f"{instance['name']} (★{instance['star_level']} Lv{instance['level']})"
+                option = discord.SelectOption(
+                    label=f"{servants.TIER_EMOJI.get(instance['tier'], '')} {display_name} (1 left)"[:100], value=value,
+                    description=servants.tier_label(instance["tier"])[:100],
+                    default=(value == self.selected_item),
+                )
+                candidates.append({
+                    "sort_key": (-instance["tier"], -instance["star_level"], display_name), "tier_key": instance["tier"],
+                    "tier_label": servants.tier_label(instance["tier"]), "option": option,
                 })
 
         if self.category == "Pages":
@@ -738,6 +792,19 @@ class TradeAddItemView(GameView):
             pet = await asyncio.to_thread(self.game.get_gu_pet, pet_id)
             display_name = gu_pet.pet_display_name(pet) if pet else "that Gu Pet"
             added_ok = await asyncio.to_thread(self.game.add_trade_gu_pet, self.trade_id, self.user_id, interaction.user.display_name, pet_id)
+            if added_ok:
+                self.selected_item = None
+            await asyncio.to_thread(self._build_components)
+            content = f"Added **{display_name}** to your offer." if added_ok else f"**{display_name}** is no longer available to offer."
+            await interaction.response.edit_message(content=content, view=self)
+            await self.trade_window.refresh()
+            return
+
+        if selected and selected.startswith(SERVANT_VALUE_PREFIX):
+            instance_id = int(selected[len(SERVANT_VALUE_PREFIX):])
+            instance = await asyncio.to_thread(self.game.db.get_servant_instance, instance_id)
+            display_name = f"{instance['name']} (★{instance['star_level']} Lv{instance['level']})" if instance else "that servant"
+            added_ok = await asyncio.to_thread(self.game.add_trade_servant, self.trade_id, self.user_id, interaction.user.display_name, instance_id)
             if added_ok:
                 self.selected_item = None
             await asyncio.to_thread(self._build_components)
