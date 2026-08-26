@@ -92,7 +92,7 @@ _NO_ARG_COMMANDS = [
     "sect", "sect_list", "avatar", "split_body", "tournament",
     "master", "sect_master", "dao_path", "transmute", "killer_move", "use_support_move", "verify",
     "companion", "search_forgotten_blessed_land", "teach", "essence_exchange", "white_heaven",
-    "black_heaven", "gu_pet", "dao_essence", "grotto", "servant", "view_servant",
+    "black_heaven", "gu_pet", "dao_essence", "grotto", "servant", "view_servant", "immortal_raid",
 ]
 
 # Short aliases for the text-command interface (e.g. `i h` == `i hunt`) — every command gets
@@ -128,6 +128,7 @@ ALIASES = {
     "grotto": ["gr"],
     "servant": ["sv"],
     "view_servant": ["vs"],
+    "immortal_raid": ["ir"],
 }
 
 

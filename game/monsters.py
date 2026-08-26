@@ -42,6 +42,43 @@ class MonsterAbility:
 
 
 @dataclass
+class BossPhase:
+    """One HP-threshold phase transition for an Immortal Raid-style boss (see game/immortal_
+    raid_view.py) -- irrelevant to every other consumer of Monster (hunt.py, raid.py's own
+    BOSS_GROUPS, /inheritance_ground), since only a Monster with a non-empty `phases` list ever
+    reaches this."""
+    hp_pct: float  # this phase begins once boss hp/max_hp drops to/below this fraction
+    atk_pct_bonus: float = 0.0  # permanent ATK% bonus folded in once this phase begins
+    move_weight_overrides: dict = field(default_factory=dict)  # move name -> replacement base_weight, for the rest of the fight
+    spawn_adds: list = field(default_factory=list)  # Monster instances appended as fresh enemies once this phase begins
+    announce: str = ""  # flavor line logged once when this phase begins
+
+
+@dataclass
+class BossMove:
+    """One named move in an Immortal Raid-style boss's moveset (see game/immortal_raid_view.py's
+    weighted move selection) -- a generalization of the single hardcoded charge-attack RaidView
+    already has, supporting several moves with independent telegraph lengths, damage shapes, and
+    an optional Formation/Interrupt coordination-check requirement."""
+    name: str
+    telegraph_rounds: int = 0  # 0 = resolves the same round it's chosen, no visible telegraph
+    damage_mode: str = "single"  # "single" | "cleave" | "party_pct" -- ignored if formation_needed/interrupt_needed > 0
+    str_multiplier: float = 0.0  # single/cleave only
+    party_damage_pct: float = 0.0  # party_pct only
+    base_weight: float = 1.0
+    min_phase: int = 0  # only selectable once the boss's own phase_index >= this
+    cooldown_rounds: int = 0
+    formation_needed: int = 0  # >0 (with/without interrupt_needed) makes this a coordination-check move
+    interrupt_needed: int = 0
+    coordination_success_damage_pct: float = 0.0  # still costs the party a little even on success (0 = fully negated)
+    coordination_failure_damage_pct: float = 0.0
+    failure_boss_heal_pct: float = 0.0
+    failure_boss_atk_pct_bonus: float = 0.0  # permanent, folds into RaidEnemy.bonus_atk_pct
+    weight_conditions: list = field(default_factory=list)  # [{"if": "hp_pct_below", "value": 0.5, "weight_multiplier": 2.0}, ...]
+    telegraph_text: str = ""
+
+
+@dataclass
 class DropEntry:
     chance: float
     item_name: Optional[str] = None
@@ -100,6 +137,25 @@ class Monster:
     # fixed interval, so stalling only gets more punishing. 0 disables the mechanic entirely.
     dps_check_first_turn: int = 0
     dps_check_interval_growth: int = 0
+    # Immortal Raid prototype mechanics (see game/immortal_raid_view.py, game/content/monsters/
+    # immortal_raid.py) -- same "zero/off by default" convention as everything else in this
+    # block. Read ONLY by ImmortalRaidView's own TeamBattleEngine hook overrides; every other
+    # consumer of Monster (hunt.py, /raid's BOSS_GROUPS, /inheritance_ground) never sets these
+    # and is completely unaffected.
+    phases: List[BossPhase] = field(default_factory=list)
+    moveset: List[BossMove] = field(default_factory=list)
+    break_gauge_max: float = 0.0
+    break_gauge_damage_pct_of_hit: float = 0.0  # fraction of a landed player hit's damage that also chips this monster's break gauge
+    shattered_duration_rounds: int = 0  # how long the "shattered" burst window lasts once break gauge hits 0
+    shattered_damage_taken_pct_bonus: float = 0.0  # this monster takes +X% damage while shattered
+    shattered_atk_pct_reduction: float = 0.0  # this monster's own outgoing ATK -X% while shattered
+    hard_enrage_round: int = 0  # 0 = off; once RaidEnemy's fight reaches this round, hard_enrage_damage_pct fires once
+    hard_enrage_damage_pct: float = 1.0  # flat fraction of each participant's max_hp dealt on the hard enrage round
+    hard_enrage_log: str = ""
+    revival_enabled: bool = False  # master switch for the whole incapacitation+ally-revival system
+    revival_window_rounds: int = 0  # rounds a downed player can still be revived before permanently_out
+    revival_hp_pct: float = 0.30  # HP fraction a revived player returns with
+    lifesteal_reduction_pct: float = 0.0  # fraction of a player's own lifesteal_percent this monster negates
 
     def stats(self) -> dict:
         return {

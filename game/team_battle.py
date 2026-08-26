@@ -44,6 +44,10 @@ MAX_LOG_LINES = 8
 #   Support's Inspire         -> buffs the whole party's STR/DEF for a few rounds.
 #   Frostbinder's Freeze      -> a weaker attack with a chance to skip the target's next hit.
 DEFEND_ALLY_DAMAGE_REDUCTION = 0.25
+# Immortal Raid prototype's Formation action (see monsters.Monster.moveset/BossMove,
+# game/immortal_raid_view.py) -- weaker than a targeted Guard, since it's also the action that
+# feeds the Formation/Interrupt coordination-check tally.
+FORMATION_DAMAGE_REDUCTION = 0.20
 INSPIRE_STR_BONUS_PCT = 0.15
 INSPIRE_DEF_BONUS_PCT = 0.15
 INSPIRE_DURATION_ROUNDS = 3  # includes the round Inspire is cast in
@@ -99,6 +103,17 @@ class RaidEnemy:
         # kill fires on. Both stay at their initial values (irrelevant) if the mechanic is off.
         self.dps_check_interval = monster.dps_check_first_turn
         self.dps_check_next_kill_round = monster.dps_check_first_turn
+        # Immortal Raid prototype mechanics (monster.phases/moveset/break_gauge_max/hard_
+        # enrage_round -- see monsters.py, game/immortal_raid_view.py) -- same "stays at an
+        # inert value if the mechanic is off" convention as everything else above.
+        self.phase_index = 0
+        self.break_gauge = monster.break_gauge_max
+        self.shattered_rounds_remaining = 0
+        self.active_move = None                # the BossMove currently telegraphing/resolving, or None
+        self.active_move_rounds_remaining = 0
+        self.move_cooldowns = {}                # move.name -> rounds remaining before eligible again
+        self.bonus_atk_pct = 0.0                # permanent running ATK% bucket, grown by a failed coordination check
+        self.hard_enrage_fired = False          # one-shot guard -- self.round only ever increases, so without this the hard-enrage wipe would refire every round past hard_enrage_round
 
     @property
     def alive(self) -> bool:
@@ -348,6 +363,10 @@ class TeamBattleEngine:
             # naturally reset since this state dict is rebuilt per fight.
             "has_undying_vow": dao_essences.UNDYING_VOW_NAME in self.game.db.get_dao_essences_picked(user_id),
             "undying_vow_used": False,
+            # Immortal Raid prototype's incapacitation+revival (see monsters.Monster.
+            # revival_enabled, _resolve_revival_phase below) -- unread by RaidView/
+            # InheritanceGroundView, which never override that hook.
+            "down_round": None, "permanently_out": False,
         }
         # Clear Mind-family physique's encounter-start adaptive stat — compared against the
         # opponent (self.enemies[0]), same one-time-at-join computation hunt.py's own
@@ -454,6 +473,37 @@ class TeamBattleEngine:
         False by default (no charge mechanic outside /raid) — the enemy just attacks normally."""
         return False
 
+    # Immortal Raid prototype hooks (see game/immortal_raid_view.py) -- all no-ops by default,
+    # same convention as _resolve_flee_phase/_maybe_handle_boss_charge above. RaidView and
+    # InheritanceGroundView never override any of these, so they stay fully inert for both.
+    def _on_player_hit_landed(self, target: "RaidEnemy", p: dict, damage: int, label: str):
+        """Called once per landed player hit (any target, any label) — ImmortalRaidView uses
+        this to chip a target's Break Gauge. No-op by default."""
+        return
+
+    def _maybe_advance_phase(self, enemy: "RaidEnemy"):
+        """Called once per alive enemy per round, after the victory check and before Phase 3's
+        enemy turns — ImmortalRaidView bumps enemy.phase_index against monster.phases and
+        appends any spawn_adds. No-op by default."""
+        return
+
+    def _enemy_attack_multiplier(self, enemy: "RaidEnemy") -> float:
+        """Called alongside the existing enrage multiplier in Phase 3 — ImmortalRaidView folds
+        in phase ATK bonuses and the shattered ATK reduction here. 1.0 (no change) by default."""
+        return 1.0
+
+    def _maybe_trigger_hard_enrage(self, enemy: "RaidEnemy"):
+        """Called once per alive enemy per round, after the DPS-check phase — ImmortalRaidView
+        fires monster.hard_enrage_round's party-wide wipe damage here, exactly once. No-op by
+        default."""
+        return
+
+    def _resolve_revival_phase(self):
+        """Called once per round, alongside the flee phase — ImmortalRaidView resolves Save
+        Ally actions and tracks each downed participant's revival window here, gated on
+        monster.revival_enabled. No-op by default."""
+        return
+
     # -- round resolution -----------------------------------------------------------------
 
     def _tick_submerge(self):
@@ -472,8 +522,21 @@ class TeamBattleEngine:
                 enemy.submerged_rounds_remaining = enemy.monster.submerge_duration_rounds
                 self._log(f"🌊 {enemy.monster.name} submerges beneath the blood pool — untargetable!")
 
+    def _tick_shatter(self):
+        """Counts down every alive enemy's Break Gauge "shattered" burst window (see
+        monsters.Monster.break_gauge_max/shattered_duration_rounds) -- can't leave 0 without
+        break_gauge_max > 0, which no existing Monster sets, so this is inert for /raid and
+        /inheritance_ground. Refills the gauge the moment the window ends so it's a repeatable
+        mechanic across a long fight, not a one-shot."""
+        for enemy in self.enemies:
+            if enemy.shattered_rounds_remaining > 0:
+                enemy.shattered_rounds_remaining -= 1
+                if enemy.shattered_rounds_remaining == 0 and enemy.monster.break_gauge_max > 0:
+                    enemy.break_gauge = enemy.monster.break_gauge_max
+
     def _resolve_round(self):
         self._tick_submerge()
+        self._tick_shatter()
 
         # Phase 0: Support's Inspire — resolved before damage so this round's own attacks
         # already benefit. Doesn't stack in magnitude (multiple Supports just refresh the
@@ -613,12 +676,20 @@ class TeamBattleEngine:
                 # available from the attacker's own call here.
                 if target.monster.shield_while_ally_alive_pct > 0 and any(other is not target and other.alive for other in self.enemies):
                     damage_pct_bonus -= target.monster.shield_while_ally_alive_pct
+                # Immortal Raid prototype's Break Gauge "shattered" burst window (see
+                # monsters.Monster.break_gauge_max/_on_player_hit_landed below) -- inert unless
+                # break_gauge_max > 0 ever put this enemy's shattered_rounds_remaining above 0.
+                if target.shattered_rounds_remaining > 0:
+                    damage_pct_bonus += target.monster.shattered_damage_taken_pct_bonus
                 result = combat.resolve_attack(
                     attacker_stats, target.stats(), str_multiplier=str_multiplier,
                     guaranteed_hit=action.get("guaranteed", False),
                     crit_chance_bonus=bonuses.get("crit_chance_pct", 0) + sp.get("crit_chance_pct", 0),
                     crit_damage_bonus=bonuses.get("crit_damage_pct", 0) + sp.get("crit_damage_pct", 0),
-                    lifesteal_percent=bonuses.get("lifesteal_percent", 0) + sp.get("lifesteal_percent", 0),
+                    # Immortal Raid prototype's lifesteal diminishment (monsters.Monster.
+                    # lifesteal_reduction_pct) -- multiplying by (1 - 0.0) = 1.0 for every
+                    # existing Monster, so no behavior change anywhere else.
+                    lifesteal_percent=(bonuses.get("lifesteal_percent", 0) + sp.get("lifesteal_percent", 0)) * (1 - target.monster.lifesteal_reduction_pct),
                     damage_pct_bonus=damage_pct_bonus,
                     armor_penetration_pct=bonuses.get("armor_penetration_pct", 0) + sp.get("armor_penetration_pct", 0) + lunar_armor_pen,
                     max_dodge_chance=combat.MONSTER_MAX_DODGE_CHANCE,
@@ -684,6 +755,7 @@ class TeamBattleEngine:
                             target.gu_pet_bleed_damage_per_tick = tick_damage
                             target.gu_pet_bleed_ticks_remaining = dao_paths.FIRE_BURN_TICKS
                             self._log(f"🩸 **{p['name']}**'s Gu Pet's bleed catches hold of {target.monster.name}!")
+                    self._on_player_hit_landed(target, p, result.damage, label)
                     if target.hp <= 0:
                         self._log(f"💥 {target.monster.name} is defeated!")
                         self._on_enemy_defeated(target)
@@ -792,6 +864,12 @@ class TeamBattleEngine:
                     p["qi_lost_on_death"] = qi_lost
                     self._log(f"💀 **{p['name']}** is knocked out, losing {format_number(qi_lost)} qi!")
 
+        # Immortal Raid prototype's incapacitation+revival (see monsters.Monster.
+        # revival_enabled) -- resolves Save Ally actions and tracks each downed participant's
+        # revival window. No-op by default (see _resolve_revival_phase's own doubly-opt-in
+        # first line), so this is inert for /raid and /inheritance_ground.
+        self._resolve_revival_phase()
+
         # Phase 2: flee attempts (RaidView-only — see _resolve_flee_phase's default no-op).
         self._resolve_flee_phase()
 
@@ -799,6 +877,12 @@ class TeamBattleEngine:
             self._on_victory()
             self.actions.clear()
             return
+
+        # Immortal Raid prototype's HP-threshold boss phases (see monsters.Monster.phases) --
+        # bumps phase_index and appends any spawn_adds directly to self.enemies, which Phase
+        # 3's enumerate() below picks up immediately. No-op by default.
+        for enemy in self._alive_enemies():
+            self._maybe_advance_phase(enemy)
 
         # Phase 3: enemy attacks — every living enemy hits a random alive, still-present
         # player; a Guard only reduces damage from the specific enemy it targeted. A Tank's
@@ -828,6 +912,9 @@ class TeamBattleEngine:
             # Blood Fang Wolf-style enrage boosts this enemy's own str_multiplier -- see
             # RaidEnemy.enrage_stacks (grown in Phase 1 and _resolve_enemy_hit above).
             enrage_multiplier = 1 + enemy.monster.enrage_atk_pct_per_stack * enemy.enrage_stacks
+            # Immortal Raid prototype's phase ATK bonuses + shattered ATK reduction (see
+            # monsters.Monster.phases/shattered_atk_pct_reduction) -- 1.0 (no change) by default.
+            enrage_multiplier *= self._enemy_attack_multiplier(enemy)
             self._resolve_enemy_hit(enemy, idx, target_id, defend_map, enemy.monster.ability.str_multiplier * enrage_multiplier)
 
         # Phase 3.5: DPS-check timer (Blood Sea Demon Disciple / Blood Sea Ancestor's Blood
@@ -867,6 +954,11 @@ class TeamBattleEngine:
             enemy.dps_check_interval += enemy.monster.dps_check_interval_growth
             enemy.dps_check_next_kill_round += enemy.dps_check_interval
 
+        # Immortal Raid prototype's hard enrage timer (see monsters.Monster.hard_enrage_round)
+        # -- fires exactly once, since self.round only ever increases. No-op by default.
+        for enemy in self._alive_enemies():
+            self._maybe_trigger_hard_enrage(enemy)
+
         self.actions.clear()
         self.round += 1
         if self.inspire_rounds_remaining > 0:
@@ -903,6 +995,14 @@ class TeamBattleEngine:
         guard_reduction = DEFEND_ALLY_DAMAGE_REDUCTION if redirected_from is not None else 0.0
         if action and action["type"] == "guard" and action["target"] == idx:
             guard_reduction = max(guard_reduction, 1.0 if action.get("full_block") else GUARD_DAMAGE_REDUCTION)
+        # Immortal Raid prototype's Formation action -- a flat, untargeted party-stance
+        # mitigation (unlike Guard, no action["target"] == idx check: it reduces damage from
+        # whichever enemy happens to hit you) alongside its OTHER job of feeding the Formation/
+        # Interrupt coordination-check tally (see ImmortalRaidView._resolve_coordination_move).
+        # "formation" can only appear in self.actions if a concrete view wires a Formation
+        # button -- RaidView/InheritanceGroundView never do.
+        elif action and action["type"] == "formation":
+            guard_reduction = max(guard_reduction, FORMATION_DAMAGE_REDUCTION)
 
         bonuses = self.game.compute_equipment_bonuses(target_id)
         beast_reduction = bonuses.get("beast_damage_reduction_pct", 0) if enemy.monster.monster_type == "Beast" else 0

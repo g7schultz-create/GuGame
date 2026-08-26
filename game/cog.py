@@ -43,6 +43,7 @@ from .dao_essence_view import DaoEssenceView
 from .transmute_view import TransmuteView
 from .killer_move_view import KillerMoveView
 from .raid import AbandonRaidView, RaidView
+from .immortal_raid_view import ImmortalRaidView
 from .farm_view import FarmView
 from .alchemy_view import AlchemyView
 from .blacksmith_view import BlacksmithView
@@ -2296,6 +2297,27 @@ class GameCog(commands.Cog):
         )
         await interaction.response.send_message(f"{roster['emoji']} Force-spawned **{roster['name']}**.", ephemeral=True)
         await self._announce_world_boss_spawn(boss)
+
+    @app_commands.command(name="immortal_raid", description="[Admin] Start the Immortal Raid prototype encounter (admin-only preview)")
+    @app_commands.guilds(GUILD)
+    async def immortal_raid(self, interaction: discord.Interaction):
+        # Only the SPAWN is admin-gated -- once opened, participation works like any other raid
+        # (this is a shared multi-party encounter, not a personal menu). Mirrors /raidboss_spawn
+        # (admin-only) vs. /raidboss_attack (open to everyone) rather than /servant's original
+        # admin-gate-then-later-removed shape, since there's no single-user view to gate here.
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+            return
+        await asyncio.to_thread(
+            self.db.log_admin_action,
+            interaction.user.id, interaction.user.display_name, 0, "Immortal Raid", "immortal_raid_open", "",
+        )
+        # Constructed directly, NOT via asyncio.to_thread -- ImmortalRaidView.__init__ calls
+        # asyncio.create_task (the join countdown), same reasoning as RaidView's own construction above.
+        view = ImmortalRaidView(self.game)
+        embed = await asyncio.to_thread(view.build_embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
+        view.message = await interaction.original_response()
 
     @app_commands.command(name="manual", description="Study, refine, assemble, equip, and dismantle cultivation manual pages")
     @app_commands.guilds(GUILD)
