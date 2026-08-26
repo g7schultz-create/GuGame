@@ -11,8 +11,11 @@ independent of Star/duplicates, via its own separate servant picker (see GameMan
 level_up_servant). Equip tab: assign a servant to the Support or Combat slot (see
 GameManager.equip_servant/unequip_servant). Automation tab: assign a servant to auto-run mining/
 gathering/farming on a daily tick (see GameManager.assign_servant_duty/unassign_servant_duty).
+Collected tab: read-only lifetime per-item totals gained from that automation tick (see
+GameManager.get_servant_automation_totals) -- separate from `inventory` itself, so it stays a
+clean record of what the automated system specifically has produced.
 
-Tabs span 2 rows (4+3) since there are 7 of them -- Discord caps a single ActionRow at 5
+Tabs span 2 rows (4+4) since there are 8 of them -- Discord caps a single ActionRow at 5
 buttons. Every tab's own content is squeezed into the 3 rows left (2-4), so pagination buttons
 usually share a row with their tab's action button(s) rather than getting a dedicated row.
 """
@@ -30,6 +33,7 @@ PAGE_SIZE = 25
 # Smaller than PAGE_SIZE -- Roster lines now include a stat summary per entry (see
 # _roster_embed), so fewer fit per page before risking Discord's 1024-char field value cap.
 ROSTER_PAGE_SIZE = 8
+COLLECTED_PAGE_SIZE = 15
 
 CURRENCY_LABELS = {
     servants.CURRENCY_STONES: "Spirit Stones",
@@ -69,7 +73,7 @@ def _stats_text(servant, star_level: int, level: int = 1, affinity_seconds: int 
 class ServantView(GameView):
     TABS = [
         ("summon", "Summon", "🎴", 0), ("roster", "Roster", "📜", 0), ("star_up", "Star Up", "⭐", 0), ("evolve", "Evolve", "🌟", 0),
-        ("level", "Level", "🔺", 1), ("equip", "Equip", "⚔️", 1), ("automation", "Automation", "⚙️", 1),
+        ("level", "Level", "🔺", 1), ("equip", "Equip", "⚔️", 1), ("automation", "Automation", "⚙️", 1), ("collected", "Collected", "📦", 1),
     ]
 
     def __init__(self, user_id: int, game, display_name: str):
@@ -105,6 +109,8 @@ class ServantView(GameView):
         self.selected_automation_id: int = None
         self.automation_page = 0
 
+        self.collected_page = 0
+
         self._build_components()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -139,6 +145,8 @@ class ServantView(GameView):
             self._build_equip_components()
         elif self.active_tab == "automation":
             self._build_automation_components()
+        elif self.active_tab == "collected":
+            self._build_collected_components()
 
     def _make_tab_callback(self, key: str):
         async def callback(interaction: discord.Interaction):
@@ -470,6 +478,18 @@ class ServantView(GameView):
             cycle_button.callback = self._make_automation_cycle_callback(total_pages)
             self.add_item(cycle_button)
 
+    def _build_collected_components(self):
+        """Read-only -- just a paginated tally, no picker/action buttons needed."""
+        totals = self.game.get_servant_automation_totals(self.user_id)
+        _, self.collected_page, total_pages = self._paginate(list(totals.items()), self.collected_page, page_size=COLLECTED_PAGE_SIZE)
+        if total_pages > 1:
+            prev_button = discord.ui.Button(label="◀ Prev", row=2, disabled=self.collected_page == 0)
+            prev_button.callback = self._make_collected_page_callback(-1)
+            self.add_item(prev_button)
+            next_button = discord.ui.Button(label="Next ▶", row=2, disabled=self.collected_page >= total_pages - 1)
+            next_button.callback = self._make_collected_page_callback(1)
+            self.add_item(next_button)
+
     # -- callbacks: summon ----------------------------------------------------------------------
 
     async def _on_pick_currency(self, interaction: discord.Interaction):
@@ -689,6 +709,16 @@ class ServantView(GameView):
             await interaction.response.edit_message(embed=embed, view=self)
         return callback
 
+    # -- callbacks: collected -------------------------------------------------------------------
+
+    def _make_collected_page_callback(self, delta: int):
+        async def callback(interaction: discord.Interaction):
+            self.collected_page += delta
+            await asyncio.to_thread(self._build_components)
+            embed = await asyncio.to_thread(self.build_embed)
+            await interaction.response.edit_message(embed=embed, view=self)
+        return callback
+
     # -- embed --------------------------------------------------------------------------------
 
     def build_embed(self) -> discord.Embed:
@@ -704,6 +734,8 @@ class ServantView(GameView):
             embed = self._level_embed()
         elif self.active_tab == "equip":
             embed = self._equip_embed()
+        elif self.active_tab == "collected":
+            embed = self._collected_embed()
         else:
             embed = self._automation_embed()
         if self.last_result:
@@ -913,6 +945,32 @@ class ServantView(GameView):
                     bonus_text = f" (+{bonus_pct * 100:.0f}% yield)"
                 lines.append(f"{_instance_label(i)} — {DUTY_LABELS.get(i['automation_duty'], i['automation_duty'])} duty{bonus_text}")
             embed.add_field(name="On Duty", value="\n".join(lines), inline=False)
+        return embed
+
+    def _collected_embed(self) -> discord.Embed:
+        totals = self.game.get_servant_automation_totals(self.user_id)
+        items = list(totals.items())
+        embed = discord.Embed(
+            title=f"📦 {self.display_name}'s Automated Collection",
+            description=(
+                "Lifetime totals gained from servants on Mine/Gather/Farm duty (see the "
+                "**Automation** tab) -- every automated tick's yield is tallied here, separate "
+                "from anything you collect manually."
+            ),
+            color=discord.Color.gold(),
+        )
+        if not items:
+            embed.add_field(
+                name="Nothing collected yet",
+                value="Assign a servant to a duty on the **Automation** tab to start.",
+                inline=False,
+            )
+            return embed
+        shown, page, total_pages = self._paginate(items, self.collected_page, page_size=COLLECTED_PAGE_SIZE)
+        lines = [f"{item} — **{format_number(qty)}**" for item, qty in shown]
+        field_name = "Totals" + (f" (page {page + 1}/{total_pages})" if total_pages > 1 else "")
+        embed.add_field(name=field_name, value="\n".join(lines), inline=False)
+        embed.set_footer(text=f"{format_number(sum(totals.values()))} items total across {len(items)} kinds")
         return embed
 
 

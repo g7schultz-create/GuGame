@@ -790,6 +790,19 @@ class GameDatabase:
         if "affinity_equipped_since_ts" not in servant_instance_columns:
             cur.execute("ALTER TABLE servant_instances ADD COLUMN affinity_equipped_since_ts INTEGER DEFAULT NULL")
 
+        # Lifetime per-item totals gained from the servant Automation tick (see
+        # GameManager.check_and_complete_servant_automation) -- separate from `inventory` itself
+        # since that mixes automated and manual gains; this is purely a running tally for the
+        # /servant Collected tab, never read for anything gameplay-affecting.
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS servant_automation_totals (
+            owner_id INTEGER,
+            item_name TEXT,
+            quantity INTEGER DEFAULT 0,
+            PRIMARY KEY (owner_id, item_name)
+        )
+        """)
+
         # Unique rolled Weapon/Head/Body instances forged by /blacksmith (and, since it's the
         # same underlying loot, "weapon"/"armor" discovery rewards — see discovery_gen.py) —
         # unlike the rest of this game's equipment (a flat item_name+quantity in `inventory`,
@@ -4641,6 +4654,39 @@ class GameDatabase:
         ).fetchone()
         con.close()
         return row["c"] if row else 0
+
+    def add_servant_automation_total(self, owner_id: int, item_name: str, quantity: int):
+        """Bumps the lifetime servant_automation_totals tally for one item -- see
+        GameManager.check_and_complete_servant_automation, the sole writer. Purely a running
+        record for the /servant Collected tab; never read anywhere gameplay-affecting."""
+        if quantity <= 0:
+            return
+        con = self.connect()
+        cur = con.cursor()
+        cur.execute("SELECT quantity FROM servant_automation_totals WHERE owner_id = ? AND item_name = ?", (owner_id, item_name))
+        row = cur.fetchone()
+        if row is None:
+            cur.execute(
+                "INSERT INTO servant_automation_totals (owner_id, item_name, quantity) VALUES (?, ?, ?)",
+                (owner_id, item_name, quantity),
+            )
+        else:
+            cur.execute(
+                "UPDATE servant_automation_totals SET quantity = quantity + ? WHERE owner_id = ? AND item_name = ?",
+                (quantity, owner_id, item_name),
+            )
+        con.commit()
+        con.close()
+
+    def get_servant_automation_totals(self, owner_id: int) -> dict:
+        """{item_name: lifetime quantity} gained via the servant Automation tick, highest first."""
+        con = self.connect()
+        rows = con.execute(
+            "SELECT item_name, quantity FROM servant_automation_totals WHERE owner_id = ? AND quantity > 0 ORDER BY quantity DESC",
+            (owner_id,),
+        ).fetchall()
+        con.close()
+        return {row["item_name"]: row["quantity"] for row in rows}
 
     def spend_beast_cores_any_tier(self, user_id: int, count: int) -> bool:
         """Spends `count` Beast Cores toward a Servant summon, ANY tier, lowest tier first

@@ -2131,6 +2131,8 @@ class GameManager:
                     collected = self._sum_node_quantities(result["nodes"])
                     boosted = {item: round(qty * (1 + bonus_pct)) for item, qty in collected.items()}
                     self.collect_mining_vein(owner_id, boosted)
+                    for item, qty in boosted.items():
+                        self.db.add_servant_automation_total(owner_id, item, qty)
                     success = True
             elif duty == servants.DUTY_GATHER:
                 result = self.start_gathering_patch(owner_id, player["name"])
@@ -2138,23 +2140,34 @@ class GameManager:
                     collected = self._sum_node_quantities(result["nodes"])
                     boosted = {item: round(qty * (1 + bonus_pct)) for item, qty in collected.items()}
                     self.collect_gathering_patch(owner_id, boosted)
+                    for item, qty in boosted.items():
+                        self.db.add_servant_automation_total(owner_id, item, qty)
                     success = True
             else:  # farm -- harvest_all_farm already GRANTS at the base rate internally (single-
                    # phase, unlike mine/gather's roll-then-collect split), so the bonus tops up
                    # the difference afterward instead of being folded in beforehand.
                 result = self.harvest_all_farm(owner_id, player["name"])
                 success = result["plots_harvested"] > 0
-                if success and bonus_pct:
+                if success:
                     for item_name, qty in result["harvested"].items():
-                        extra = round(qty * bonus_pct)
-                        if extra:
-                            self.db.add_item(owner_id, item_name, extra)
+                        self.db.add_servant_automation_total(owner_id, item_name, qty)
+                    if bonus_pct:
+                        for item_name, qty in result["harvested"].items():
+                            extra = round(qty * bonus_pct)
+                            if extra:
+                                self.db.add_item(owner_id, item_name, extra)
+                                self.db.add_servant_automation_total(owner_id, item_name, extra)
             self.db.set_servant_next_tick(instance["instance_id"], now + servants.AUTOMATION_TICK_INTERVAL_SECONDS)
             completed.append({
                 "user_id": owner_id, "name": player["name"], "servant_name": instance["name"],
                 "duty": duty, "success": success, "yield_bonus_pct": bonus_pct,
             })
         return completed
+
+    def get_servant_automation_totals(self, user_id: int) -> dict:
+        """{item_name: lifetime quantity} gained via the servant Automation tick -- see /servant's
+        Collected tab."""
+        return self.db.get_servant_automation_totals(user_id)
 
     def _servant_yield_bonus(self, user_id: int, key: str) -> float:
         """Mirrors _grotto_yield_bonus's own shape -- mine/gather/farm have no generic bonus
