@@ -15,9 +15,11 @@ Collected tab: read-only lifetime per-item totals gained from that automation ti
 GameManager.get_servant_automation_totals) -- separate from `inventory` itself, so it stays a
 clean record of what the automated system specifically has produced.
 
-Tabs span 2 rows (4+4) since there are 8 of them -- Discord caps a single ActionRow at 5
-buttons. Every tab's own content is squeezed into the 3 rows left (2-4), so pagination buttons
-usually share a row with their tab's action button(s) rather than getting a dedicated row.
+The 8 tabs live in a single Select at row 0 (not button rows -- 8 tabs would need 2 button rows,
+which left every tab's own content squeezed into just 3 rows, 2-4, with zero room to spare;
+collapsing to one Select frees row 1 too, mirroring trading.py's identical fix once
+TRADE_CATEGORIES outgrew a button row). Most tabs still only use rows 2-4; Equip is the one that
+actually needs row 1, for its tier filter (see _build_equip_components).
 """
 
 import asyncio
@@ -72,8 +74,8 @@ def _stats_text(servant, star_level: int, level: int = 1, affinity_seconds: int 
 
 class ServantView(GameView):
     TABS = [
-        ("summon", "Summon", "🎴", 0), ("roster", "Roster", "📜", 0), ("star_up", "Star Up", "⭐", 0), ("evolve", "Evolve", "🌟", 0),
-        ("level", "Level", "🔺", 1), ("equip", "Equip", "⚔️", 1), ("automation", "Automation", "⚙️", 1), ("collected", "Collected", "📦", 1),
+        ("summon", "Summon", "🎴"), ("roster", "Roster", "📜"), ("star_up", "Star Up", "⭐"), ("evolve", "Evolve", "🌟"),
+        ("level", "Level", "🔺"), ("equip", "Equip", "⚔️"), ("automation", "Automation", "⚙️"), ("collected", "Collected", "📦"),
     ]
 
     def __init__(self, user_id: int, game, display_name: str):
@@ -104,6 +106,7 @@ class ServantView(GameView):
         self.selected_slot = servants.SLOT_KEY_SUPPORT
         self.selected_equip_id: int = None
         self.equip_page = 0
+        self.equip_tier_filter: int = None
 
         self.selected_duty = servants.DUTY_MINE
         self.selected_automation_id: int = None
@@ -123,13 +126,19 @@ class ServantView(GameView):
 
     def _build_components(self):
         self.clear_items()
-        for key, label, emoji, row in self.TABS:
-            button = discord.ui.Button(label=label, emoji=emoji, row=row)
-            is_active = key == self.active_tab
-            button.style = discord.ButtonStyle.primary if is_active else discord.ButtonStyle.secondary
-            button.disabled = is_active
-            button.callback = self._make_tab_callback(key)
-            self.add_item(button)
+        # A single Select rather than 2 button rows (was 4+4, past a point where every tab's
+        # own content was already using its full 3-row budget, rows 2-4 -- Equip's new tier
+        # filter needed a 4th row and there wasn't one to give it). Collapsing the tab switcher
+        # to 1 row frees row 1 for any tab that wants it, mirroring trading.py's own identical
+        # fix for TRADE_CATEGORIES outgrowing a button row (see _build_trade_category_buttons).
+        tab_options = [
+            discord.SelectOption(label=label, emoji=emoji, value=key, default=(key == self.active_tab))
+            for key, label, emoji in self.TABS
+        ]
+        active_label = next(label for key, label, emoji in self.TABS if key == self.active_tab)
+        tab_select = discord.ui.Select(placeholder=f"Tab: {active_label}", options=tab_options, row=0)
+        tab_select.callback = self._on_pick_tab
+        self.add_item(tab_select)
 
         if self.active_tab == "summon":
             self._build_summon_components()
@@ -148,14 +157,13 @@ class ServantView(GameView):
         elif self.active_tab == "collected":
             self._build_collected_components()
 
-    def _make_tab_callback(self, key: str):
-        async def callback(interaction: discord.Interaction):
-            self.active_tab = key
-            self.last_result = None
-            await asyncio.to_thread(self._build_components)
-            embed = await asyncio.to_thread(self.build_embed)
-            await interaction.response.edit_message(embed=embed, view=self)
-        return callback
+    async def _on_pick_tab(self, interaction: discord.Interaction):
+        select = next(child for child in self.children if isinstance(child, discord.ui.Select) and child.row == 0)
+        self.active_tab = select.values[0]
+        self.last_result = None
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     @staticmethod
     def _paginate(items: list, page: int, page_size: int = PAGE_SIZE):
@@ -224,25 +232,41 @@ class ServantView(GameView):
         return [i for i in instances if i["tier"] == self.roster_tier_filter]
 
     @staticmethod
-    def _has_dupes_for_star_up(instance: dict, name_counts: dict) -> bool:
+    def _star_up_fuel_ids(instances: list, equipped_ids: set) -> dict:
+        """name -> set of instance_ids eligible to be CONSUMED as star-up fuel for that name.
+        Deliberately restricted to star_level == 1, not equipped, not on automation duty --
+        without this, a player's OWN already-invested ★7 copy (or an equipped/on-duty ★1
+        copy) reads as just another same-name duplicate and can get silently destroyed as
+        fuel for a totally different, less-invested copy (the exact incident this guards
+        against: two real ★7 T5 servants consumed by a "Star Up All" click meant for a fresh
+        ★1 roll of the same name)."""
+        fuel: dict = {}
+        for i in instances:
+            if i["star_level"] > 1 or i["automation_duty"] is not None or i["instance_id"] in equipped_ids:
+                continue
+            fuel.setdefault(i["name"], set()).add(i["instance_id"])
+        return fuel
+
+    @staticmethod
+    def _has_dupes_for_star_up(instance: dict, fuel_by_name: dict) -> bool:
         if instance["star_level"] >= servants.MAX_STAR_LEVEL:
             return False
         required = servants.STAR_UP_DUPLICATES_REQUIRED[instance["star_level"]]
-        return name_counts.get(instance["name"], 0) - 1 >= required
+        available = fuel_by_name.get(instance["name"], set()) - {instance["instance_id"]}
+        return len(available) >= required
 
     def _build_star_up_components(self):
         instances = self.game.get_player_servants(self.user_id)
         by_id = {i["instance_id"]: i for i in instances}
-        name_counts = {}
-        for i in instances:
-            name_counts[i["name"]] = name_counts.get(i["name"], 0) + 1
+        equipped_ids = set(self.game.db.get_equipped_servant_instance_ids(self.user_id).values())
+        fuel_by_name = self._star_up_fuel_ids(instances, equipped_ids)
 
         # Only list servants that can ACTUALLY be starred up right now -- once a servant is
         # maxed at ★7, star-up has nothing left to do with it (evolve-eligible T5/T6 servants
         # move to their own **Evolve** tab; Leveling has its own separate tab/picker too, see
         # _build_level_components).
         keep_candidates = sorted(
-            (i for i in instances if self._has_dupes_for_star_up(i, name_counts)),
+            (i for i in instances if self._has_dupes_for_star_up(i, fuel_by_name)),
             key=lambda i: (-i["tier"], i["name"], -i["star_level"]),
         )
         shown, self.starup_page, total_pages = self._paginate(keep_candidates, self.starup_page)
@@ -265,11 +289,12 @@ class ServantView(GameView):
         self.add_item(keep_select)
 
         keep = by_id.get(self.selected_keep_id)
-        star_up_viable = keep is not None and self._has_dupes_for_star_up(keep, name_counts)
+        star_up_viable = keep is not None and self._has_dupes_for_star_up(keep, fuel_by_name)
 
         if star_up_viable:
             required = servants.STAR_UP_DUPLICATES_REQUIRED[keep["star_level"]]
-            dupes = [i for i in instances if i["name"] == keep["name"] and i["instance_id"] != keep["instance_id"]]
+            fuel_ids = fuel_by_name.get(keep["name"], set()) - {keep["instance_id"]}
+            dupes = [i for i in instances if i["instance_id"] in fuel_ids]
             dupe_options = [discord.SelectOption(label=_instance_label(i)[:100], value=str(i["instance_id"])) for i in dupes[:PAGE_SIZE]]
             dupe_select = discord.ui.Select(
                 placeholder=f"Choose exactly {required} duplicate(s) to consume...",
@@ -402,6 +427,24 @@ class ServantView(GameView):
             self.add_item(level_up_button)
 
     def _build_equip_components(self):
+        instances = self.game.get_player_servants(self.user_id)
+
+        # A tier filter (row1, a compact Select rather than Roster's 2-row button grid -- this
+        # tab already needs 3 more rows for the slot picker, instance picker, and its actions,
+        # no room left for a 2-row tier grid too) so a large roster is actually browsable when
+        # picking who to equip, same motivation as Roster's own tier buttons.
+        tier_counts = {t: 0 for t in range(1, 8)}
+        for i in instances:
+            tier_counts[i["tier"]] += 1
+        tier_options = [discord.SelectOption(label=f"All Tiers — {len(instances)}", value="all", default=self.equip_tier_filter is None)]
+        for t in range(1, 8):
+            tier_options.append(discord.SelectOption(
+                label=f"T{t} — {tier_counts[t]}", value=str(t), emoji=servants.TIER_EMOJI[t], default=(self.equip_tier_filter == t),
+            ))
+        tier_select = discord.ui.Select(placeholder="Filter by tier...", options=tier_options, row=1)
+        tier_select.callback = self._on_pick_equip_tier
+        self.add_item(tier_select)
+
         slot_options = [
             discord.SelectOption(label="Support", value=servants.SLOT_KEY_SUPPORT, default=(self.selected_slot == servants.SLOT_KEY_SUPPORT)),
             discord.SelectOption(label="Combat", value=servants.SLOT_KEY_COMBAT, default=(self.selected_slot == servants.SLOT_KEY_COMBAT)),
@@ -410,15 +453,16 @@ class ServantView(GameView):
         slot_select.callback = self._on_pick_slot
         self.add_item(slot_select)
 
-        instances = self.game.get_player_servants(self.user_id)
-        shown, self.equip_page, total_pages = self._paginate(instances, self.equip_page)
+        filtered = instances if self.equip_tier_filter is None else [i for i in instances if i["tier"] == self.equip_tier_filter]
+        shown, self.equip_page, total_pages = self._paginate(filtered, self.equip_page)
         instance_options = [
             discord.SelectOption(label=_instance_label(i)[:100], value=str(i["instance_id"]), default=(i["instance_id"] == self.selected_equip_id))
             for i in shown
         ]
+        empty_label = "No servants owned" if not instances else "Nothing at this filter"
         instance_select = discord.ui.Select(
             placeholder="Choose a servant to equip..." + (f" (page {self.equip_page + 1}/{total_pages})" if total_pages > 1 else ""),
-            options=instance_options or [discord.SelectOption(label="No servants owned", value="none")],
+            options=instance_options or [discord.SelectOption(label=empty_label, value="none")],
             disabled=not instance_options, row=3,
         )
         instance_select.callback = self._on_pick_equip_instance
@@ -634,6 +678,16 @@ class ServantView(GameView):
 
     # -- callbacks: equip -------------------------------------------------------------------
 
+    async def _on_pick_equip_tier(self, interaction: discord.Interaction):
+        select = next(child for child in self.children if isinstance(child, discord.ui.Select) and child.row == 1)
+        value = select.values[0]
+        self.equip_tier_filter = None if value == "all" else int(value)
+        self.equip_page = 0
+        self.selected_equip_id = None
+        await asyncio.to_thread(self._build_components)
+        embed = await asyncio.to_thread(self.build_embed)
+        await interaction.response.edit_message(embed=embed, view=self)
+
     async def _on_pick_slot(self, interaction: discord.Interaction):
         select = next(child for child in self.children if isinstance(child, discord.ui.Select) and child.row == 2)
         self.selected_slot = select.values[0]
@@ -829,8 +883,10 @@ class ServantView(GameView):
                 lines.append("Star level maxed.")
             else:
                 required = servants.STAR_UP_DUPLICATES_REQUIRED[keep["star_level"]]
-                dupes_owned = len([i for i in instances if i["name"] == keep["name"] and i["instance_id"] != keep["instance_id"]])
-                lines.append(f"★{keep['star_level']} → ★{keep['star_level'] + 1}: choose **{required}** duplicate(s) below (you own {dupes_owned}).")
+                equipped_ids = set(self.game.db.get_equipped_servant_instance_ids(self.user_id).values())
+                fuel_by_name = self._star_up_fuel_ids(instances, equipped_ids)
+                dupes_owned = len(fuel_by_name.get(keep["name"], set()) - {keep["instance_id"]})
+                lines.append(f"★{keep['star_level']} → ★{keep['star_level'] + 1}: choose **{required}** duplicate(s) below (you own {dupes_owned} usable — only ★1 copies count as fuel).")
 
             embed.add_field(name=keep["name"], value="\n".join(lines), inline=False)
             _maybe_set_image(embed, keep["name"])
