@@ -1,5 +1,6 @@
 import asyncio
 import time
+import traceback
 from typing import Optional
 
 import discord
@@ -571,8 +572,19 @@ class GameCog(commands.Cog):
 
     @tasks.loop(seconds=SERVANT_AUTOMATION_TICK_INTERVAL_SECONDS)
     async def servant_automation_tick(self):
-        for completed in await asyncio.to_thread(self.game.check_and_complete_servant_automation):
-            await self._dm_servant_automation_complete(completed)
+        # check_and_complete_servant_automation already isolates each SERVANT's own
+        # processing (see its docstring), but the DM step below sits outside that --
+        # _dm_servant_automation_complete only swallows discord.HTTPException, so anything
+        # else escaping it (a raw gateway/connection error, say) would propagate out of this
+        # loop body. discord.py's tasks.loop has no auto-restart on an unhandled exception --
+        # it logs once and stops the loop FOREVER, silently, for every player's servants,
+        # until the process restarts. This outer catch is the backstop that guarantees this
+        # sweep itself can never go permanently dark the way it evidently just did.
+        try:
+            for completed in await asyncio.to_thread(self.game.check_and_complete_servant_automation):
+                await self._dm_servant_automation_complete(completed)
+        except Exception:
+            traceback.print_exc()
 
     @servant_automation_tick.before_loop
     async def _before_servant_automation_tick(self):
