@@ -579,7 +579,7 @@ class ImmortalRaidView(TeamBattleEngine, GameView):
         self.add_item(class_button)
 
         target_options = [
-            discord.SelectOption(label=f"{e.monster.name} — {max(0, e.hp):.0f}/{e.max_hp:.0f} HP", value=str(idx), emoji="🐲" if idx == 0 else "🐛")
+            discord.SelectOption(label=f"{e.monster.name} — {format_number(max(0, e.hp))}/{format_number(e.max_hp)} HP", value=str(idx), emoji="🐲" if idx == 0 else "🐛")
             for idx, e in enumerate(self.enemies) if e.alive
         ]
         target_select = discord.ui.Select(
@@ -635,9 +635,9 @@ class ImmortalRaidView(TeamBattleEngine, GameView):
             frozen_note = " ❄️ *Frozen*" if e.frozen_rounds > 0 else ""
             shattered_note = " 💥 *SHATTERED*" if e.shattered_rounds_remaining > 0 else ""
             pct = int(100 * max(0, e.hp) / e.max_hp)
-            line = f"{icon} **{e.monster.name}**{frozen_note}{shattered_note} — {max(0, e.hp):.0f}/{e.max_hp:.0f} HP ({pct}%)\n`{render_bar(e.hp, e.max_hp)}`"
+            line = f"{icon} **{e.monster.name}**{frozen_note}{shattered_note} — {format_number(max(0, e.hp))}/{format_number(e.max_hp)} HP ({pct}%)\n`{render_bar(e.hp, e.max_hp)}`"
             if e.monster.break_gauge_max > 0:
-                line += f"\nBreak Gauge: `{render_bar(e.break_gauge, e.monster.break_gauge_max)}`"
+                line += f"\nBreak Gauge: {format_number(max(0, e.break_gauge))}/{format_number(e.monster.break_gauge_max)} `{render_bar(e.break_gauge, e.monster.break_gauge_max)}`"
             enemy_lines.append(line)
         alive_count = sum(1 for e in self.enemies if e.alive)
         embed.add_field(name=f"⚔️ Enemies ({alive_count}/{len(self.enemies)} alive)", value="\n".join(enemy_lines)[:1024], inline=False)
@@ -664,7 +664,7 @@ class ImmortalRaidView(TeamBattleEngine, GameView):
                 penalty_note = f" • 🔻 reward {p['loot_multiplier'] * 100:.0f}%" if p.get("loot_multiplier", 1.0) < 1.0 else ""
                 empower_note = " • ✨ Empowered" if p.get("empowered") else ""
                 lines.append(
-                    f"{class_emoji}**{p['name']}** — {max(0, p['hp']):.0f}/{p['max_hp']:.0f} HP ({pct}%) • 🎯 {target_name} • {status}{empower_note}{penalty_note}\n"
+                    f"{class_emoji}**{p['name']}** — {format_number(max(0, p['hp']))}/{format_number(p['max_hp'])} HP ({pct}%) • 🎯 {target_name} • {status}{empower_note}{penalty_note}\n"
                     f"`{render_bar(p['hp'], p['max_hp'])}`"
                 )
             embed.add_field(name=f"🧍 Participants ({len(self.participants)})", value="\n".join(lines)[:1024], inline=False)
