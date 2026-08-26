@@ -360,7 +360,14 @@ DUTY_FARM = "farm"
 AUTOMATION_DUTIES = (DUTY_MINE, DUTY_GATHER, DUTY_FARM)
 
 MAX_AUTOMATION_SERVANTS = 3                        # mirrors grotto.GROTTO_MAX_INK_MEN's cap shape
-AUTOMATION_TICK_INTERVAL_SECONDS = 24 * 3600        # one cycle/real day, same cadence as Ink/Hairy Men
+# One cycle/30 real minutes -- retuned down from a full day (2026-08-26 explicit request), so a
+# servant on duty actually feels "automated" rather than a once-a-day chore. Mine/Gather run one
+# real cycle per interval; Farm doesn't need this for its OWN pacing (a plot's own HERB_GROWTH_
+# HOURS already gates how often it's actually ready), but reuses the same constant for its
+# sweep-eligibility recheck and now auto-replants whatever was harvested (see
+# check_and_complete_servant_automation's farm branch) so it stays a genuinely continuous cycle
+# too, not just a once-a-day harvest with an empty plot left behind.
+AUTOMATION_TICK_INTERVAL_SECONDS = 30 * 60
 
 # Automation YIELD scaling -- higher tier/star/level/affinity means a meaningfully BETTER
 # automated worker, not just eligibility to work at all (see GameManager.check_and_complete_

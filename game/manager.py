@@ -2185,10 +2185,11 @@ class GameManager:
         more-invested servant is a meaningfully better automated worker, not just eligible to
         work at all. Always reschedules for another attempt, win or miss -- unlike Ink Men running
         out of page duplicates, a mine/gather/farm cycle is always eventually available again, so a
-        servant never goes idle here. A mine/gather cooldown collision specifically retries soon
-        (see AUTOMATION_COOLDOWN_RETRY_BUFFER_SECONDS) rather than waiting the full 24h; any other
-        miss (including farm's harvest-only gap -- it does not auto-replant emptied plots, see
-        servants.py's own module comment) still waits the full interval. Each instance is
+        servant never goes idle here. Farm duty auto-replants whatever tier was just harvested
+        from each plot (see this method's own farm branch below), so an unattended farm stays a
+        genuinely continuous cycle, not a one-shot harvest. A mine/gather cooldown collision
+        specifically retries soon (see AUTOMATION_COOLDOWN_RETRY_BUFFER_SECONDS) rather than
+        waiting the full interval; any other miss still waits the full interval. Each instance is
         processed independently inside its own try/except -- one bad row (e.g. a stale/renamed
         catalog entry) must never take down the WHOLE sweep for every other player's servants,
         since this loop has no error handler and discord.py permanently stops a task loop on an
@@ -2245,6 +2246,14 @@ class GameManager:
         else:  # farm -- harvest_all_farm already GRANTS at the base rate internally (single-
                # phase, unlike mine/gather's roll-then-collect split), so the bonus tops up
                # the difference afterward instead of being folded in beforehand.
+            # Snapshot each ready plot's tier BEFORE harvesting -- harvest_farm deletes the
+            # farm_plots row the moment it grants the yield (see clear_farm_plot_slot), so
+            # there's nothing left to read the original tier back off of afterward.
+            ready_tiers_by_slot = {
+                slot["slot_index"]: slot["tier"]
+                for slot in self.get_farm_overview(owner_id, player["name"])["slots"]
+                if slot["state"] == "ready"
+            }
             result = self.harvest_all_farm(owner_id, player["name"])
             success = result["plots_harvested"] > 0
             if success:
@@ -2256,6 +2265,14 @@ class GameManager:
                         if extra:
                             self.db.add_item(owner_id, item_name, extra)
                             self.db.add_servant_automation_total(owner_id, item_name, extra)
+                # Auto-replant whatever was already growing in each just-harvested plot (per
+                # explicit request) -- otherwise Farm duty was harvest-only and every plot sat
+                # empty after its first cycle, needing a manual /farm replant to keep going.
+                # Self-sustaining: a harvest's own FARM_BASE_YIELD_RANGE (3-6) always yields
+                # more of that exact tier's herb than the single one plant_farm consumes to
+                # replant it, so this never runs the player's own stock down.
+                for slot_index, tier in ready_tiers_by_slot.items():
+                    self.plant_farm(owner_id, player["name"], slot_index, tier)
         self.db.set_servant_next_tick(instance["instance_id"], now + retry_seconds)
         return {
             "user_id": owner_id, "name": player["name"], "servant_name": instance["name"],
