@@ -2035,19 +2035,21 @@ class GameManager:
         return True, f"**{final['name']}** advances {stars_gained} star(s) to ★{final['star_level']}!"
 
     def evolve_servant(self, user_id: int, instance_id: int):
-        """A maxed (★7) T5/T6 servant evolves into a freshly-rolled T6/T7 named servant -- a
-        full identity swap (see servants.roll_named_servant), not a fixed mapping. star_level
-        intentionally resets to 1 (a fresh copy of the new identity), but Level and Affinity --
-        player-invested resources/bond time, not part of the servant's raw identity -- carry
-        forward onto the new instance, same as equip/automation state. Returns (ok, message,
-        new_instance_id) -- new_instance_id is None on failure, otherwise the freshly-created
-        row's id, so a caller (see servant_view.ServantView._on_evolve) can immediately select
-        and display exactly what the servant evolved into."""
+        """A maxed (★7) servant at any tier 1-6 evolves into a freshly-rolled next-tier named
+        servant -- a full identity swap (see servants.roll_named_servant), not a fixed mapping.
+        star_level intentionally resets to 1 (a fresh copy of the new identity), but Level and
+        Affinity -- player-invested resources/bond time, not part of the servant's raw identity
+        -- carry forward onto the new instance, same as equip/automation state. Returns (ok,
+        message, new_instance_id) -- new_instance_id is None on failure, otherwise the freshly-
+        created row's id, so a caller (see servant_view.ServantView._on_evolve) can immediately
+        select and display exactly what the servant evolved into."""
         instance = self.db.get_servant_instance(instance_id)
         if instance is None or instance["owner_id"] != user_id:
             return False, "That servant isn't yours.", None
         if not servants.can_evolve(instance["tier"], instance["star_level"]):
-            return False, f"**{instance['name']}** can't evolve yet — needs to be ★{servants.MAX_STAR_LEVEL} at Tier 5 or 6.", None
+            if instance["tier"] not in servants.EVOLVABLE_TIERS:
+                return False, f"**{instance['name']}** is already at the top tier — nothing higher to evolve into.", None
+            return False, f"**{instance['name']}** can't evolve yet — needs to be ★{servants.MAX_STAR_LEVEL} first.", None
         new_tier = instance["tier"] + 1
         new_name = servants.roll_named_servant(new_tier)
 
@@ -2164,6 +2166,16 @@ class GameManager:
             collected[node["item_name"]] = collected.get(node["item_name"], 0) + node["quantity"]
         return collected
 
+    # A mine/gather cycle failing ONLY because it collided with the player's own recent manual
+    # /mine or /gather (MINE/GATHER_COOLDOWN_SECONDS = 900) used to still get bumped a full
+    # AUTOMATION_TICK_INTERVAL_SECONDS (24h) before the next attempt -- fine for a rare
+    # collision, but a real problem for an actively-playing owner, whose manual action and the
+    # automation tick can realistically collide most days, making the servant look completely
+    # dead ("no resources after a day"). Rescheduling shortly after the PLAYER's own cooldown
+    # clears instead means the next 5-minute sweep (servant_automation_tick) picks it back up
+    # the same day, almost every time.
+    AUTOMATION_COOLDOWN_RETRY_BUFFER_SECONDS = 60
+
     def check_and_complete_servant_automation(self) -> list:
         """Periodic sweep (see cog.py's servant_automation_tick) -- for every servant whose
         automation_next_tick_ts has elapsed, calls the EXISTING start_mining_vein/
@@ -2173,61 +2185,82 @@ class GameManager:
         more-invested servant is a meaningfully better automated worker, not just eligible to
         work at all. Always reschedules for another attempt, win or miss -- unlike Ink Men running
         out of page duplicates, a mine/gather/farm cycle is always eventually available again, so a
-        servant never goes idle here (a same-cycle collision with the player's own manual /mine
-        or /gather is rare and harmless: MINE/GATHER_COOLDOWN_SECONDS are both 900, dwarfed by
-        the 24h tick interval, so it just skips to next cycle). Farm duty is harvest-only in this
-        pass -- it does not auto-replant emptied plots (see servants.py's own module comment)."""
+        servant never goes idle here. A mine/gather cooldown collision specifically retries soon
+        (see AUTOMATION_COOLDOWN_RETRY_BUFFER_SECONDS) rather than waiting the full 24h; any other
+        miss (including farm's harvest-only gap -- it does not auto-replant emptied plots, see
+        servants.py's own module comment) still waits the full interval. Each instance is
+        processed independently inside its own try/except -- one bad row (e.g. a stale/renamed
+        catalog entry) must never take down the WHOLE sweep for every other player's servants,
+        since this loop has no error handler and discord.py permanently stops a task loop on an
+        unhandled exception."""
         completed = []
         now = int(time.time())
         for instance in self.db.get_servant_automation_pending(now):
-            owner_id = instance["owner_id"]
-            player = self.db.get_player_row(owner_id)
-            if player is None:
-                self.db.clear_servant_automation(instance["instance_id"])
+            try:
+                result_entry = self._complete_one_servant_automation(instance, now)
+            except Exception:
+                # Reschedule even on a totally unexpected failure -- otherwise a bad row would
+                # sit at a stale next_tick_ts forever, matching get_servant_automation_pending's
+                # own "<=  now" query re-selecting it every 5 minutes and re-raising forever.
+                self.db.set_servant_next_tick(instance["instance_id"], now + servants.AUTOMATION_TICK_INTERVAL_SECONDS)
                 continue
-            duty = instance["automation_duty"]
-            servant = servants.SERVANT_CATALOG.get(instance["name"])
-            affinity = servants.current_affinity_seconds(instance, now)
-            bonus_pct = servants.automation_yield_bonus_pct(servant, instance["star_level"], instance["level"], affinity) if servant else 0.0
-            success = False
-            if duty == servants.DUTY_MINE:
-                result = self.start_mining_vein(owner_id, player["name"])
-                if result["ok"]:
-                    collected = self._sum_node_quantities(result["nodes"])
-                    boosted = {item: round(qty * (1 + bonus_pct)) for item, qty in collected.items()}
-                    self.collect_mining_vein(owner_id, boosted)
-                    for item, qty in boosted.items():
-                        self.db.add_servant_automation_total(owner_id, item, qty)
-                    success = True
-            elif duty == servants.DUTY_GATHER:
-                result = self.start_gathering_patch(owner_id, player["name"])
-                if result["ok"]:
-                    collected = self._sum_node_quantities(result["nodes"])
-                    boosted = {item: round(qty * (1 + bonus_pct)) for item, qty in collected.items()}
-                    self.collect_gathering_patch(owner_id, boosted)
-                    for item, qty in boosted.items():
-                        self.db.add_servant_automation_total(owner_id, item, qty)
-                    success = True
-            else:  # farm -- harvest_all_farm already GRANTS at the base rate internally (single-
-                   # phase, unlike mine/gather's roll-then-collect split), so the bonus tops up
-                   # the difference afterward instead of being folded in beforehand.
-                result = self.harvest_all_farm(owner_id, player["name"])
-                success = result["plots_harvested"] > 0
-                if success:
-                    for item_name, qty in result["harvested"].items():
-                        self.db.add_servant_automation_total(owner_id, item_name, qty)
-                    if bonus_pct:
-                        for item_name, qty in result["harvested"].items():
-                            extra = round(qty * bonus_pct)
-                            if extra:
-                                self.db.add_item(owner_id, item_name, extra)
-                                self.db.add_servant_automation_total(owner_id, item_name, extra)
-            self.db.set_servant_next_tick(instance["instance_id"], now + servants.AUTOMATION_TICK_INTERVAL_SECONDS)
-            completed.append({
-                "user_id": owner_id, "name": player["name"], "servant_name": instance["name"],
-                "duty": duty, "success": success, "yield_bonus_pct": bonus_pct,
-            })
+            if result_entry is not None:
+                completed.append(result_entry)
         return completed
+
+    def _complete_one_servant_automation(self, instance: dict, now: int) -> Optional[dict]:
+        owner_id = instance["owner_id"]
+        player = self.db.get_player_row(owner_id)
+        if player is None:
+            self.db.clear_servant_automation(instance["instance_id"])
+            return None
+        duty = instance["automation_duty"]
+        servant = servants.SERVANT_CATALOG.get(instance["name"])
+        affinity = servants.current_affinity_seconds(instance, now)
+        bonus_pct = servants.automation_yield_bonus_pct(servant, instance["star_level"], instance["level"], affinity) if servant else 0.0
+        success = False
+        retry_seconds = servants.AUTOMATION_TICK_INTERVAL_SECONDS
+        if duty == servants.DUTY_MINE:
+            result = self.start_mining_vein(owner_id, player["name"])
+            if result["ok"]:
+                collected = self._sum_node_quantities(result["nodes"])
+                boosted = {item: round(qty * (1 + bonus_pct)) for item, qty in collected.items()}
+                self.collect_mining_vein(owner_id, boosted)
+                for item, qty in boosted.items():
+                    self.db.add_servant_automation_total(owner_id, item, qty)
+                success = True
+            elif result.get("remaining_seconds"):
+                retry_seconds = result["remaining_seconds"] + self.AUTOMATION_COOLDOWN_RETRY_BUFFER_SECONDS
+        elif duty == servants.DUTY_GATHER:
+            result = self.start_gathering_patch(owner_id, player["name"])
+            if result["ok"]:
+                collected = self._sum_node_quantities(result["nodes"])
+                boosted = {item: round(qty * (1 + bonus_pct)) for item, qty in collected.items()}
+                self.collect_gathering_patch(owner_id, boosted)
+                for item, qty in boosted.items():
+                    self.db.add_servant_automation_total(owner_id, item, qty)
+                success = True
+            elif result.get("remaining_seconds"):
+                retry_seconds = result["remaining_seconds"] + self.AUTOMATION_COOLDOWN_RETRY_BUFFER_SECONDS
+        else:  # farm -- harvest_all_farm already GRANTS at the base rate internally (single-
+               # phase, unlike mine/gather's roll-then-collect split), so the bonus tops up
+               # the difference afterward instead of being folded in beforehand.
+            result = self.harvest_all_farm(owner_id, player["name"])
+            success = result["plots_harvested"] > 0
+            if success:
+                for item_name, qty in result["harvested"].items():
+                    self.db.add_servant_automation_total(owner_id, item_name, qty)
+                if bonus_pct:
+                    for item_name, qty in result["harvested"].items():
+                        extra = round(qty * bonus_pct)
+                        if extra:
+                            self.db.add_item(owner_id, item_name, extra)
+                            self.db.add_servant_automation_total(owner_id, item_name, extra)
+        self.db.set_servant_next_tick(instance["instance_id"], now + retry_seconds)
+        return {
+            "user_id": owner_id, "name": player["name"], "servant_name": instance["name"],
+            "duty": duty, "success": success, "yield_bonus_pct": bonus_pct, "retry_seconds": retry_seconds,
+        }
 
     def get_servant_automation_totals(self, user_id: int) -> dict:
         """{item_name: lifetime quantity} gained via the servant Automation tick -- see /servant's

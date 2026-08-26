@@ -7,7 +7,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from config import GUILD_ID, TOURNAMENT_ANNOUNCE_CHANNEL_ID, WORLD_BOSS_ANNOUNCE_CHANNEL_ID, WORLD_BOSS_DAMAGE_RANKING_CHANNEL_ID
-from . import blacksmith, chargen, equipment, manual_data, professions, realms, sects, split_body, tournament, world_boss
+from . import blacksmith, chargen, equipment, manual_data, professions, realms, sects, servants, split_body, tournament, world_boss
 from .character_class import CLASSES
 from .character_data import PATHS
 from .database import GameDatabase
@@ -585,7 +585,17 @@ class GameCog(commands.Cog):
             duty_label = completed["duty"].title()
             bonus_pct = completed.get("yield_bonus_pct", 0)
             bonus_text = f" (+{bonus_pct * 100:.0f}% yield)" if completed["success"] and bonus_pct else ""
-            outcome = f"completed a cycle{bonus_text}" if completed["success"] else "found nothing ready (will try again tomorrow)"
+            if completed["success"]:
+                outcome = f"completed a cycle{bonus_text}"
+            else:
+                # A mine/gather miss caused by colliding with the player's OWN manual /mine or
+                # /gather retries soon (see GameManager.AUTOMATION_COOLDOWN_RETRY_BUFFER_SECONDS)
+                # instead of the full 24h -- say so accurately rather than always claiming
+                # "tomorrow", which used to be misleading for exactly the players who play the
+                # most (their manual action is what caused the miss in the first place).
+                retry_seconds = completed.get("retry_seconds", servants.AUTOMATION_TICK_INTERVAL_SECONDS)
+                retry_text = f"in about {format_duration(retry_seconds)}" if retry_seconds < 3600 else "tomorrow"
+                outcome = f"found nothing ready (will try again {retry_text})"
             await user.send(f"⚙️ Your servant **{completed['servant_name']}** ({duty_label} duty) {outcome}.")
         except discord.HTTPException:
             pass
