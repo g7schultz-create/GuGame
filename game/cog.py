@@ -572,45 +572,20 @@ class GameCog(commands.Cog):
 
     @tasks.loop(seconds=SERVANT_AUTOMATION_TICK_INTERVAL_SECONDS)
     async def servant_automation_tick(self):
-        # check_and_complete_servant_automation already isolates each SERVANT's own
-        # processing (see its docstring), but the DM step below sits outside that --
-        # _dm_servant_automation_complete only swallows discord.HTTPException, so anything
-        # else escaping it (a raw gateway/connection error, say) would propagate out of this
-        # loop body. discord.py's tasks.loop has no auto-restart on an unhandled exception --
-        # it logs once and stops the loop FOREVER, silently, for every player's servants,
-        # until the process restarts. This outer catch is the backstop that guarantees this
-        # sweep itself can never go permanently dark the way it evidently just did.
+        # No per-completion DM (removed by request -- up to 3 servants ticking every 30
+        # minutes was spamming players; /servant's Collected tab is the intended way to check
+        # progress now). check_and_complete_servant_automation already isolates each
+        # SERVANT's own processing (see its docstring); this outer catch is a backstop so a
+        # totally unexpected failure elsewhere in the sweep (e.g. a DB error) can't silently
+        # stop the whole tasks.loop forever the way an earlier version of this method did.
         try:
-            for completed in await asyncio.to_thread(self.game.check_and_complete_servant_automation):
-                await self._dm_servant_automation_complete(completed)
+            await asyncio.to_thread(self.game.check_and_complete_servant_automation)
         except Exception:
             traceback.print_exc()
 
     @servant_automation_tick.before_loop
     async def _before_servant_automation_tick(self):
         await self.bot.wait_until_ready()
-
-    async def _dm_servant_automation_complete(self, completed: dict):
-        """Best-effort, same shape as _dm_ink_man_complete/_dm_hairy_man_complete."""
-        try:
-            user = self.bot.get_user(completed["user_id"]) or await self.bot.fetch_user(completed["user_id"])
-            duty_label = completed["duty"].title()
-            bonus_pct = completed.get("yield_bonus_pct", 0)
-            bonus_text = f" (+{bonus_pct * 100:.0f}% yield)" if completed["success"] and bonus_pct else ""
-            if completed["success"]:
-                outcome = f"completed a cycle{bonus_text}"
-            else:
-                # A mine/gather miss caused by colliding with the player's OWN manual /mine or
-                # /gather retries soon (see GameManager.AUTOMATION_COOLDOWN_RETRY_BUFFER_SECONDS)
-                # instead of the full 24h -- say so accurately rather than always claiming
-                # "tomorrow", which used to be misleading for exactly the players who play the
-                # most (their manual action is what caused the miss in the first place).
-                retry_seconds = completed.get("retry_seconds", servants.AUTOMATION_TICK_INTERVAL_SECONDS)
-                retry_text = f"in about {format_duration(retry_seconds)}" if retry_seconds < 3600 else "tomorrow"
-                outcome = f"found nothing ready (will try again {retry_text})"
-            await user.send(f"⚙️ Your servant **{completed['servant_name']}** ({duty_label} duty) {outcome}.")
-        except discord.HTTPException:
-            pass
 
     async def _announce_tournament_signup_open(self, opened: dict):
         """Best-effort channel ping when maybe_open_tournament auto-opens a fresh signup --
