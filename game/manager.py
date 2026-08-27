@@ -2087,8 +2087,15 @@ class GameManager:
         instance = self.db.get_servant_instance(instance_id)
         if instance is None or instance["owner_id"] != user_id:
             return False, "That servant isn't yours."
+        equipped_ids = self.db.get_equipped_servant_instance_ids(user_id)
+        # Combat is a full-value stat stick and Support trades half of that for its own themed
+        # bonus (see compute_equipment_bonuses) -- letting the SAME instance fill both would
+        # double-count one servant's investment instead of requiring two.
+        other_slot_key = next(k for k in servants.SERVANT_SLOT_KEYS if k != slot_key)
+        if equipped_ids.get(other_slot_key) == instance_id:
+            return False, f"**{instance['name']}** is already equipped in your other servant slot — the same servant can't fill both Combat and Support."
         now = int(time.time())
-        previous_id = self.db.get_equipped_servant_instance_ids(user_id).get(slot_key)
+        previous_id = equipped_ids.get(slot_key)
         if previous_id and previous_id != instance_id:
             self.db.settle_servant_affinity(previous_id, now)  # displaced servant stops accruing
         self.db.set_equipped_servant(user_id, slot_key, instance_id, instance["name"])
@@ -2142,6 +2149,13 @@ class GameManager:
             return False, f"**{instance['name']}** is already on duty."
         if self.db.count_player_automated_servants(user_id) >= servants.MAX_AUTOMATION_SERVANTS:
             return False, f"You already have the maximum {servants.MAX_AUTOMATION_SERVANTS} servants on automation duty."
+        # Mine/Gather both drive the player's own last_mine_ts/last_gather_ts cooldown, and Farm
+        # duty harvests every ready plot in one call -- a second servant on the SAME duty just
+        # collides with whichever one ticks first instead of adding parallel yield (the exact
+        # "3 on Gather, barely anything collected" report this guards against).
+        existing_holder = next((i for i in self.db.get_player_servant_instances(user_id) if i["automation_duty"] == duty), None)
+        if existing_holder is not None:
+            return False, f"**{existing_holder['name']}** is already on {duty} duty — a second servant there would only compete for the same cooldown, not add yield. Try a different duty."
         next_tick_ts = int(time.time()) + servants.AUTOMATION_TICK_INTERVAL_SECONDS
         self.db.set_servant_automation(instance_id, duty, next_tick_ts)
         return True, f"**{instance['name']}** begins working the {duty} duty."

@@ -428,6 +428,11 @@ class ServantView(GameView):
 
     def _build_equip_components(self):
         instances = self.game.get_player_servants(self.user_id)
+        # A servant already filling the OTHER slot can't also be picked for this one (see
+        # GameManager.equip_servant) -- excluded here so the picker never offers a choice
+        # that's guaranteed to be refused.
+        other_slot_key = servants.SLOT_KEY_COMBAT if self.selected_slot == servants.SLOT_KEY_SUPPORT else servants.SLOT_KEY_SUPPORT
+        other_slot_instance_id = self.game.db.get_equipped_servant_instance_ids(self.user_id).get(other_slot_key)
 
         # A tier filter (row1, a compact Select rather than Roster's 2-row button grid -- this
         # tab already needs 3 more rows for the slot picker, instance picker, and its actions,
@@ -454,6 +459,7 @@ class ServantView(GameView):
         self.add_item(slot_select)
 
         filtered = instances if self.equip_tier_filter is None else [i for i in instances if i["tier"] == self.equip_tier_filter]
+        filtered = [i for i in filtered if i["instance_id"] != other_slot_instance_id]
         shown, self.equip_page, total_pages = self._paginate(filtered, self.equip_page)
         instance_options = [
             discord.SelectOption(label=_instance_label(i)[:100], value=str(i["instance_id"]), default=(i["instance_id"] == self.selected_equip_id))
@@ -483,12 +489,23 @@ class ServantView(GameView):
             self.add_item(next_button)
 
     def _build_automation_components(self):
-        duty_options = [discord.SelectOption(label=label, value=key, default=(key == self.selected_duty)) for key, label in DUTY_LABELS.items()]
+        instances = self.game.get_player_servants(self.user_id)
+        # Mine/Gather share one cooldown with the player's own manual /mine and /gather, and
+        # Farm harvests every ready plot in one call -- a second servant on the SAME duty just
+        # collides with whichever one ticks first (see GameManager.assign_servant_duty), so
+        # show who already holds a duty before the player picks it.
+        duty_holder = {i["automation_duty"]: i for i in instances if i["automation_duty"] is not None}
+        duty_options = [
+            discord.SelectOption(
+                label=(label + (f" — held by {duty_holder[key]['name']}" if key in duty_holder else ""))[:100],
+                value=key, default=(key == self.selected_duty),
+            )
+            for key, label in DUTY_LABELS.items()
+        ]
         duty_select = discord.ui.Select(placeholder="Choose a duty...", options=duty_options, row=2)
         duty_select.callback = self._on_pick_duty
         self.add_item(duty_select)
 
-        instances = self.game.get_player_servants(self.user_id)
         idle = [i for i in instances if i["automation_duty"] is None]
         shown, self.automation_page, total_pages = self._paginate(idle, self.automation_page)
         instance_options = [
@@ -986,9 +1003,11 @@ class ServantView(GameView):
             title=f"⚙️ {self.display_name}'s Servant Automation",
             description=(
                 f"**{len(assigned)} / {servants.MAX_AUTOMATION_SERVANTS}** servants on duty. Each assigned servant "
-                "triggers one mine/gather/farm cycle per real day on your behalf, boosted by that "
+                "triggers one mine/gather/farm cycle roughly every 30 minutes on your behalf, boosted by that "
                 "servant's own Tier/Star/Level/Affinity -- a higher-tier, more-invested servant is a "
-                "meaningfully better worker, not just eligible to work."
+                "meaningfully better worker, not just eligible to work. Assigning more than one servant to "
+                "the SAME duty doesn't multiply yield -- Mine and Gather each share one cooldown with your "
+                "own manual /mine and /gather, so spread servants across different duties instead."
             ),
             color=discord.Color.gold(),
         )
