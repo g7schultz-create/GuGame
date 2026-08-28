@@ -8,16 +8,21 @@ as of the Alchemist rank gate below, which tiers a given rank can even attempt.
 from . import items
 
 # 1 herb of the matching tier for most generic types; Pure Aptitude costs 2 since its effect
-# is guaranteed and has no side effects, unlike the others. Essence Restoration is no longer
-# craftable at all — moved to a rare bonus drop instead (see items.
-# roll_essence_restoration_pill_drop), per explicit user request; this table simply no
-# longer has an entry for it, so /alchemy stops offering it as a pill type to brew.
+# is guaranteed and has no side effects, unlike the others. Essence Restoration is normally
+# not craftable at all — moved to a rare bonus drop instead (see items.
+# roll_essence_restoration_pill_drop), per explicit user request. Its entry stays in this
+# table (same 2x cost as Pure Aptitude, same "guaranteed effect costs more" reasoning) purely
+# so GameManager.craft_pill can compute a real recipe cost for the one deliberate exception --
+# the Godly Root's bearer (see character_data.py's own Godly Root spec). items.
+# ALCHEMY_PILL_TYPES (what /alchemy's picker normally offers everyone) is a SEPARATE list and
+# still has no "Essence Restoration" entry; AlchemyView adds it back in only for that one root.
 HERB_COST_PER_TYPE = {
     "Cultivation Boost": 1,
     "Qi Multiplier": 1,
     "Aptitude Enhancing": 1,
     "Pure Aptitude": 2,
     "Healing": 1,
+    "Essence Restoration": 2,
 }
 
 MIN_TIER = 1

@@ -49,6 +49,13 @@ class AlchemyView(GameView):
     def _rank(self) -> int:
         return self.game.get_player_stats(self.user_id, self.display_name)["alchemist_rank"]
 
+    def _can_craft_essence_restoration(self) -> bool:
+        """Godly Root's one bespoke exception (see character_data.py's own spec) -- "Essence
+        Restoration" otherwise never appears in items.ALCHEMY_PILL_TYPES at all. UI-side only;
+        GameManager.craft_pill enforces the same check authoritatively regardless of this."""
+        player = self.game.get_player_stats(self.user_id, self.display_name)
+        return player["root_name"] == "Godly Root"
+
     def _is_locked(self) -> bool:
         return self._rank() < alchemy.rank_required_for_tier(self.selected_tier)
 
@@ -66,9 +73,12 @@ class AlchemyView(GameView):
         self.clear_items()
         rank = self._rank()
 
+        pill_types = list(items.ALCHEMY_PILL_TYPES)
+        if self._can_craft_essence_restoration():
+            pill_types.append("Essence Restoration")
         type_options = [
             discord.SelectOption(label=pill_type, value=pill_type, default=(pill_type == self.selected_type))
-            for pill_type in items.ALCHEMY_PILL_TYPES
+            for pill_type in pill_types
         ]
         type_select = discord.ui.Select(placeholder="Pill type...", options=type_options, row=0)
         type_select.callback = self._on_pick_type

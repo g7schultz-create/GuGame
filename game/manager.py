@@ -590,10 +590,13 @@ class GameManager:
         # value — "current" meaning the fresh post-breakthrough `player` row above, so it
         # scales off the stat AFTER this breakthrough's own power_multiplier already applied,
         # same ordering Boundless Foundation uses. Uncapped, same as Primordial Origin Body's
-        # own flat-growth mechanic further below.
+        # own flat-growth mechanic further below. Godly Root (character_data.py) carries this
+        # exact same shared Godly-tier passive, so root_tier is checked right alongside
+        # physique_tier -- breakthrough_view.py's own display is already generic (names
+        # whichever stat grew, not which slot triggered it), so no display change was needed.
         godly_stat_grown = None
         godly_stat_bonus = 0
-        if success and physique_tier and physique_tier.name == "Godly":
+        if success and ((physique_tier and physique_tier.name == "Godly") or (root_tier and root_tier.name == "Godly")):
             godly_stat_grown = random.choice(chargen.STAT_GROWTH_KEYS)
             godly_stat_bonus = max(1, round(player[godly_stat_grown] * 0.02))
             self.db.add_permanent_stat_bonus(user_id, godly_stat_grown, godly_stat_bonus)
@@ -4900,6 +4903,13 @@ class GameManager:
           ok=False, reason=...                      — not enough herbs, nothing consumed.
           ok=True, success=True/False, ...           — attempted; success=False still cost the herbs."""
         player = self.db.get_or_create_player(user_id, name)
+        root_spec = chargen.get_root_spec(player["root_name"])
+        # Essence Restoration is deliberately absent from items.ALCHEMY_PILL_TYPES (what
+        # AlchemyView normally offers) -- the Godly Root's one bespoke exception (see
+        # character_data.py's own spec) is enforced here too, not just in the UI, since this
+        # is the authoritative gate a crafted-pill exploit would have to go through regardless.
+        if pill_type == "Essence Restoration" and not (root_spec and root_spec.name == "Godly Root"):
+            return {"ok": False, "reason": "Only the Godly Root's bearer can brew Essence Restoration Pills."}
         required_rank = alchemy.rank_required_for_tier(tier)
         if player["alchemist_rank"] < required_rank:
             return {
@@ -4918,7 +4928,14 @@ class GameManager:
             self.db.remove_item(user_id, mat, qty)
         bonuses = self.compute_equipment_bonuses(user_id)
         chance = min(1.0, professions.craft_success_chance(player["alchemist_rank"]) + bonuses.get("alchemy_success_pct", 0))
-        success = random.random() < chance
+        # Nine Cauldron Alchemy Root's own Unique mechanic -- once per real day, skip the roll
+        # entirely and guarantee success (herbs are already spent above either way). Shares
+        # try_use_unique_daily_charge with several other Unique roots' own daily mechanics --
+        # safe since a player only ever has one root active at a time (see character_data.py).
+        if root_spec and root_spec.name == "Nine Cauldron Alchemy Root" and self.db.try_use_unique_daily_charge(user_id):
+            success = True
+        else:
+            success = random.random() < chance
 
         # Rolled independently per material -- same "hand back one unit" shape craft_gear's
         # own salvage already uses, generalizing cleanly now that tier 8 has more than one

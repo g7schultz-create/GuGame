@@ -210,7 +210,7 @@ RACES: Dict[str, Race] = {
 }
 
 
-ROOT_TIER_ORDER = ["Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Divine", "Unique"]
+ROOT_TIER_ORDER = ["Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Divine", "Unique", "Godly"]
 
 # Relative weights for rolling a tier — deliberately steep so the top end is
 # "very very very rare". Tune freely; Unique is further gated by availability.
@@ -223,6 +223,10 @@ ROOT_TIER_WEIGHTS = {
     "Mythic": 100,
     "Divine": 40,
     "Unique": 10,
+    # ~1-in-100,000: the rest of the table already sums to 10000, so a weight of 0.1 lands at
+    # 0.1 / 10000.1 ~= 1/100001 -- deliberately far rarer than Unique's own 10/10000 (1/1000).
+    # Godly was physique-only until Godly Root (see ROOT_TIERS["Godly"] below) joined it.
+    "Godly": 0.1,
 }
 
 ROOT_TIERS: Dict[str, Tier] = {
@@ -345,7 +349,7 @@ ROOT_TIERS: Dict[str, Tier] = {
             "Reckless Savage Inheritor Root", "Paradise Earth Inheritor Root", "Genesis Lotus Inheritor Root",
             "Primordial Origin Inheritor Root", "Thieving Heaven Inheritor Root",
             "Heaven Refining Inheritor Root", "Fang Yuan's Legacy Root", "Long Hair Ancestor Root",
-            "Ancient Solar Spiritual Root", "Ancient Moon Spiritual Root",
+            "Ancient Solar Spiritual Root", "Ancient Moon Spiritual Root", "Nine Cauldron Alchemy Root",
             # Deliberately different from the 16 above: no _root_spec entry, no unique_passives
             # line -- still gets this shared tier's own stat_bonuses package (every Unique-tier
             # root does, not just the bespoke ones), but no one-off mechanic of its own. Also
@@ -372,7 +376,29 @@ ROOT_TIERS: Dict[str, Tier] = {
             "Long Hair Ancestor Root": "Vastly superior Blacksmith forging, breaking past the quality ceiling other cultivators are bound by.",
             "Ancient Solar Spiritual Root": "Greatly accelerated cultivation during the day, as the sun's power ascends.",
             "Ancient Moon Spiritual Root": "Greatly accelerated cultivation during the night, as the moon's power ascends.",
+            "Nine Cauldron Alchemy Root": "Peerless mastery of the alchemist's cauldron -- pills brewed almost never fail, and once a day, one is guaranteed to succeed outright.",
         },
+    ),
+    "Godly": Tier(
+        name="Godly",
+        emoji="👑",
+        # Identical package to ROOT_TIERS["Unique"] above (same "same stats as Unique, the
+        # growth passive is the sole tier-level upgrade" reasoning PHYSIQUE_TIERS["Godly"]
+        # already established) -- copied rather than shared so either tier's numbers can be
+        # tuned independently later. Godly Root's OWN bespoke identity (Essence Restoration
+        # crafting) lives on its ROOT_SPECS_BY_NAME entry below, same layering every other
+        # named root already uses -- the tier package is shared, the name's mechanic isn't.
+        display_bonuses=[
+            "🌿 Cultivation Speed: +60%", "⭐ Breakthrough Chance: +50%", "💧 Qi Recovery: +30%",
+            "🍀 Luck: +50", "📚 Dao Comprehension: +25%", "🔨 Gu Refinement Success: +15%",
+            "⚡ Tribulation Success: +15%", "✨ +2% Random Stat per Breakthrough",
+        ],
+        passive="Every breakthrough permanently grows a random stat by 2% of its current value (see GameManager.attempt_breakthrough).",
+        stat_bonuses={
+            "cultivation_speed_pct": 0.60, "luck_flat": 50, "breakthrough_chance_pct": 0.50,
+            "qi_recovery_pct": 0.30, "dao_comprehension_pct": 0.25,
+        },
+        names=["Godly Root"],
     ),
 }
 
@@ -1262,19 +1288,44 @@ _root_spec(
     "-- doubled to +30% if your Dao Companion holds the Ancient Solar Spiritual Root.",
     {}, coherence_tags={"moon": 20},
 )
+_root_spec(
+    "Nine Cauldron Alchemy Root", "Unique", ("fire",),
+    "Nine Cauldrons Blaze: vastly superior Alchemist success and essence recovery. Once per "
+    "real day, your next pill craft cannot fail -- herbs are still spent as normal, but the "
+    "success roll is skipped entirely (see GameManager.craft_pill).",
+    {"alchemy_success_pct": 0.35, "essence_regen_pct": 0.20},
+)
+
+# Godly Root -- the root ladder's own counterpart to ROOT_TIERS["Godly"]/PHYSIQUE_TIERS'
+# "Godly Physique", built specifically around an explicit request: "ability to craft essence
+# pills". Essence Restoration Pills were deliberately pulled from the normal Alchemist-
+# craftable table (see alchemy.HERB_COST_PER_TYPE's own comment) -- Godly Root is the one
+# deliberate exception, gated in GameManager.craft_pill/AlchemyView by this exact name, not a
+# new stat_bonuses key (mirrors every other one-off Unique/Godly mechanic in this file).
+# Fully wired into ROOT_TIER_WEIGHTS/ROOT_TIERS above at the same 0.1 rarity Godly Physique
+# uses (per explicit request, "same rarity as the other") -- roll_root/premium reroll would
+# genuinely be able to hit it exactly like any other tier. The actual distribution control is
+# simply not deploying this yet (per explicit request, specific people get handed this root
+# directly rather than leaving it to chance) -- nothing here is reachable by any live player
+# until this code is pushed.
+_root_spec(
+    "Godly Root", "Godly", ("fire",),
+    "World Cauldron: the sole bearer may craft Essence Restoration Pills at /alchemy -- the "
+    "one exception to a rule no other Alchemist can break -- plus strong Alchemist success "
+    "and essence recovery.",
+    {"alchemy_success_pct": 0.15, "essence_regen_pct": 0.10},
+)
 
 
-# Genuinely separate objects from ROOT_TIER_ORDER/ROOT_TIER_WEIGHTS (not aliases) so a
-# physique-only tier -- Godly, below -- can exist without leaking into the root ladder
-# (ROOT_TIERS has no "Godly" entry; roll_root would KeyError if it ever rolled one). Every
-# call site that used to treat these as interchangeable with the root versions (manager.py's
-# reroll-batch helpers, shop.py's _best_roll, premium_view.py's tier select/histogram) now
-# takes the correct list explicitly instead of assuming they're the same object.
-PHYSIQUE_TIER_ORDER = list(ROOT_TIER_ORDER) + ["Godly"]
+# Genuinely separate objects from ROOT_TIER_ORDER/ROOT_TIER_WEIGHTS (not aliases), even though
+# both ladders now share the same tier NAMES top-to-bottom (root gained its own Godly tier
+# above) -- kept independent so either ladder's own numbers can keep being tuned without
+# touching the other, the same reasoning every shared-then-copied Tier package in this file
+# already uses. Every call site that reads these (manager.py's reroll-batch helpers, shop.py's
+# _best_roll, premium_view.py's tier select/histogram) already takes the correct list
+# explicitly rather than assuming they're the same object.
+PHYSIQUE_TIER_ORDER = list(ROOT_TIER_ORDER)
 PHYSIQUE_TIER_WEIGHTS = dict(ROOT_TIER_WEIGHTS)
-# ~1-in-100,000: the rest of the table already sums to 10000, so a weight of 0.1 lands at
-# 0.1 / 10000.1 ~= 1/100001 -- deliberately far rarer than Unique's own 10/10000 (1/1000).
-PHYSIQUE_TIER_WEIGHTS["Godly"] = 0.1
 
 PHYSIQUE_TIERS: Dict[str, Tier] = {
     "Common": Tier(

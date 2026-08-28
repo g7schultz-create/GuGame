@@ -491,14 +491,16 @@ del _pill_type, _tier, _name
 # dream realm, and battlefield reward resolution). Registered as its own small loop, same
 # tier shape (1-7), same use()/effect math (ESSENCE_RESTORATION_PILL_PERCENT_PER_TIER,
 # _use_essence_restoration_pill are both untouched) -- only how you OBTAIN one changed, not
-# what it does once you have it.
+# what it does once you have it. The Godly Root (character_data.py) is the one deliberate
+# exception -- its bearer CAN brew this at /alchemy (see alchemy.HERB_COST_PER_TYPE's own
+# comment, GameManager.craft_pill), gated by root name rather than reopening this to everyone.
 for _tier in range(1, 8):
     _name = alchemy_pill_name("Essence Restoration", _tier)
     ITEMS[_name] = Item(
         name=_name,
         category="Pills",
         rank=_tier,
-        description=f"A Tier {_tier} essence restoration pill. A rare find -- no Alchemist can brew this one.",
+        description=f"A Tier {_tier} essence restoration pill. A rare find -- no ordinary Alchemist can brew this one.",
         use=_use_essence_restoration_pill(_tier),
         subcategory="Essence Restoration",
     )

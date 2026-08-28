@@ -510,7 +510,7 @@ def validate_root_specs() -> List[str]:
             errors.append(f"[root specs] '{name}' appears in more than one ROOT_TIERS tier — get_root_spec can't tell them apart.")
 
     expected_names = set()
-    for tier_name in ("Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Divine", "Unique"):
+    for tier_name in ("Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Divine", "Unique", "Godly"):
         expected_names |= set(character_data.ROOT_TIERS[tier_name].names)
     spec_names = set(character_data.ROOT_SPECS_BY_NAME.keys())
     for missing in expected_names - spec_names:
