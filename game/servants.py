@@ -158,7 +158,8 @@ def roll_servant(rng: Optional[random.Random] = None) -> str:
 CURRENCY_STONES = "stones"
 CURRENCY_ESSENCE_CRYSTALS = "essence_crystals"
 CURRENCY_BEAST_CORES = "beast_cores"
-SUMMON_CURRENCIES = (CURRENCY_STONES, CURRENCY_ESSENCE_CRYSTALS, CURRENCY_BEAST_CORES)
+CURRENCY_BEAST_MATERIALS = "beast_materials"
+SUMMON_CURRENCIES = (CURRENCY_STONES, CURRENCY_ESSENCE_CRYSTALS, CURRENCY_BEAST_CORES, CURRENCY_BEAST_MATERIALS)
 
 # Retuned 2026-08-24, explicit request: 10,000 stones / 10 essence crystals / 10 beast cores --
 # a deliberate step down from the earlier 100,000/1,000/20 leaderboard-calibrated pass, meant to
@@ -166,11 +167,18 @@ SUMMON_CURRENCIES = (CURRENCY_STONES, CURRENCY_ESSENCE_CRYSTALS, CURRENCY_BEAST_
 SUMMON_COST_STONES = 10_000
 SUMMON_COST_ESSENCE_CRYSTALS = 10   # "Primeval Essence Crystal" -- flat untiered Materials item
 SUMMON_COST_BEAST_CORES = 10        # "Tier {N} Beast Core", any tier, spent lowest-tier-first
+# Beast Material is the same "any tier, spent lowest-first" shape as Beast Cores, priced a bit
+# higher (not the same 10) since a live-DB check found it ~1.65x more abundant per player than
+# Beast Core -- 15 keeps the REAL cost of a pull roughly comparable across the two currencies
+# instead of just copying Beast Cores' number without checking (see project's own "verify
+# balance against live players" precedent).
+SUMMON_COST_BEAST_MATERIALS = 15    # "Tier {N} Beast Material", any tier, spent lowest-tier-first
 
 SUMMON_CURRENCY_COST = {
     CURRENCY_STONES: SUMMON_COST_STONES,
     CURRENCY_ESSENCE_CRYSTALS: SUMMON_COST_ESSENCE_CRYSTALS,
     CURRENCY_BEAST_CORES: SUMMON_COST_BEAST_CORES,
+    CURRENCY_BEAST_MATERIALS: SUMMON_COST_BEAST_MATERIALS,
 }
 
 PRIMEVAL_ESSENCE_CRYSTAL = "Primeval Essence Crystal"

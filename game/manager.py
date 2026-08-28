@@ -1914,9 +1914,12 @@ class GameManager:
         elif currency == servants.CURRENCY_ESSENCE_CRYSTALS:
             if not self.db.remove_item(user_id, servants.PRIMEVAL_ESSENCE_CRYSTAL, total_cost):
                 return False, f"Not enough Primeval Essence Crystals — need {total_cost}.", []
-        else:  # beast_cores
+        elif currency == servants.CURRENCY_BEAST_CORES:
             if not self.db.spend_beast_cores_any_tier(user_id, total_cost):
                 return False, f"Not enough Beast Cores (any tier) — need {total_cost}.", []
+        else:  # beast_materials
+            if not self.db.spend_beast_materials_any_tier(user_id, total_cost):
+                return False, f"Not enough Beast Materials (any tier) — need {total_cost}.", []
         rolled = []
         for _ in range(count):
             name = servants.roll_servant()

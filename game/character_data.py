@@ -1290,10 +1290,12 @@ _root_spec(
 )
 _root_spec(
     "Nine Cauldron Alchemy Root", "Unique", ("fire",),
-    "Nine Cauldrons Blaze: vastly superior Alchemist success and essence recovery. Once per "
-    "real day, your next pill craft cannot fail -- herbs are still spent as normal, but the "
-    "success roll is skipped entirely (see GameManager.craft_pill).",
-    {"alchemy_success_pct": 0.35, "essence_regen_pct": 0.20},
+    "Nine Cauldrons Blaze: vastly superior Alchemist success and essence recovery, plus a 20% "
+    "chance per herb to not consume it on any craft (see _alchemy_salvage_bonus_pct -- highest "
+    "source wins, doesn't stack with an equipped salvage_bonus accessory). Once per real day, "
+    "your next pill craft cannot fail -- herbs are still spent as normal, but the success roll "
+    "is skipped entirely (see GameManager.craft_pill).",
+    {"alchemy_success_pct": 0.35, "essence_regen_pct": 0.20, "craft_salvage_bonus_pct": 0.20},
 )
 
 # Godly Root -- the root ladder's own counterpart to ROOT_TIERS["Godly"]/PHYSIQUE_TIERS'
@@ -1311,9 +1313,9 @@ _root_spec(
 _root_spec(
     "Godly Root", "Godly", ("fire",),
     "World Cauldron: the sole bearer may craft Essence Restoration Pills at /alchemy -- the "
-    "one exception to a rule no other Alchemist can break -- plus strong Alchemist success "
-    "and essence recovery.",
-    {"alchemy_success_pct": 0.15, "essence_regen_pct": 0.10},
+    "one exception to a rule no other Alchemist can break -- plus strong Alchemist success, "
+    "essence recovery, and a 20% chance per herb to not consume it on any craft.",
+    {"alchemy_success_pct": 0.15, "essence_regen_pct": 0.10, "craft_salvage_bonus_pct": 0.20},
 )
 
 

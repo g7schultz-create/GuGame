@@ -4817,6 +4817,41 @@ class GameDatabase:
         con.close()
         return True
 
+    def spend_beast_materials_any_tier(self, user_id: int, count: int) -> bool:
+        """Beast Material's own counterpart to spend_beast_cores_any_tier -- same "any tier,
+        lowest first, atomic" shape, matching blacksmith.beast_material_name(tier) instead.
+        See servants.SUMMON_COST_BEAST_MATERIALS."""
+        from . import blacksmith as _blacksmith
+
+        con = self.connect()
+        cur = con.cursor()
+        rows = cur.execute(
+            "SELECT item_name, quantity FROM inventory WHERE user_id = ? AND item_name LIKE 'Tier % Beast Material'",
+            (user_id,),
+        ).fetchall()
+        owned = {row["item_name"]: row["quantity"] for row in rows}
+        remaining = count
+        to_spend = []
+        for tier in range(1, _blacksmith.MAX_TIER + 1):
+            if remaining <= 0:
+                break
+            item_name = _blacksmith.beast_material_name(tier)
+            have = owned.get(item_name, 0)
+            if have <= 0:
+                continue
+            take = min(have, remaining)
+            to_spend.append((item_name, take))
+            remaining -= take
+        if remaining > 0:
+            con.close()
+            return False
+        for item_name, quantity in to_spend:
+            cur.execute("UPDATE inventory SET quantity = quantity - ? WHERE user_id = ? AND item_name = ?", (quantity, user_id, item_name))
+        cur.execute("DELETE FROM inventory WHERE user_id = ? AND quantity <= 0", (user_id,))
+        con.commit()
+        con.close()
+        return True
+
     # -- Accessories/artifacts (see accessories_data.py) -----------------------------------
 
     @staticmethod

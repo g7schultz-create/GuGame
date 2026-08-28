@@ -41,6 +41,7 @@ CURRENCY_LABELS = {
     servants.CURRENCY_STONES: "Spirit Stones",
     servants.CURRENCY_ESSENCE_CRYSTALS: "Primeval Essence Crystals",
     servants.CURRENCY_BEAST_CORES: "Beast Cores (any tier)",
+    servants.CURRENCY_BEAST_MATERIALS: "Beast Materials (any tier)",
 }
 
 DUTY_LABELS = {servants.DUTY_MINE: "Mine", servants.DUTY_GATHER: "Gather", servants.DUTY_FARM: "Farm"}
